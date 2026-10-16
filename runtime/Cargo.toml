@@ -1,0 +1,22 @@
+[package]
+name = "vibe-space-runtime"
+version = "0.2.0"
+edition = "2024"
+rust-version = "1.95"
+license = "MIT"
+description = "Import-free, resource-bounded WebAssembly runtime for Vibe Space extensions"
+
+[dependencies]
+wasmi = { version = "=1.1.0", default-features = false, features = ["std"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.11"
+ed25519-dalek = "2.2"
+base64 = "0.23"
+thiserror = "2.0"
+url = "2.5"
+getrandom = "0.4"
+
+[dev-dependencies]
+wasmi = { version = "=1.1.0", features = ["wat"] }
+tempfile = "3.17"

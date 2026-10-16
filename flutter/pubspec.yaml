@@ -1,0 +1,13 @@
+name: vibe_space_flutter
+version: 0.2.0
+description: Declarative mini-app UI renderer and host contracts for Vibe Space.
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+dependencies:
+  flutter:
+    sdk: flutter
+  vibe_space:
+    path: ../dart
+dev_dependencies:
+  flutter_test:
+    sdk: flutter

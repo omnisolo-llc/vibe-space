@@ -1,0 +1,17 @@
+{
+  "id": "hello-c",
+  "version": 1,
+  "api_version": 1,
+  "name": "Hello Vibe Space (C)",
+  "license": "MIT",
+  "capabilities": [],
+  "network_origins": [],
+  "contributions": [
+    {
+      "id": "hello",
+      "slot": "quick_command",
+      "title": "Hello from C",
+      "command": "open"
+    }
+  ]
+}

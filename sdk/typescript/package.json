@@ -1,0 +1,8 @@
+{
+  "name": "@vibe-space/sdk",
+  "version": "0.2.0",
+  "type": "module",
+  "license": "MIT",
+  "exports": {".": {"types": "./index.d.ts", "default": "./index.mjs"}},
+  "description": "Portable protocol and capability broker for Vibe Space mini-apps"
+}
