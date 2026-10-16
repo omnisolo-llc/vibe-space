@@ -16,11 +16,9 @@ Rust / C / another import-free Wasm language
      application data / allowed UI tokens
 ```
 
-## Try it with LeapTerm
+## Build an example
 
-In a LeapTerm checkout with submodules initialized, follow `docs/vibe-space-poc.md`. The example at `examples/hello-rust` adds one Quick Jump command, shows a small card, and proposes a purple accent. Disabling it restores the host's original theme. No plugin runs until the user installs, enables, and opens it.
-
-Build and package an example from this repository:
+Build and verify a signed Wasm guest with the included tools:
 
 ```sh
 rustup target add wasm32-unknown-unknown
