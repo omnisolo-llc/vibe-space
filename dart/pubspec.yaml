@@ -1,0 +1,7 @@
+name: vibe_space
+version: 0.2.0
+description: Capability broker and protocol for sandboxed Vibe Space mini-apps.
+environment:
+  sdk: '>=3.6.0 <4.0.0'
+dev_dependencies:
+  test: ^1.25.0

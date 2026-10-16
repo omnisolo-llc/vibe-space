@@ -1,0 +1,29 @@
+name: Focused checks
+on: [push, pull_request]
+jobs:
+  native-and-protocol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@46817827a5bfabe028bf34e1cce71fd40e2ff697
+        with:
+          toolchain: 1.95.0
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 24
+      - run: cargo test --workspace --locked
+      - run: node --test tests/*.test.mjs
+      - run: node tools/sync-worker.mjs --check
+      - run: node tools/vibe.mjs build examples/hello-rust rust
+  dart-and-renderer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2
+        with:
+          channel: stable
+      - run: dart test
+        working-directory: dart
+      - run: flutter test
+        working-directory: flutter

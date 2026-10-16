@@ -1,0 +1,19 @@
+[package]
+name = "hello-vibe"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+vibe-space-guest = {path = "../../sdk/rust"}
+
+[workspace]
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+strip = true

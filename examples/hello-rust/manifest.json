@@ -1,0 +1,19 @@
+{
+  "id": "hello-rust",
+  "version": 1,
+  "api_version": 1,
+  "name": "Hello Vibe Space (Rust)",
+  "license": "MIT",
+  "capabilities": [
+    "api:leapterm.ui"
+  ],
+  "network_origins": [],
+  "contributions": [
+    {
+      "id": "quick",
+      "slot": "quick_command",
+      "title": "Hello Vibe Space",
+      "command": "open"
+    }
+  ]
+}

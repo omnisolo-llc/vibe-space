@@ -1,0 +1,11 @@
+**/target/
+**/build/
+**/.dart_tool/
+**/.flutter-plugins*
+**/node_modules/
+**/pubspec.lock
+*.pem
+*.key
+*.wasm
+*.omnipkg
+.DS_Store
