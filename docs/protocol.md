@@ -13,6 +13,8 @@ uint64_t omni_invoke(uint32_t pointer, uint32_t length);
 
 A fresh instance handles each invocation. The host writes JSON into the guest allocation. Guest output is a JSON object, at most 1 MiB. Preserve transient state in `result.state`; it comes back in the next invocation. The guest never owns an application object or native pointer.
 
+LeapTerm packages may also export `leap_alloc`/`leap_invoke` or `leapterm_alloc`/`leapterm_invoke`. Both native and browser hosts accept these aliases with the same sandbox and message limits.
+
 ```json
 {"api_version":1,"command":"open","arguments":{},"state":null,"results":[],"host":{"framework_version":"0.2.0","apis":[]}}
 ```
