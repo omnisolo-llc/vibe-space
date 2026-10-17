@@ -794,7 +794,10 @@ fn validate_ui_resource_descriptor(ui_resource: &serde_json::Value) -> Result<()
         .get("uri")
         .and_then(|v| v.as_str())
         .ok_or(Error::Permission)?;
-    let Some(view_file) = uri.strip_prefix("ui://omniterm/") else {
+    let Some(view_file) = uri
+        .strip_prefix("ui://omniterm/")
+        .or_else(|| uri.strip_prefix("ui://leapterm/"))
+    else {
         return Err(Error::Permission);
     };
     let Some(stem) = view_file.strip_suffix(".html") else {
@@ -1183,9 +1186,13 @@ fn execute_compiled_module(
         .ok_or(Error::Package)?;
     let alloc = instance
         .get_typed_func::<i32, i32>(&store, "omni_alloc")
+        .or_else(|_| instance.get_typed_func::<i32, i32>(&store, "leap_alloc"))
+        .or_else(|_| instance.get_typed_func::<i32, i32>(&store, "leapterm_alloc"))
         .map_err(runtime_error)?;
     let invoke = instance
         .get_typed_func::<(i32, i32), i64>(&store, "omni_invoke")
+        .or_else(|_| instance.get_typed_func::<(i32, i32), i64>(&store, "leap_invoke"))
+        .or_else(|_| instance.get_typed_func::<(i32, i32), i64>(&store, "leapterm_invoke"))
         .map_err(runtime_error)?;
     let ptr = alloc
         .call(&mut store, request.len() as i32)
@@ -1340,6 +1347,11 @@ mod tests {
             (func (export "omni_alloc") (param i32) (result i32) i32.const 1024)
             (func (export "omni_invoke") (param i32 i32) (result i64) i64.const 68719476768))"#;
         assert_eq!(execute(wasm, b"{}").unwrap()["view"], "hello");
+        let source = std::str::from_utf8(wasm).unwrap();
+        for prefix in ["leap_", "leapterm_"] {
+            let renamed = source.replace("omni_", prefix);
+            assert_eq!(execute(renamed.as_bytes(), b"{}").unwrap()["view"], "hello");
+        }
     }
 
     #[test]

@@ -85,13 +85,15 @@ self.onmessage = async event => {
     phase = 'instantiate';
     const {exports:e} = await WebAssembly.instantiate(module, {});
     phase = 'abi';
-    if (!(e.memory instanceof WebAssembly.Memory) || typeof e.omni_alloc !== 'function' || typeof e.omni_invoke !== 'function') throw Error('ABI');
+    const alloc = e.omni_alloc ?? e.leap_alloc ?? e.leapterm_alloc;
+    const invoke = e.omni_invoke ?? e.leap_invoke ?? e.leapterm_invoke;
+    if (!(e.memory instanceof WebAssembly.Memory) || typeof alloc !== 'function' || typeof invoke !== 'function') throw Error('ABI');
     phase = 'allocate';
-    const ptr = e.omni_alloc(request.length);
+    const ptr = alloc(request.length);
     if (!Number.isInteger(ptr) || ptr < 0 || e.memory.buffer.byteLength > MAX_MEMORY || ptr + request.length > e.memory.buffer.byteLength) throw Error('input bounds');
     new Uint8Array(e.memory.buffer, ptr, request.length).set(request);
     phase = 'invoke';
-    const packed = e.omni_invoke(ptr, request.length);
+    const packed = invoke(ptr, request.length);
     phase = 'output';
     if (typeof packed !== 'bigint') throw Error('ABI result');
     const unsigned = BigInt.asUintN(64, packed);
