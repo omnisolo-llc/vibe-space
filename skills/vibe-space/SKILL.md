@@ -11,6 +11,7 @@ Read [the protocol](../../docs/protocol.md) for the ABI and JSON shapes. Read [h
 - Discover APIs from `host.apis`. Request the exact `api:<name>` capability and API version. Treat missing APIs or grants as unavailable. Do not invent APIs or use network/terminal access as a permission bypass.
 - Return declarative views and `host.call` proposals. Persist transient state in `state`. Consume `host.results` without replaying the same effect. Give effects stable unique IDs within the batch.
 - UI mods use allowed host tokens and callbacks. Do not inject scripts, HTML, CSS, native libraries, or downloaded Flutter code. Keep the host's navigation and review controls intact.
+- Use `vibe.canvas` v1 (`api:vibe.canvas`) when a mini-app or AI agent needs to open an interactive Vibe Canvas (`title`, `format`, `content`, optional `canvasId`, `taskId`, `wasmBase64`, `jsGlue`, `layout`). Supported `format` values are `markdown` (Markdown & Mermaid), `vibe_ui` (declarative `VibeView` JSON), `html` (sandboxed HTML), and `wasm` (sandboxed WebAssembly mini-app).
 - Build with `node tools/vibe.mjs build PATH rust|c`. Use `keygen`, `pack`, and `inspect` from that tool for a signed package. Store signing keys outside source control and obtain the trusted publisher key separately from the package.
 - Exercise install-disabled, grant, open, deny, approve, disable, and restoration in the actual first host. A standalone guest execution proves ABI behavior only. Run focused tests for new authorization or effect behavior.
 
