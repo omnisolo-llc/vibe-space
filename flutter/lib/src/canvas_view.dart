@@ -110,28 +110,38 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
               ),
             ),
           ),
-          const SizedBox(width: 8),
-          Container(
-            key: const ValueKey('vibe-canvas-format-badge'),
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: theme.colorScheme.primary.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              payload.format.label,
-              style: theme.textTheme.labelSmall?.copyWith(
-                color: theme.colorScheme.primary,
-                fontWeight: FontWeight.w600,
+          const SizedBox(width: 6),
+          Flexible(
+            flex: 0,
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 110),
+              child: Container(
+                key: const ValueKey('vibe-canvas-format-badge'),
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
+                decoration: BoxDecoration(
+                  color: theme.colorScheme.primary.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  payload.format.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: theme.textTheme.labelSmall?.copyWith(
+                    color: theme.colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
               ),
             ),
           ),
-          const SizedBox(width: 4),
+          const SizedBox(width: 2),
           IconButton(
             key: const ValueKey('vibe-canvas-layout-toggle'),
             tooltip:
                 'Layout: ${payload.layout.label} (switch to ${nextLayout.label})',
             visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             icon: Icon(_iconForLayout(payload.layout), size: 18),
             onPressed: widget.onLayoutChanged == null
                 ? null
@@ -141,6 +151,8 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
             key: const ValueKey('vibe-canvas-copy-button'),
             tooltip: _copied ? 'Copied!' : 'Copy canvas source',
             visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             icon: Icon(
               _copied ? Icons.check : Icons.copy_outlined,
               size: 18,
@@ -151,6 +163,8 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
             key: const ValueKey('vibe-canvas-close-button'),
             tooltip: 'Close canvas',
             visualDensity: VisualDensity.compact,
+            padding: const EdgeInsets.all(6),
+            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
             icon: const Icon(Icons.close, size: 18),
             onPressed: widget.onClose,
           ),
@@ -311,6 +325,37 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
           block.text,
           style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
         );
+      case _MarkdownBlockKind.table:
+        return SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: DataTable(
+            headingRowHeight: 38,
+            dataRowMinHeight: 34,
+            dataRowMaxHeight: 48,
+            columnSpacing: 18,
+            horizontalMargin: 12,
+            columns: <DataColumn>[
+              for (final h in block.tableHeaders)
+                DataColumn(
+                  label: Text(
+                    h,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                ),
+            ],
+            rows: <DataRow>[
+              for (final row in block.tableRows)
+                DataRow(
+                  cells: <DataCell>[
+                    for (var i = 0; i < block.tableHeaders.length; i++)
+                      DataCell(
+                        SelectableText(i < row.length ? row[i] : ''),
+                      ),
+                  ],
+                ),
+            ],
+          ),
+        );
     }
   }
 
@@ -462,7 +507,7 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
   }
 }
 
-enum _MarkdownBlockKind { heading, code, bulletList, paragraph }
+enum _MarkdownBlockKind { heading, code, bulletList, paragraph, table }
 
 class _MarkdownBlock {
   const _MarkdownBlock({
@@ -471,6 +516,8 @@ class _MarkdownBlock {
     this.headingLevel = 1,
     this.language = '',
     this.items = const <String>[],
+    this.tableHeaders = const <String>[],
+    this.tableRows = const <List<String>>[],
   });
 
   final _MarkdownBlockKind kind;
@@ -478,6 +525,23 @@ class _MarkdownBlock {
   final int headingLevel;
   final String language;
   final List<String> items;
+  final List<String> tableHeaders;
+  final List<List<String>> tableRows;
+}
+
+List<String> _splitMarkdownTableRow(String line) {
+  var trimmed = line.trim();
+  if (trimmed.startsWith('|')) trimmed = trimmed.substring(1);
+  if (trimmed.endsWith('|')) {
+    trimmed = trimmed.substring(0, trimmed.length - 1);
+  }
+  return trimmed.split('|').map((c) => c.trim()).toList(growable: false);
+}
+
+bool _isMarkdownTableSeparator(String line) {
+  final cells = _splitMarkdownTableRow(line);
+  if (cells.isEmpty) return false;
+  return cells.every((c) => RegExp(r'^:?-{2,}:?$').hasMatch(c));
 }
 
 List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
@@ -488,6 +552,7 @@ List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
   final fenceLines = <String>[];
   final paragraphLines = <String>[];
   final bulletItems = <String>[];
+  final tableLines = <String>[];
 
   void flushParagraph() {
     if (paragraphLines.isEmpty) return;
@@ -511,6 +576,28 @@ List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
     bulletItems.clear();
   }
 
+  void flushTable() {
+    if (tableLines.isEmpty) return;
+    if (tableLines.length >= 2 && _isMarkdownTableSeparator(tableLines[1])) {
+      final headers = _splitMarkdownTableRow(tableLines[0]);
+      final rows = <List<String>>[
+        for (var i = 2; i < tableLines.length; i++)
+          _splitMarkdownTableRow(tableLines[i]),
+      ];
+      blocks.add(
+        _MarkdownBlock(
+          kind: _MarkdownBlockKind.table,
+          tableHeaders: headers,
+          tableRows: rows,
+        ),
+      );
+    } else {
+      paragraphLines.addAll(tableLines);
+      flushParagraph();
+    }
+    tableLines.clear();
+  }
+
   for (final line in lines) {
     final trimmed = line.trim();
     if (inFence) {
@@ -532,6 +619,7 @@ List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
     }
 
     if (trimmed.startsWith('```')) {
+      flushTable();
       flushParagraph();
       flushBullets();
       inFence = true;
@@ -540,10 +628,20 @@ List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
     }
 
     if (trimmed.isEmpty) {
+      flushTable();
       flushParagraph();
       flushBullets();
       continue;
     }
+
+    if (trimmed.contains('|') &&
+        (trimmed.startsWith('|') || trimmed.endsWith('|'))) {
+      flushParagraph();
+      flushBullets();
+      tableLines.add(trimmed);
+      continue;
+    }
+    flushTable();
 
     final headingMatch = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(trimmed);
     if (headingMatch != null) {
@@ -579,6 +677,7 @@ List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
       ),
     );
   }
+  flushTable();
   flushParagraph();
   flushBullets();
 

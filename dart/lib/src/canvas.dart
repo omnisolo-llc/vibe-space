@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'host.dart';
+import 'mcp_tool_catalog.dart';
 
 /// Rendering tier supported by Vibe Canvas (`vibe.canvas` / `client.canvas.render`).
 enum VibeCanvasFormat {
@@ -176,6 +177,135 @@ class VibeCanvasActionEvent {
   final String taskId;
   final String actionName;
   final Map<String, Object?> arguments;
+}
+
+/// Read-only MCP query emitted from an interactive [VibeCanvasPayload]
+/// (`window.vibeCanvas.callMcp(...)` / `window.vibeCanvas.execReadOnly(...)`).
+class VibeCanvasMcpReadRequest {
+  const VibeCanvasMcpReadRequest({
+    required this.requestId,
+    required this.canvasId,
+    this.taskId = '',
+    required this.toolName,
+    this.arguments = const <String, Object?>{},
+  });
+
+  final String requestId;
+  final String canvasId;
+  final String taskId;
+  final String toolName;
+  final Map<String, Object?> arguments;
+}
+
+/// Response returned to a [VibeCanvasMcpReadRequest] inside a Vibe Canvas.
+class VibeCanvasMcpReadResponse {
+  const VibeCanvasMcpReadResponse({
+    required this.requestId,
+    required this.ok,
+    this.data = const <String, Object?>{},
+    this.error,
+  });
+
+  final String requestId;
+  final bool ok;
+  final Map<String, Object?> data;
+  final String? error;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'requestId': requestId,
+        'ok': ok,
+        'data': data,
+        if (error != null) 'error': error,
+      };
+}
+
+/// Callback that executes a validated read-only MCP query on behalf of a Vibe Canvas.
+typedef VibeCanvasMcpReadHandler = Future<VibeCanvasMcpReadResponse> Function(
+  VibeCanvasMcpReadRequest request,
+);
+
+/// Allowed read-only MCP tools callable from inside a Vibe Canvas object,
+/// including canonical ChatGPT/Claude MCP tool names and backward-compatible aliases.
+const Set<String> kAllowedReadOnlyCanvasMcpTools = <String>{
+  'host_process_list',
+  'runner_info',
+  'runner_ping',
+  'runner_usage',
+  'server.network.sockets',
+  'ssh_resource',
+  'server.telemetry.snapshot',
+  'server.process.inspect',
+  'mcp.ssh.exec_readonly',
+  'mcp.server.metrics',
+  'mcp.server.network_bandwidth',
+  'mcp.server.processes',
+  'client.canvas.read_metrics',
+  'list_devices',
+  'list_runners',
+  'list_projects',
+  'runtime_status',
+  'list_tools',
+  'tool_manifest',
+  'project_overview',
+  'list_project_files',
+  'read_files',
+  'search_project_texts',
+  'git_status',
+  'git_diff_hunks',
+  'git_log',
+  'list_jobs',
+  'observe_jobs',
+  'job_tail',
+  'session_shell_status',
+};
+
+/// Returns `true` if [toolName] is on the strict read-only MCP allowlist
+/// evaluated by [VibeMcpToolCatalog] under [condition] (defaults to
+/// [VibeMcpSelectionCondition.canvasReadOnly]).
+bool isReadOnlyCanvasMcpTool(
+  String toolName, {
+  VibeMcpSelectionCondition? condition,
+}) {
+  return VibeMcpToolCatalog.instance.isAllowed(
+    toolName,
+    condition: condition ?? VibeMcpSelectionCondition.canvasReadOnly(),
+  );
+}
+
+/// Validates that [command] is strictly read-only and safe to execute via MCP
+/// from a live Vibe Canvas component.
+bool isReadOnlyCanvasShellCommand(String command) {
+  final trimmed = command.trim();
+  if (trimmed.isEmpty || trimmed.length > 2000) return false;
+
+  // Reject output redirection, subshell mutation, or backgrounding
+  if (RegExp(r'(?:^|[^0-9])>>?|<\(|`\s*rm\b|\$\(\s*rm\b').hasMatch(trimmed)) {
+    return false;
+  }
+
+  // Reject mutating/destructive binaries or subcommands
+  final forbiddenPattern = RegExp(
+    r'(?:^|[;&|\s])('
+    r'rm|mv|cp|dd|mkfs|fdisk|parted|mount|umount|chmod|chown|chgrp|'
+    r'kill|pkill|killall|reboot|shutdown|poweroff|halt|init|'
+    r'sudo|su|useradd|usermod|userdel|groupadd|passwd|visudo|'
+    r'apt|apt-get|dpkg|yum|dnf|apk|pacman|snap|flatpak|brew|'
+    r'pip|pip3|npm|pnpm|yarn|cargo|'
+    r'tee|truncate|shred|unlink|mkdir|rmdir|touch|ln|'
+    r'iptables|ip6tables|ufw|nft|firewall-cmd|'
+    r'crontab|at|nc|netcat|socat|curl\s+-[^\n]*?(?:-X|--request|-d|--data|--upload-file)|'
+    r'wget\s+|--post-data|--post-file|'
+    r'systemctl\s+(?:start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload|kill|reset-failed)|'
+    r'service\s+\S+\s+(?:start|stop|restart|reload)|'
+    r'docker\s+(?:run|exec|rm|rmi|stop|start|restart|kill|build|pull|push|compose)|'
+    r'git\s+(?:push|commit|reset|clean|checkout|merge|rebase|cherry-pick|tag|branch\s+-[dD])'
+    r')(?:\s|$)',
+    caseSensitive: false,
+  );
+  if (forbiddenPattern.hasMatch(trimmed)) {
+    return false;
+  }
+  return true;
 }
 
 /// JSON Schema for the `vibe.canvas` v1 host API input.
