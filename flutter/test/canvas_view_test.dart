@@ -157,8 +157,61 @@ void main() {
 
     expect(
       find.byKey(const ValueKey('vibe-canvas-vibe-ui-error')),
-      findsOneWidget,
+    findsOneWidget,
     );
     expect(find.text('Invalid Vibe UI Schema'), findsOneWidget);
+  });
+
+  testWidgets('VibeCanvasView renders markdown pipe table and vibe_ui table',
+      (tester) async {
+    const mdPayload = VibeCanvasPayload(
+      canvasId: 'canvas-md-table',
+      title: 'Top Processes',
+      format: VibeCanvasFormat.markdown,
+      content: '# Top Processes\n\n| PID | Command | %CPU |\n| --- | --- | --- |\n| 101 | nginx | 14.2 |\n| 202 | postgres | 8.5 |',
+    );
+
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: VibeCanvasView(payload: mdPayload),
+        ),
+      ),
+    );
+
+    expect(find.byType(DataTable), findsOneWidget);
+    expect(find.text('nginx'), findsOneWidget);
+    expect(find.text('postgres'), findsOneWidget);
+
+    final vibeTablePayload = VibeCanvasPayload(
+      canvasId: 'canvas-vibe-table',
+      title: 'Vibe UI Table',
+      format: VibeCanvasFormat.vibeUi,
+      content: jsonEncode(<String, dynamic>{
+        'type': 'card',
+        'children': <Map<String, dynamic>>[
+          <String, dynamic>{'type': 'heading', 'text': 'Server Processes'},
+          <String, dynamic>{
+            'type': 'table',
+            'headers': <String>['PID', 'Process', '%MEM'],
+            'rows': <List<String>>[
+              <String>['301', 'redis-server', '4.1'],
+            ],
+          },
+        ],
+      }),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: VibeCanvasView(payload: vibeTablePayload),
+        ),
+      ),
+    );
+
+    expect(find.text('Server Processes'), findsOneWidget);
+    expect(find.byType(DataTable), findsOneWidget);
+    expect(find.text('redis-server'), findsOneWidget);
   });
 }
