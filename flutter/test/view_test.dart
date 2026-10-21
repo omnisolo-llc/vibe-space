@@ -70,4 +70,140 @@ void main() {
       expect(find.text('<script>literal text</script>'), findsOneWidget);
     },
   );
+
+  testWidgets(
+    'declarative view supports checkbox and option_group (single & multi-select)',
+    (tester) async {
+      String? lastCommand;
+      Map<String, Object?>? lastCommandArgs;
+      final inputs = <String, String>{};
+      final view = <String, dynamic>{
+        'type': 'card',
+        'children': [
+          {
+            'type': 'checkbox',
+            'id': 'auto_approve',
+            'label': 'Enable YOLO Auto-Approve',
+            'checked': false,
+            'command': 'toggle_yolo',
+          },
+          {
+            'type': 'option_group',
+            'id': 'features',
+            'label': 'Select checks to run',
+            'multiSelect': true,
+            'command': 'submit_checks',
+            'options': [
+              {'id': 'lint', 'label': 'Run Linter', 'value': 'cargo clippy', 'checked': true},
+              {'id': 'test', 'label': 'Run Unit Tests', 'value': 'cargo test', 'checked': false},
+            ],
+          },
+        ],
+      };
+      validateVibeView(view);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: VibeView(
+                value: view,
+                onCommand: (name, args) {
+                  lastCommand = name;
+                  lastCommandArgs = args;
+                },
+                onInput: (key, value) => inputs[key] = value,
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Enable YOLO Auto-Approve'), findsOneWidget);
+      expect(find.text('Run Linter'), findsOneWidget);
+      expect(find.text('Run Unit Tests'), findsOneWidget);
+
+      await tester.tap(find.text('Enable YOLO Auto-Approve'));
+      await tester.pump();
+      expect(inputs['auto_approve'], 'true');
+      expect(lastCommand, 'toggle_yolo');
+
+      await tester.tap(find.text('Run Unit Tests'));
+      await tester.pump();
+      expect(inputs['features'], 'cargo clippy,cargo test');
+
+      await tester.tap(find.text('Submit Selected (2)'));
+      await tester.pump();
+      expect(lastCommand, 'submit_checks');
+      expect(lastCommandArgs?['values'], <String>['cargo clippy', 'cargo test']);
+    },
+  );
+
+  testWidgets(
+    'option_group multi-select counts down and auto-submits selected options after configured timeout (5s)',
+    (tester) async {
+      String? lastCommand;
+      Map<String, Object?>? lastCommandArgs;
+      final view = <String, dynamic>{
+        'type': 'card',
+        'children': [
+          {
+            'type': 'option_group',
+            'id': 'checks',
+            'label': 'Select checks to run',
+            'multiSelect': true,
+            'command': 'prompt.select_options',
+            'options': [
+              {
+                'id': 'mem',
+                'label': 'Verify memory & swap (free -m)',
+                'value': 'Verify memory & swap (free -m)',
+                'checked': true,
+              },
+              {
+                'id': 'disk',
+                'label': 'Check disk capacity (df -h)',
+                'value': 'Check disk capacity (df -h)',
+                'checked': true,
+              },
+            ],
+          },
+        ],
+      };
+      validateVibeView(view);
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SingleChildScrollView(
+              child: VibeView(
+                value: view,
+                autoSubmitTimeoutSeconds: 5,
+                onCommand: (name, args) {
+                  lastCommand = name;
+                  lastCommandArgs = args;
+                },
+              ),
+            ),
+          ),
+        ),
+      );
+
+      expect(find.text('Auto-approving in 5s'), findsOneWidget);
+      expect(find.text('Submit Selected (2) · 5s'), findsOneWidget);
+
+      await tester.pump(const Duration(seconds: 2));
+      expect(find.text('Auto-approving in 3s'), findsOneWidget);
+      expect(find.text('Submit Selected (2) · 3s'), findsOneWidget);
+      expect(lastCommand, isNull);
+
+      await tester.pump(const Duration(seconds: 3));
+      expect(lastCommand, 'prompt.select_options');
+      expect(
+        lastCommandArgs?['values'],
+        <String>[
+          'Verify memory & swap (free -m)',
+          'Check disk capacity (df -h)',
+        ],
+      );
+    },
+  );
 }

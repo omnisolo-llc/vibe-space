@@ -30,6 +30,7 @@ class VibeCanvasView extends StatefulWidget {
     this.onAction,
     this.markdownBuilder,
     this.webViewportBuilder,
+    this.autoSubmitTimeoutSeconds,
   });
 
   final VibeCanvasPayload payload;
@@ -38,6 +39,7 @@ class VibeCanvasView extends StatefulWidget {
   final ValueChanged<VibeCanvasActionEvent>? onAction;
   final VibeCanvasMarkdownBuilder? markdownBuilder;
   final VibeCanvasWebViewportBuilder? webViewportBuilder;
+  final int? autoSubmitTimeoutSeconds;
 
   @override
   State<VibeCanvasView> createState() => _VibeCanvasViewState();
@@ -214,6 +216,7 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
       padding: const EdgeInsets.all(16),
       child: VibeView(
         value: decoded,
+        autoSubmitTimeoutSeconds: widget.autoSubmitTimeoutSeconds,
         onCommand: (command, args) {
           widget.onAction?.call(
             VibeCanvasActionEvent(
