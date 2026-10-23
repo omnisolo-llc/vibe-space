@@ -91,33 +91,13 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
   Widget _buildHeader(BuildContext context, VibeCanvasPayload payload) {
     final theme = Theme.of(context);
     final nextLayout = _nextLayout(payload.layout);
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      child: Row(
-        children: <Widget>[
-          Icon(
-            _iconForFormat(payload.format),
-            size: 18,
-            color: theme.colorScheme.primary,
-          ),
-          const SizedBox(width: 8),
-          Expanded(
-            child: Text(
-              payload.title,
-              key: const ValueKey('vibe-canvas-title'),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: theme.textTheme.titleSmall?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-          const SizedBox(width: 6),
-          Flexible(
-            flex: 0,
-            child: ConstrainedBox(
-              constraints: const BoxConstraints(maxWidth: 110),
-              child: Container(
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final isCompact = constraints.maxWidth < 600;
+        final showFormatBadge = payload.format != VibeCanvasFormat.vibeUi &&
+            !payload.format.label.contains('Vibe Declarative');
+        final badgeWidget = showFormatBadge
+            ? Container(
                 key: const ValueKey('vibe-canvas-format-badge'),
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 3),
                 decoration: BoxDecoration(
@@ -133,45 +113,90 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
                     fontWeight: FontWeight.w600,
                   ),
                 ),
+              )
+            : null;
+
+        final titleRow = Row(
+          children: <Widget>[
+            Icon(
+              _iconForFormat(payload.format),
+              size: 18,
+              color: theme.colorScheme.primary,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                payload.title,
+                key: const ValueKey('vibe-canvas-title'),
+                maxLines: isCompact ? 2 : 1,
+                overflow: TextOverflow.ellipsis,
+                style: theme.textTheme.titleSmall?.copyWith(
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 2),
-          IconButton(
-            key: const ValueKey('vibe-canvas-layout-toggle'),
-            tooltip:
-                'Layout: ${payload.layout.label} (switch to ${nextLayout.label})',
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.all(6),
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            icon: Icon(_iconForLayout(payload.layout), size: 18),
-            onPressed: widget.onLayoutChanged == null
-                ? null
-                : () => widget.onLayoutChanged!(nextLayout),
-          ),
-          IconButton(
-            key: const ValueKey('vibe-canvas-copy-button'),
-            tooltip: _copied ? 'Copied!' : 'Copy canvas source',
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.all(6),
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            icon: Icon(
-              _copied ? Icons.check : Icons.copy_outlined,
-              size: 18,
+            if (!isCompact && badgeWidget != null) ...<Widget>[
+              const SizedBox(width: 6),
+              Flexible(
+                flex: 0,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 140),
+                  child: badgeWidget,
+                ),
+              ),
+            ],
+            const SizedBox(width: 2),
+            IconButton(
+              key: const ValueKey('vibe-canvas-layout-toggle'),
+              tooltip:
+                  'Layout: ${payload.layout.label} (switch to ${nextLayout.label})',
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.all(6),
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              icon: Icon(_iconForLayout(payload.layout), size: 18),
+              onPressed: widget.onLayoutChanged == null
+                  ? null
+                  : () => widget.onLayoutChanged!(nextLayout),
             ),
-            onPressed: _copySource,
-          ),
-          IconButton(
-            key: const ValueKey('vibe-canvas-close-button'),
-            tooltip: 'Close canvas',
-            visualDensity: VisualDensity.compact,
-            padding: const EdgeInsets.all(6),
-            constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
-            icon: const Icon(Icons.close, size: 18),
-            onPressed: widget.onClose,
-          ),
-        ],
-      ),
+            IconButton(
+              key: const ValueKey('vibe-canvas-copy-button'),
+              tooltip: _copied ? 'Copied!' : 'Copy canvas source',
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.all(6),
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              icon: Icon(
+                _copied ? Icons.check : Icons.copy_outlined,
+                size: 18,
+              ),
+              onPressed: _copySource,
+            ),
+            IconButton(
+              key: const ValueKey('vibe-canvas-close-button'),
+              tooltip: 'Close canvas',
+              visualDensity: VisualDensity.compact,
+              padding: const EdgeInsets.all(6),
+              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              icon: const Icon(Icons.close, size: 18),
+              onPressed: widget.onClose,
+            ),
+          ],
+        );
+
+        return Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: isCompact && badgeWidget != null
+              ? Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    titleRow,
+                    const SizedBox(height: 6),
+                    badgeWidget,
+                  ],
+                )
+              : titleRow,
+        );
+      },
     );
   }
 
@@ -193,6 +218,66 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
     }
   }
 
+  Map<String, dynamic> _adaptVibeUiNode(
+    Map<String, dynamic> node, {
+    required bool compactTables,
+  }) {
+    final type = node['type'];
+    if (type == 'table' && compactTables) {
+      final headers = (node['headers'] as List? ?? const <Object?>[])
+          .take(32)
+          .map((h) => h.toString())
+          .toList(growable: false);
+      final rows = (node['rows'] as List? ?? const <Object?>[]).take(200);
+      final cardChildren = <Map<String, dynamic>>[];
+      for (final row in rows) {
+        if (row is! List) continue;
+        final rowItems = <Map<String, dynamic>>[];
+        for (var i = 0; i < headers.length; i++) {
+          final cellValue = i < row.length ? (row[i]?.toString() ?? '') : '';
+          rowItems.add(<String, dynamic>{
+            'type': 'text',
+            'text': '${headers[i]}: $cellValue',
+            'bold': i == 0,
+          });
+        }
+        cardChildren.add(<String, dynamic>{
+          'type': 'card',
+          'children': rowItems,
+        });
+      }
+      return <String, dynamic>{
+        'type': 'column',
+        'children': cardChildren,
+      };
+    }
+    if (type == 'row' || type == 'card' || type == 'column') {
+      final rawChildren = node['children'];
+      if (rawChildren is List) {
+        final adaptedChildren = <Map<String, dynamic>>[];
+        for (final child in rawChildren) {
+          if (child is! Map) continue;
+          final childMap = Map<String, dynamic>.from(child);
+          final childType = childMap['type'];
+          final childText = childMap['text']?.toString().trim() ?? '';
+          if ((childType == 'badge' || childType == 'text') &&
+              (childText == 'Vibe Declarative Surface' ||
+                  childText == 'Vibe Declarative UI')) {
+            continue;
+          }
+          adaptedChildren.add(
+            _adaptVibeUiNode(childMap, compactTables: compactTables),
+          );
+        }
+        return <String, dynamic>{
+          ...node,
+          'children': adaptedChildren,
+        };
+      }
+    }
+    return node;
+  }
+
   Widget _buildVibeUiBody(BuildContext context, VibeCanvasPayload payload) {
     final decoded = payload.tryDecodeVibeUi();
     if (decoded == null) {
@@ -211,23 +296,32 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
         message: error.message,
       );
     }
-    return SingleChildScrollView(
-      key: const ValueKey('vibe-canvas-vibe-ui-body'),
-      padding: const EdgeInsets.all(16),
-      child: VibeView(
-        value: decoded,
-        autoSubmitTimeoutSeconds: widget.autoSubmitTimeoutSeconds,
-        onCommand: (command, args) {
-          widget.onAction?.call(
-            VibeCanvasActionEvent(
-              canvasId: payload.canvasId,
-              taskId: payload.taskId,
-              actionName: command,
-              arguments: Map<String, Object?>.from(args),
-            ),
-          );
-        },
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compactTables = constraints.maxWidth < 600;
+        final adapted = _adaptVibeUiNode(
+          decoded,
+          compactTables: compactTables,
+        );
+        return SingleChildScrollView(
+          key: const ValueKey('vibe-canvas-vibe-ui-body'),
+          padding: const EdgeInsets.all(16),
+          child: VibeView(
+            value: adapted,
+            autoSubmitTimeoutSeconds: widget.autoSubmitTimeoutSeconds,
+            onCommand: (command, args) {
+              widget.onAction?.call(
+                VibeCanvasActionEvent(
+                  canvasId: payload.canvasId,
+                  taskId: payload.taskId,
+                  actionName: command,
+                  arguments: Map<String, Object?>.from(args),
+                ),
+              );
+            },
+          ),
+        );
+      },
     );
   }
 
@@ -329,35 +423,82 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
           style: theme.textTheme.bodyMedium?.copyWith(height: 1.45),
         );
       case _MarkdownBlockKind.table:
-        return SingleChildScrollView(
-          scrollDirection: Axis.horizontal,
-          child: DataTable(
-            headingRowHeight: 38,
-            dataRowMinHeight: 34,
-            dataRowMaxHeight: 48,
-            columnSpacing: 18,
-            horizontalMargin: 12,
-            columns: <DataColumn>[
-              for (final h in block.tableHeaders)
-                DataColumn(
-                  label: Text(
-                    h,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
-            ],
-            rows: <DataRow>[
-              for (final row in block.tableRows)
-                DataRow(
-                  cells: <DataCell>[
-                    for (var i = 0; i < block.tableHeaders.length; i++)
-                      DataCell(
-                        SelectableText(i < row.length ? row[i] : ''),
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            if (constraints.maxWidth < 600) {
+              return Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  for (var r = 0; r < block.tableRows.length; r++)
+                    Card(
+                      key: ValueKey('vibe-canvas-stacked-table-card-$r'),
+                      margin: const EdgeInsets.only(bottom: 8),
+                      child: Padding(
+                        padding: const EdgeInsets.all(12),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            for (var i = 0;
+                                i < block.tableHeaders.length;
+                                i++) ...<Widget>[
+                              if (i > 0) const SizedBox(height: 6),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: <Widget>[
+                                  Text(
+                                    '${block.tableHeaders[i]}: ',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Text(
+                                      i < block.tableRows[r].length
+                                          ? block.tableRows[r][i]
+                                          : '',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ],
+                        ),
                       ),
-                  ],
-                ),
-            ],
-          ),
+                    ),
+                ],
+              );
+            }
+            return SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: DataTable(
+                headingRowHeight: 38,
+                dataRowMinHeight: 34,
+                dataRowMaxHeight: 48,
+                columnSpacing: 18,
+                horizontalMargin: 12,
+                columns: <DataColumn>[
+                  for (final h in block.tableHeaders)
+                    DataColumn(
+                      label: Text(
+                        h,
+                        style: const TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                    ),
+                ],
+                rows: <DataRow>[
+                  for (final row in block.tableRows)
+                    DataRow(
+                      cells: <DataCell>[
+                        for (var i = 0; i < block.tableHeaders.length; i++)
+                          DataCell(
+                            SelectableText(i < row.length ? row[i] : ''),
+                          ),
+                      ],
+                    ),
+                ],
+              ),
+            );
+          },
         );
     }
   }
