@@ -153,7 +153,7 @@ pub fn effect_capability(effect: &serde_json::Value) -> Result<(String, bool), E
     Ok((capability, read_only))
 }
 
-const PLUGIN_POLICY_TABLE_RAW: &[u8; 159] = b"network|terminal_read|terminal_write|MIT|Apache-2.0|BSD-3-Clause|MIT OR Apache-2.0|network.fetch|terminal.read|terminal.write|omniterm.plugin-runtime.policy.v1";
+const PLUGIN_POLICY_TABLE_RAW: &[u8; 159] = b"network|terminal_read|terminal_write|MIT|Apache-2.0|BSD-3-Clause|MIT OR Apache-2.0|network.fetch|terminal.read|terminal.write|leapterm.plugin-runtime.policy.v1";
 
 const PLUGIN_VM_INSN_BYTES: usize = 8;
 
@@ -381,7 +381,7 @@ const PLUGIN_POLICY_VM_PROG: [PluginVmOp; 4] = [
     PluginVmOp::MatchSegment { dst: 1, sep: b'|' },
     PluginVmOp::XorImm {
         dst: 1,
-        imm: 0x4F4D_4E50,
+        imm: 0x4C45_4150,
     },
     PluginVmOp::RolImm { dst: 1, bits: 11 },
     PluginVmOp::Halt { src: 1 },
@@ -401,11 +401,11 @@ static PLUGIN_POLICY_VM: SealedPluginPolicyVm<{ 4 * PLUGIN_VM_INSN_BYTES }, 159>
             0x86, 0x09, 0xF4, 0x27, 0xBD, 0x6A, 0x18, 0xCE, 0x9B, 0x50, 0xAC, 0x71, 0xE3, 0x48,
             0xD6, 0x0F, 0x95, 0x3E,
         ],
-        b"omniterm.plugin-runtime.vmp.v1",
+        b"leapterm.plugin-runtime.vmp.v1",
     );
 
 const fn plugin_vm_token_for_segment(mode: u8, seg: u64, seed: u64) -> u64 {
-    (seg ^ 0x4F4D_4E50 ^ seed ^ ((mode as u64) << 32)).rotate_left(11)
+    (seg ^ 0x4C45_4150 ^ seed ^ ((mode as u64) << 32)).rotate_left(11)
 }
 
 fn classify_plugin_policy_segment(mode: u8, input: &[u8]) -> Option<u64> {
@@ -495,7 +495,7 @@ impl SealedWasmModule {
         let vm_token = plugin_policy_seal_token();
         while offset < len {
             let mut hasher = Sha256::new();
-            hasher.update(b"omniterm.plugin-runtime.wasm-seal.v1\0");
+            hasher.update(b"leapterm.plugin-runtime.wasm-seal.v1\0");
             hasher.update(vm_token);
             hasher.update(context_seed);
             hasher.update(expected_sha256);
@@ -590,7 +590,7 @@ fn seal_disk_package(
     let mut counter = 0u64;
     while offset < raw_module.len() {
         let mut hasher = Sha256::new();
-        hasher.update(b"omniterm.plugin-runtime.disk-seal.v1\0");
+        hasher.update(b"leapterm.plugin-runtime.disk-seal.v1\0");
         hasher.update(vm_token);
         hasher.update(publisher);
         hasher.update((sig_bytes.len() as u64).to_le_bytes());
@@ -607,7 +607,7 @@ fn seal_disk_package(
         counter = counter.wrapping_add(1);
     }
     let mut tag_hasher = Sha256::new();
-    tag_hasher.update(b"omniterm.plugin-runtime.disk-tag.v1\0");
+    tag_hasher.update(b"leapterm.plugin-runtime.disk-tag.v1\0");
     tag_hasher.update(vm_token);
     tag_hasher.update(publisher);
     tag_hasher.update((sig_bytes.len() as u64).to_le_bytes());
@@ -650,7 +650,7 @@ fn unseal_disk_package(
     let sig_bytes = disk.signature.as_bytes();
     let manifest_bytes = disk.manifest.as_bytes();
     let mut tag_hasher = Sha256::new();
-    tag_hasher.update(b"omniterm.plugin-runtime.disk-tag.v1\0");
+    tag_hasher.update(b"leapterm.plugin-runtime.disk-tag.v1\0");
     tag_hasher.update(vm_token);
     tag_hasher.update(publisher);
     tag_hasher.update((sig_bytes.len() as u64).to_le_bytes());
@@ -672,7 +672,7 @@ fn unseal_disk_package(
     let mut counter = 0u64;
     while offset < masked.0.len() {
         let mut hasher = Sha256::new();
-        hasher.update(b"omniterm.plugin-runtime.disk-seal.v1\0");
+        hasher.update(b"leapterm.plugin-runtime.disk-seal.v1\0");
         hasher.update(vm_token);
         hasher.update(publisher);
         hasher.update((sig_bytes.len() as u64).to_le_bytes());
@@ -794,10 +794,7 @@ fn validate_ui_resource_descriptor(ui_resource: &serde_json::Value) -> Result<()
         .get("uri")
         .and_then(|v| v.as_str())
         .ok_or(Error::Permission)?;
-    let Some(view_file) = uri
-        .strip_prefix("ui://omniterm/")
-        .or_else(|| uri.strip_prefix("ui://leapterm/"))
-    else {
+    let Some(view_file) = uri.strip_prefix("ui://leapterm/") else {
         return Err(Error::Permission);
     };
     let Some(stem) = view_file.strip_suffix(".html") else {
@@ -1553,7 +1550,7 @@ mod tests {
         let key = SigningKey::from_bytes(&[63; 32]);
         let publisher = key.verifying_key().to_bytes();
 
-        let output_json = r#"{"view":"ok","ui_resource":{"uri":"ui://omniterm/work-result.html","mime_type":"text/html;profile=mcp-app"},"effects":[{"id":"request","capability":"network","method":"network.fetch","arguments":{"url":"https://example.com/api","credential_id":"vault-cred-1"}}]}"#;
+        let output_json = r#"{"view":"ok","ui_resource":{"uri":"ui://leapterm/work-result.html","mime_type":"text/html;profile=mcp-app"},"effects":[{"id":"request","capability":"network","method":"network.fetch","arguments":{"url":"https://example.com/api","credential_id":"vault-cred-1"}}]}"#;
         let pkg = package_with_json_payload(&key, 1, &["network", "terminal_read"], output_json);
         store.install(&pkg, &publisher).unwrap();
         store
@@ -1657,7 +1654,7 @@ mod tests {
             ));
         }
         let realistic_json = format!(
-            r#"{{"view":"cluster-summary","records":[{body_records}],"ui_resource":{{"uri":"ui://omniterm/cluster-topology.html","mime_type":"text/html;profile=mcp-app"}},"effects":[{{"id":"request","capability":"network","method":"network.fetch","arguments":{{"url":"https://example.com/api/v1/nodes","credential_id":"vault-node-reader"}}}}]}}"#
+            r#"{{"view":"cluster-summary","records":[{body_records}],"ui_resource":{{"uri":"ui://leapterm/cluster-topology.html","mime_type":"text/html;profile=mcp-app"}},"effects":[{{"id":"request","capability":"network","method":"network.fetch","arguments":{{"url":"https://example.com/api/v1/nodes","credential_id":"vault-node-reader"}}}}]}}"#
         );
         let pkg =
             package_with_json_payload(&key, 1, &["network", "terminal_read"], &realistic_json);
