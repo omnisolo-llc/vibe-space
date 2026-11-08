@@ -53,11 +53,15 @@ void main() {
       );
       expect(find.byKey(const ValueKey('vibe-canvas-title')), findsOneWidget);
       expect(find.text('Release Dashboard'), findsOneWidget);
+      // Declarative content uses the title and body; its internal format label
+      // is deliberately omitted from the header.
       expect(
         find.byKey(const ValueKey('vibe-canvas-format-badge')),
-        findsOneWidget,
+        findsNothing,
       );
-      expect(find.text('Vibe Declarative UI'), findsOneWidget);
+      expect(find.text('Vibe Declarative UI'), findsNothing);
+      expect(find.text('Deploy Control'), findsOneWidget);
+      expect(find.text('Promote Release'), findsOneWidget);
       expect(
         find.byKey(const ValueKey('vibe-canvas-vibe-ui-body')),
         findsOneWidget,
