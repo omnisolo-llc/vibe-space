@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>CartScout (demo host) — VibeProtocol</title>
+  <link rel="stylesheet" href="../../kit/vibespace.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="topbar-brand">
+          <a class="back-home" href="../../index.html" aria-label="All VibeProtocol demos">Demos</a>
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 7h12l-1 12H7L6 7z"></path>
+              <path d="M9 7V5a3 3 0 0 1 6 0v2"></path>
+            </svg>
+          </span>
+          <span class="wordmark">CartScout</span>
+          <span class="host-tag" id="persona-tag">demo host</span>
+        </div>
+
+        <div class="topbar-actions">
+          <button type="button" class="protocol-pill" id="protocol-pill">
+            <span class="pill-dot" aria-hidden="true"></span>
+            <span>VibeProtocol on</span>
+          </button>
+          <button type="button" class="how-link" id="how-turned-on">How this app turned it on</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="workspace" id="workspace" data-mobile-tab="feed">
+      <aside class="nav-rail" aria-label="Wishlist controls and source health">
+        <nav class="left-nav">
+          <ul class="nav-list">
+            <li>
+              <span class="nav-item is-active" aria-current="page">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M12 20l-7-7a4.5 4.5 0 0 1 6.4-6.4L12 7.2l.6-.6A4.5 4.5 0 0 1 19 13l-7 7z"></path>
+                </svg>
+                <span>Wishlist</span>
+              </span>
+            </li>
+            <li>
+              <span class="nav-item is-static" aria-disabled="true">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="22 7 13.5 15.5 8.5 10.5 2 17"></polyline>
+                  <polyline points="16 7 22 7 22 13"></polyline>
+                </svg>
+                <span>Price history</span>
+              </span>
+            </li>
+            <li>
+              <span class="nav-item is-static" aria-disabled="true">
+                <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="7" width="18" height="13" rx="2"></rect>
+                  <path d="M3 11h18"></path>
+                </svg>
+                <span>Deliveries</span>
+              </span>
+            </li>
+          </ul>
+        </nav>
+
+        <div class="nav-summary">
+          <div class="nav-summary-label">Tracker summary</div>
+          <div class="nav-summary-row"><span>Tracked items</span><strong id="nav-items-count">6</strong></div>
+          <div class="nav-summary-row"><span>20%+ drops</span><strong id="nav-deals-count">3</strong></div>
+          <div class="nav-summary-row"><span>In transit</span><strong id="nav-deliveries-count">2</strong></div>
+        </div>
+
+        <section class="access-card" id="price-feed-card" aria-label="Merchant price tracker source">
+          <div class="access-card-head">
+            <span class="access-card-title">Price tracker feed</span>
+            <span class="access-status-pill is-live" id="price-feed-status">Live</span>
+          </div>
+          <p class="access-card-desc" id="price-feed-desc">Product &amp; seller names stay sealed behind opaque handles.</p>
+          <button type="button" class="access-toggle-btn" id="toggle-price-feed" data-app="toggle-price-feed" aria-pressed="true">
+            Simulate rate limit
+          </button>
+        </section>
+
+        <section class="watch-card" aria-label="Listing availability toggles">
+          <div class="watch-card-title">Tracked listings</div>
+          <div class="watch-list" id="watch-toggle-list"></div>
+        </section>
+      </aside>
+
+      <main class="feed-pane" id="feed-pane">
+        <div class="feed-header">
+          <div>
+            <h1 class="feed-title" id="feed-title">Saved wishlist</h1>
+            <p class="feed-subtitle" id="feed-subtitle">90-day typical vs. live merchant prices</p>
+          </div>
+          <span class="feed-live-chip">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span>90d baselines</span>
+          </span>
+        </div>
+
+        <section class="agent-strip" id="deal-assistant" aria-label="Deal Assistant">
+          <div class="agent-strip-head">
+            <div>
+              <h2 class="agent-strip-title">Deal Assistant</h2>
+              <p class="agent-strip-sub">Ask a question and inspect the temporary agent vibe it answers with.</p>
+            </div>
+            <span class="agent-strip-badge">Inline embed</span>
+          </div>
+          <div class="agent-chip-row">
+            <button type="button" class="agent-chip" id="ask-deal-assistant" data-app="agent-chip">
+              Is my top wishlist item actually at a 90-day low?
+            </button>
+          </div>
+          <div class="agent-reply" id="agent-reply" hidden>
+            <p class="agent-reply-text" id="agent-reply-text"></p>
+            <div class="agent-embed-slot" id="agent-embed-slot"></div>
+          </div>
+        </section>
+
+        <section class="wishlist-grid" id="wishlist-grid" aria-label="Wishlist items"></section>
+
+        <section class="deliveries-section" aria-label="Active deliveries">
+          <div class="section-head">
+            <h2 class="section-title">Incoming deliveries</h2>
+            <span class="section-sub">Sealed package labels exposed via <code>orders.deliveries</code></span>
+          </div>
+          <div class="deliveries-list" id="deliveries-list"></div>
+        </section>
+      </main>
+
+      <aside class="vibe-pane" id="vibe-space" aria-label="Vibe Space"></aside>
+    </div>
+
+    <nav class="mobile-tabs" aria-label="CartScout views">
+      <button type="button" class="mobile-tab is-active" data-app="tab-feed" aria-pressed="true">Wishlist</button>
+      <button type="button" class="mobile-tab" data-app="tab-vibes" aria-pressed="false">Vibe Space</button>
+    </nav>
+  </div>
+
+  <script src="../../kit/vibekit.js"></script>
+  <script src="../../kit/vibespace.js"></script>
+  <script src="../../vibes/focus-timer.js"></script>
+  <script src="vibes.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

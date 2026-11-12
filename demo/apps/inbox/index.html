@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PulseMail (demo host) — VibeProtocol</title>
+  <link rel="stylesheet" href="../../kit/vibespace.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="topbar-brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="5" width="18" height="14" rx="3"></rect>
+              <path d="M4 7l8 6 8-6"></path>
+            </svg>
+          </span>
+          <span class="wordmark">PulseMail</span>
+          <span class="host-tag" id="persona-tag">demo host</span>
+        </div>
+
+        <div class="topbar-actions">
+          <button type="button" class="protocol-pill" id="protocol-pill">
+            <span class="pill-dot" aria-hidden="true"></span>
+            <span>VibeProtocol on</span>
+          </button>
+          <button type="button" class="how-link" id="how-turned-on">How this app turned it on</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="workspace" id="workspace" data-mobile-tab="mail">
+      <aside class="nav-rail" aria-label="Mailbox folders and sync">
+        <nav class="left-nav" aria-label="Mailbox folders">
+          <ul class="nav-list" id="folder-list">
+            <li>
+              <button type="button" class="nav-item is-active" data-folder="all" aria-pressed="true">
+                <span>Inbox</span>
+                <span class="nav-count" id="count-all">8</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="nav-item" data-folder="vip" aria-pressed="false">
+                <span>VIP / Action Needed</span>
+                <span class="nav-count" id="count-vip">4</span>
+              </button>
+            </li>
+            <li>
+              <button type="button" class="nav-item" data-folder="newsletters" aria-pressed="false">
+                <span>Newsletters</span>
+                <span class="nav-count" id="count-newsletters">6</span>
+              </button>
+            </li>
+            <li>
+              <span class="nav-item is-static" aria-disabled="true">
+                <span>Sent</span>
+                <span class="nav-count">24</span>
+              </span>
+            </li>
+          </ul>
+        </nav>
+
+        <div class="nav-summary">
+          <div class="nav-summary-label">Queue snapshot</div>
+          <div class="nav-summary-row"><span>Unread waiting</span><strong id="summary-unread">6</strong></div>
+          <div class="nav-summary-row"><span>Over 24h SLA</span><strong id="summary-overdue">3</strong></div>
+        </div>
+
+        <section class="sync-card" id="mailbox-sync-card" aria-label="Mailbox sync status">
+          <div class="sync-card-head">
+            <span class="sync-card-title">Mailbox sync</span>
+            <span class="sync-status-pill is-live" id="mailbox-sync-status">Live</span>
+          </div>
+          <p class="sync-card-desc" id="mailbox-sync-desc">IMAP streaming headers &amp; wait timers</p>
+          <button type="button" class="sync-toggle-btn" id="toggle-mailbox-sync" data-app="toggle-mailbox-sync" aria-pressed="true">
+            Pause mailbox sync
+          </button>
+        </section>
+      </aside>
+
+      <main class="mail-pane" id="mail-pane">
+        <section class="assistant-card" aria-label="Inbox Assistant">
+          <div class="assistant-head">
+            <div class="assistant-title-wrap">
+              <span class="assistant-badge">Inbox Assistant</span>
+              <span class="assistant-subtitle">Ask about response SLAs — sender &amp; subject details stay sealed</span>
+            </div>
+            <button type="button" class="assistant-chip" id="ask-vip-sla" data-app="agent-chip">
+              Who is waiting on my reply the longest?
+            </button>
+          </div>
+          <div class="assistant-reply is-hidden" id="assistant-reply">
+            <p class="assistant-reply-text" id="assistant-reply-text"></p>
+            <div class="assistant-embed-host" id="assistant-embed"></div>
+          </div>
+        </section>
+
+        <div class="pane-header">
+          <div>
+            <h1 class="pane-title" id="pane-title">Inbox triage</h1>
+            <p class="pane-subtitle" id="pane-subtitle">Unread threads ordered by wait time</p>
+          </div>
+          <span class="pane-live-chip" id="pane-live-chip">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span id="pane-live-text">IMAP live</span>
+          </span>
+        </div>
+
+        <div class="thread-list" id="thread-list"></div>
+      </main>
+
+      <aside class="vibe-pane" id="vibe-space" aria-label="Vibe Space"></aside>
+    </div>
+
+    <nav class="mobile-tabs" aria-label="PulseMail views">
+      <button type="button" class="mobile-tab is-active" data-app="tab-mail" aria-pressed="true">Mail</button>
+      <button type="button" class="mobile-tab" data-app="tab-vibes" aria-pressed="false">Vibe Space</button>
+    </nav>
+  </div>
+
+  <script src="../../kit/vibekit.js"></script>
+  <script src="../../kit/vibespace.js"></script>
+  <script src="../../vibes/focus-timer.js"></script>
+  <script src="vibes.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

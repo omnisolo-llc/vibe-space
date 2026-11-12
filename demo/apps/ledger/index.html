@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PocketLedger — demo host</title>
+  <link rel="stylesheet" href="../../kit/vibespace.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="pl-app">
+    <header class="pl-topbar">
+      <div class="pl-brand">
+        <span class="pl-logo" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <rect x="2" y="3.5" width="16" height="13" rx="3" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M2 7.5H18" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M5.5 11.8H10.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+            <circle cx="14.5" cy="11.8" r="1.2" fill="currentColor"/>
+          </svg>
+        </span>
+        <span class="pl-wordmark">PocketLedger</span>
+        <span class="pl-tag" id="pl-host-tag">demo host</span>
+      </div>
+      <div class="pl-topbar-actions">
+        <button type="button" class="pl-offer-pill" id="pl-offer-pill" data-app="offer-pill">
+          <span class="pl-pill-dot" aria-hidden="true"></span>
+          <span>VibeProtocol on</span>
+        </button>
+        <button type="button" class="pl-how-link" id="pl-how-link" data-app="how-turned-on">
+          How this app turned it on
+        </button>
+      </div>
+    </header>
+
+    <main class="pl-workspace" id="pl-workspace" data-active-tab="ledger">
+      <aside class="pl-pane pl-accounts-pane" id="pl-accounts-pane" data-app="accounts" aria-label="Accounts">
+        <div class="pl-pane-head">
+          <h2 class="pl-pane-title">Accounts</h2>
+          <span class="pl-pane-meta" id="pl-account-count">4 linked</span>
+        </div>
+        <div class="pl-sync-card" id="pl-sync-card">
+          <div class="pl-sync-meta">
+            <span class="pl-status-dot is-ok" id="pl-sync-dot" aria-hidden="true"></span>
+            <div class="pl-sync-copy">
+              <span class="pl-sync-title">Bank sync</span>
+              <span class="pl-sync-state" id="pl-sync-state">Live</span>
+            </div>
+          </div>
+          <button type="button" class="pl-sync-btn" id="pl-sync-toggle" data-app="toggle-telemetry" aria-pressed="false">
+            Go offline
+          </button>
+        </div>
+        <ul class="pl-account-list" id="pl-account-list" data-app="account-list"></ul>
+        <p class="pl-rail-note">
+          Balances tick every 2.5s. Vibes only see sealed merchant and account handles.
+        </p>
+      </aside>
+
+      <section class="pl-pane pl-centre-pane" id="pl-centre-pane" aria-label="Transactions and Finance Assistant">
+        <section class="pl-ledger-card" aria-label="Recent transactions">
+          <div class="pl-ledger-head">
+            <div>
+              <h2 class="pl-ledger-title">Recent transactions</h2>
+              <p class="pl-ledger-sub" id="pl-ledger-sub">Weekly cashflow across linked accounts</p>
+            </div>
+            <span class="pl-ledger-badge" id="pl-ledger-badge">8 posted</span>
+          </div>
+          <ul class="pl-tx-list" id="pl-tx-list"></ul>
+        </section>
+
+        <section class="pl-chat" aria-label="Finance Assistant">
+          <div class="pl-chat-head">
+            <div class="pl-chat-title-wrap">
+              <span class="pl-agent-badge" aria-hidden="true">AI</span>
+              <div>
+                <h2 class="pl-chat-title">Finance Assistant</h2>
+                <p class="pl-chat-sub">Can embed live read-only Vibe views</p>
+              </div>
+            </div>
+          </div>
+          <div class="pl-chat-messages" id="pl-chat-messages" aria-live="polite">
+            <div class="pl-chat-empty" id="pl-chat-empty">
+              Pick a question below to inspect account spend with a temporary embedded vibe.
+            </div>
+          </div>
+          <div class="pl-chat-suggestions" id="pl-chat-suggestions">
+            <button type="button" class="pl-chip" id="pl-agent-chip" data-app="agent-chip">
+              Why did Sapphire Card jump this week?
+            </button>
+          </div>
+          <div class="pl-chat-input-wrap">
+            <input
+              type="text"
+              class="pl-chat-input"
+              disabled
+              placeholder="Ask the assistant (scripted in this demo)"
+              aria-label="Ask the assistant (scripted in this demo)"
+            >
+          </div>
+        </section>
+      </section>
+
+      <aside class="pl-pane pl-vibes-pane" id="vibe-space" aria-label="Vibe Space"></aside>
+    </main>
+
+    <nav class="pl-bottom-tabs" aria-label="Sections">
+      <button type="button" class="pl-tab-btn" data-app="tab-accounts" aria-pressed="false">
+        Accounts
+      </button>
+      <button type="button" class="pl-tab-btn is-active" data-app="tab-ledger" aria-pressed="true">
+        Ledger
+      </button>
+      <button type="button" class="pl-tab-btn" data-app="tab-vibes" aria-pressed="false">
+        Vibe Space
+      </button>
+    </nav>
+  </div>
+
+  <div class="pl-dialog-scrim" id="pl-how-scrim" hidden>
+    <div class="pl-dialog" role="dialog" aria-modal="true" aria-labelledby="pl-how-title">
+      <div class="pl-dialog-head">
+        <h2 class="pl-dialog-title" id="pl-how-title">How PocketLedger turned VibeProtocol on</h2>
+        <button type="button" class="pl-dialog-close" id="pl-how-close" aria-label="Close">Close</button>
+      </div>
+      <div class="pl-dialog-body">
+        <p class="pl-dialog-lead">PocketLedger declares what it offers. A vibe can use nothing else.</p>
+        <pre class="pl-code-block"><code id="pl-how-code"></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="../../kit/vibekit.js"></script>
+  <script src="../../kit/vibespace.js"></script>
+  <script src="../../vibes/focus-timer.js"></script>
+  <script src="vibes.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

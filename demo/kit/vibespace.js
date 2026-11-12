@@ -741,6 +741,23 @@
     } else if (vibe.id === 'focus-timer' || src.indexOf('DURATION_MIN') !== -1) {
       pushUnique('Make it a 10-minute timer');
       pushUnique('Make it a 45-minute timer');
+    } else if (vibe.id === 'subscription-watch' || src.indexOf('transactions.recent') !== -1) {
+      pushUnique('Flag recurring charges above $15/mo');
+      pushUnique('Make it red above 90% and show only the worst 3');
+    } else if (vibe.id === 'account-watch' || src.indexOf('accounts.cashflow') !== -1) {
+      pushUnique('Warn when budget passes 75%');
+      pushUnique('Warn when budget passes 90%');
+    } else if (vibe.id === 'vip-sla' || src.indexOf('threads.waiting') !== -1) {
+      pushUnique('Flag VIP threads waiting more than 4 hours');
+      pushUnique('Show top 3 waiting VIP threads over 2 hours');
+    } else if (vibe.id === 'newsletter-cleanup' || src.indexOf('senders.newsletters') !== -1) {
+      pushUnique('Show senders opened less than 15% of the time');
+      pushUnique('Show only the top 3 clutter senders');
+    } else if (vibe.id === 'deal-radar' || src.indexOf('wishlist.deals') !== -1) {
+      pushUnique('Show only the top 3 deals at 25% off or better');
+      pushUnique('Highlight wishlist items at least 30% below typical price');
+    } else if (vibe.id === 'item-price-watch' || src.indexOf('orders.deliveries') !== -1) {
+      pushUnique('Flag deals at least 20% below typical price');
     }
 
     return suggestions;
@@ -785,9 +802,13 @@
       if (pct >= 1 && pct <= 99) {
         var fracStr = String(pct / 100);
         var updated = nextSource;
-        if (/var\s+(?:THRESHOLD|DANGER_LEVEL)\s*=\s*0\.\d+\s*;/.test(updated)) {
+        if (/var\s+(?:THRESHOLD|DANGER_LEVEL|MIN_DISCOUNT)\s*=\s*0\.\d+\s*;/.test(updated)) {
           updated = updated.replace(/var\s+THRESHOLD\s*=\s*0\.\d+\s*;/g, 'var THRESHOLD = ' + fracStr + ';');
           updated = updated.replace(/var\s+DANGER_LEVEL\s*=\s*0\.\d+\s*;/g, 'var DANGER_LEVEL = ' + fracStr + ';');
+          updated = updated.replace(/var\s+MIN_DISCOUNT\s*=\s*0\.\d+\s*;/g, 'var MIN_DISCOUNT = ' + fracStr + ';');
+          updated = updated.replace(/\b(?:below|above|over|under|at)\s+\d+%/gi, function (m) {
+            return m.replace(/\d+%/, pct + '%');
+          });
         } else {
           updated = updated.replace(/(if\s*\([^)]*usedFraction\s*>=\s*)0\.\d+/g, '$1' + fracStr);
           updated = updated.replace(/(usedFraction\s*>=\s*)0\.\d+(\s*\?\s*'danger')/g, '$1' + fracStr + '$2');
@@ -862,10 +883,45 @@
       }
     }
 
+    // 5. Dollar threshold (e.g. "$15", "$25/mo", "above $30")
+    var usdMatch = trimmed.match(/\$\s*(\d+(?:\.\d+)?)/);
+    if (usdMatch) {
+      var usdVal = parseFloat(usdMatch[1]);
+      if (Number.isFinite(usdVal) && usdVal > 0 && usdVal <= 100000) {
+        var beforeUsd = nextSource;
+        if (/var\s+AMOUNT_LIMIT\s*=\s*\d+(?:\.\d+)?\s*;/.test(nextSource)) {
+          nextSource = nextSource.replace(
+            /var\s+AMOUNT_LIMIT\s*=\s*\d+(?:\.\d+)?\s*;/g,
+            'var AMOUNT_LIMIT = ' + usdVal + ';'
+          );
+        }
+        nextSource = nextSource.replace(/\$\d+(?:\.\d+)?\/mo/g, '$' + usdVal + '/mo');
+        if (nextSource !== beforeUsd) {
+          changed = true;
+        }
+      }
+    }
+
+    // 6. SLA hours (e.g. "4 hours", "2 hrs", "6h")
+    var hourMatch = trimmed.match(/\b(\d{1,3})\s*(?:-|\s)?(?:hours?|hrs?|h)\b/i);
+    if (hourMatch) {
+      var hrs = parseInt(hourMatch[1], 10);
+      if (hrs >= 1 && hrs <= 720) {
+        var beforeHrs = nextSource;
+        if (/var\s+SLA_HOURS\s*=\s*\d+\s*;/.test(nextSource)) {
+          nextSource = nextSource.replace(/var\s+SLA_HOURS\s*=\s*\d+\s*;/g, 'var SLA_HOURS = ' + hrs + ';');
+        }
+        nextSource = nextSource.replace(/\b\d+\s*h(?:\+|ours?)\b/gi, hrs + 'h');
+        if (nextSource !== beforeHrs) {
+          changed = true;
+        }
+      }
+    }
+
     if (!changed) {
       return {
         ok: false,
-        message: 'Try specifying a threshold (e.g. 75%), count (e.g. top 3), days (e.g. 14 days), or minutes (e.g. 10 min) — or use Edit code.'
+        message: 'Try specifying a threshold (e.g. 75%, $15), count (e.g. top 3), hours (e.g. 4 hours), days (e.g. 14 days), or minutes (e.g. 10 min) — or use Edit code.'
       };
     }
 

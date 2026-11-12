@@ -14,9 +14,15 @@
       --muted: #4b5563;
       --accent: #2563eb;
       --accent-soft: #eff6ff;
-      --dark-card-bg: #0d131f;
-      --dark-card-border: #24324d;
-      --dark-card-accent: #38bdf8;
+      --dark-card-bg: #0b1f1c;
+      --dark-card-border: #1d3c37;
+      --dark-card-accent: #10b981;
+      --inbox-card-bg: #f4f6fb;
+      --inbox-card-border: #dbe1ee;
+      --inbox-card-accent: #4f46e5;
+      --shop-card-bg: #fdf8f3;
+      --shop-card-border: #eadfd3;
+      --shop-card-accent: #d97706;
       --light-card-bg: #faf7f5;
       --light-card-border: #ece6e1;
       --light-card-accent: #7c3aed;
@@ -155,6 +161,32 @@
       height: 5px;
       border-radius: 999px;
       background: var(--light-card-accent);
+    }
+
+    .host-swatch-inbox {
+      background: var(--inbox-card-bg);
+      border-color: var(--inbox-card-border);
+    }
+
+    .host-swatch-inbox::after {
+      content: "";
+      width: 18px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--inbox-card-accent);
+    }
+
+    .host-swatch-shop {
+      background: var(--shop-card-bg);
+      border-color: var(--shop-card-border);
+    }
+
+    .host-swatch-shop::after {
+      content: "";
+      width: 18px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--shop-card-accent);
     }
 
     .host-title {
@@ -335,29 +367,63 @@
     </header>
 
     <section class="hosts-grid" aria-label="Demo host apps">
-      <a class="host-card" href="apps/leapterm/index.html">
+      <a class="host-card" href="apps/ledger/index.html">
         <div>
           <div class="host-card-head">
             <div>
-              <h2 class="host-title">LeapTerm (demo host)</h2>
-              <p class="host-subtitle">A server tool</p>
+              <h2 class="host-title">PocketLedger</h2>
+              <p class="host-subtitle">Personal finance &amp; subscriptions</p>
             </div>
             <span class="host-swatch host-swatch-dark" aria-hidden="true"></span>
           </div>
         </div>
         <div class="host-caps">
-          <span class="cap-pill">telemetry.disk</span>
-          <span class="cap-pill">telemetry.load</span>
+          <span class="cap-pill">transactions.recent</span>
+          <span class="cap-pill">accounts.cashflow</span>
         </div>
-        <span class="host-cta">Open LeapTerm &rarr;</span>
+        <span class="host-cta">Open PocketLedger &rarr;</span>
+      </a>
+
+      <a class="host-card" href="apps/inbox/index.html">
+        <div>
+          <div class="host-card-head">
+            <div>
+              <h2 class="host-title">PulseMail</h2>
+              <p class="host-subtitle">Email &amp; VIP inbox triage</p>
+            </div>
+            <span class="host-swatch host-swatch-inbox" aria-hidden="true"></span>
+          </div>
+        </div>
+        <div class="host-caps">
+          <span class="cap-pill">threads.waiting</span>
+          <span class="cap-pill">senders.newsletters</span>
+        </div>
+        <span class="host-cta">Open PulseMail &rarr;</span>
+      </a>
+
+      <a class="host-card" href="apps/shop/index.html">
+        <div>
+          <div class="host-card-head">
+            <div>
+              <h2 class="host-title">CartScout</h2>
+              <p class="host-subtitle">Wishlist &amp; 90-day price tracker</p>
+            </div>
+            <span class="host-swatch host-swatch-shop" aria-hidden="true"></span>
+          </div>
+        </div>
+        <div class="host-caps">
+          <span class="cap-pill">wishlist.deals</span>
+          <span class="cap-pill">orders.deliveries</span>
+        </div>
+        <span class="host-cta">Open CartScout &rarr;</span>
       </a>
 
       <a class="host-card" href="apps/moments/index.html">
         <div>
           <div class="host-card-head">
             <div>
-              <h2 class="host-title">Moments (demo host)</h2>
-              <p class="host-subtitle">A photo app</p>
+              <h2 class="host-title">Moments</h2>
+              <p class="host-subtitle">Social photo feed</p>
             </div>
             <span class="host-swatch host-swatch-light" aria-hidden="true"></span>
           </div>
@@ -373,23 +439,23 @@
     <section class="card-section">
       <h2>The tour</h2>
       <ol class="tour-list">
-        <li>In <em>LeapTerm</em>, pick the wish &ldquo;Show disk usage for my servers, red above 80%&rdquo;. Watch the scripted AI read what LeapTerm offers, write the vibe against sample data, and preview it.</li>
-        <li>Check the generated permission label (<em>Reads</em>, <em>Shows</em>, <em>Cannot</em>) and press <em>Allow and add</em>.</li>
-        <li><em>Disk Watch</em> runs live in the panel. Open its <em>&#8943;</em> menu and press <em>Inspect</em> to see the opaque handles it received instead of server names, plus a ledger of what it read.</li>
-        <li>Pick the second wish, &ldquo;Make it red above 90% and show only the worst three&rdquo;, to update <em>Disk Watch</em> to version 2 with no new permissions.</li>
-        <li>In the agent chat, ask &ldquo;Why is db-1 slow?&rdquo;. The reply embeds a live CPU and memory view marked <em>Temporary</em>; press <em>Pin to Vibe Space</em> to keep it.</li>
-        <li>Open the <em>&#8943;</em> menu on <em>Disk Watch</em>, press <em>Share&hellip;</em>, and choose <em>Open as a teammate</em> to see the label again and run it against the teammate&rsquo;s servers.</li>
-        <li>Switch to <em>Moments</em>: run &ldquo;Who are my top fans?&rdquo; (which ranks followers without identifying them), test a <em>Disk Watch</em> link to see it refused safely, and install <em>Focus timer</em> from Portable vibes in both apps.</li>
-        <li>Manage, edit, and title your vibes: open a card&rsquo;s <em>&#8943;</em> menu to <em>Rename</em>, <em>Edit&hellip;</em> (remix by wish or tweak code with a live sandbox test), restore earlier versions, or pause, reorder, filter, and undo deletes.</li>
-        <li>Graceful when data sources go offline or are revoked: disconnect <em>Telemetry feed</em> or take <em>db-1</em> offline in LeapTerm, or turn off <em>Follower likes access</em> in Moments &mdash; cards keep their last reading calmly, let you preview sample data, and recover automatically when the source returns.</li>
+        <li>In <em>PocketLedger</em>, pick the wish &ldquo;Flag recurring charges above $20/mo, red above 80% of budget&rdquo;. Watch the scripted AI read what PocketLedger offers, write the vibe against synthetic sample data, and preview it.</li>
+        <li>Review the generated permission label (<em>Reads</em>, <em>Shows</em>, <em>Cannot</em>) and press <em>Allow and add</em>.</li>
+        <li><em>Subscription Watch</em> runs live in the panel. Open its <em>&#8943;</em> menu and press <em>Inspect</em> to see opaque sealed handles instead of merchant or account names, plus a ledger of what it read.</li>
+        <li>Pick the second wish, &ldquo;Make it red above 90% and show only the worst three&rdquo;, to update <em>Subscription Watch</em> to version 2 with no new permissions.</li>
+        <li>Ask the <em>Finance Assistant</em> &ldquo;Why did Sapphire Card jump this week?&rdquo; (or try <em>Inbox Assistant</em> in <em>PulseMail</em> and <em>Deal Assistant</em> in <em>CartScout</em>). Each reply embeds a live view marked <em>Temporary</em>; press <em>Pin to Vibe Space</em> to keep it with a custom title and note.</li>
+        <li>Open the <em>&#8943;</em> menu on a card, press <em>Share&hellip;</em>, and open <em>Open as household partner</em> in <em>PocketLedger</em> (or teammate/friend views in <em>PulseMail</em> and <em>CartScout</em>) to see the label again and run it against a separate dataset.</li>
+        <li>Switch to <em>Moments</em>: run &ldquo;Who are my top fans?&rdquo; (ranking followers without identifying them), test a <em>Subscription Watch</em> link to see cross-app share refusal, and install <em>Focus timer</em> from Portable vibes in any of the four hosts.</li>
+        <li>Manage, edit, and title your vibes: open a card&rsquo;s <em>&#8943;</em> menu to <em>Rename</em>, <em>Edit&hellip;</em> (remix thresholds/counts/hours/discounts by wish or edit JS code with a live sandbox test), restore earlier versions, or pause, reorder, filter, and undo deletes.</li>
+        <li>Graceful when data sources go offline or are revoked: disconnect <em>Bank sync</em> or unlink an account in <em>PocketLedger</em>, pause <em>Mailbox sync</em> in <em>PulseMail</em>, rate-limit <em>Price tracker feed</em> in <em>CartScout</em>, or turn off <em>Follower likes access</em> in <em>Moments</em> &mdash; cards keep their last reading calmly, let you preview sample data, and recover automatically when the source returns.</li>
       </ol>
     </section>
 
     <section class="reality-box">
       <h2>What is real here</h2>
       <ul class="reality-list">
-        <li><strong>Real:</strong> <span>the sandbox, the label, sealed values (plus capability checks, the read ledger, share links, and two hosts on one kit).</span></li>
-        <li><strong>Scripted:</strong> <span>the AI and the data (including the agent&rsquo;s replies).</span></li>
+        <li><strong>Real:</strong> <span>the sandbox, the label, sealed values (plus capability checks, the read ledger, share links, and four hosts on one kit).</span></li>
+        <li><strong>Scripted:</strong> <span>the AI and the data (including the assistant replies).</span></li>
         <li><strong>Stand-in:</strong> <span>a browser sandbox instead of Wasm.</span></li>
       </ul>
       <a class="readme-link" href="README.md">Read README.md &rarr;</a>
