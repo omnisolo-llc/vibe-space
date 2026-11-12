@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Moments (demo host) — VibeProtocol</title>
+  <link rel="stylesheet" href="../../kit/vibespace.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="topbar-inner">
+        <div class="topbar-brand">
+          <span class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="5" width="18" height="14" rx="4"></rect>
+              <circle cx="12" cy="12" r="3.5"></circle>
+              <circle cx="17.2" cy="8.2" r="0.8" fill="currentColor" stroke="none"></circle>
+            </svg>
+          </span>
+          <span class="wordmark">Moments</span>
+          <span class="host-tag">demo host</span>
+        </div>
+
+        <div class="topbar-actions">
+          <button type="button" class="protocol-pill" id="protocol-pill">
+            <span class="pill-dot" aria-hidden="true"></span>
+            <span>VibeProtocol on</span>
+          </button>
+          <button type="button" class="how-link" id="how-turned-on">How this app turned it on</button>
+        </div>
+      </div>
+    </header>
+
+    <div class="workspace" id="workspace" data-mobile-tab="feed">
+      <aside class="nav-rail" aria-label="Primary navigation">
+        <nav class="left-nav">
+          <ul class="nav-list">
+            <li>
+              <span class="nav-item is-active" aria-current="page">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M3 10.5L12 3l9 7.5"></path>
+                  <path d="M5 9.5V20a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9.5"></path>
+                </svg>
+                <span>Home</span>
+              </span>
+            </li>
+            <li>
+              <span class="nav-item is-static" aria-disabled="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="11" cy="11" r="7"></circle>
+                  <line x1="20" y1="20" x2="16.2" y2="16.2"></line>
+                </svg>
+                <span>Search</span>
+              </span>
+            </li>
+            <li>
+              <span class="nav-item is-static" aria-disabled="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="8" r="4"></circle>
+                  <path d="M4 20a8 8 0 0 1 16 0"></path>
+                </svg>
+                <span>Profile</span>
+              </span>
+            </li>
+          </ul>
+        </nav>
+
+        <div class="nav-summary">
+          <div class="nav-summary-label">Your archive</div>
+          <div class="nav-summary-row"><span>Posts</span><strong id="nav-posts-count">12</strong></div>
+          <div class="nav-summary-row"><span>Fans liking</span><strong id="nav-fans-count">15</strong></div>
+        </div>
+
+        <section class="access-card" id="follower-access-card" aria-label="Privacy and data access">
+          <div class="access-card-head">
+            <span class="access-card-title">Follower likes access</span>
+            <span class="access-status-pill is-live" id="follower-source-status">Live</span>
+          </div>
+          <p class="access-card-desc" id="follower-source-desc">Shared as sealed handles with Vibes</p>
+          <button type="button" class="access-toggle-btn" id="toggle-follower-source" data-app="toggle-follower-source" aria-pressed="true">
+            Turn off access
+          </button>
+        </section>
+      </aside>
+
+      <main class="feed-pane" id="feed-pane">
+        <div class="feed-header">
+          <div>
+            <h1 class="feed-title">Home feed</h1>
+            <p class="feed-subtitle">Your 8 most recent photo moments</p>
+          </div>
+          <span class="feed-live-chip">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span>Live likes</span>
+          </span>
+        </div>
+        <div class="feed-list" id="feed-list"></div>
+      </main>
+
+      <aside class="vibe-pane" id="vibe-space" aria-label="Vibe Space"></aside>
+    </div>
+
+    <nav class="mobile-tabs" aria-label="Moments views">
+      <button type="button" class="mobile-tab is-active" data-app="tab-feed" aria-pressed="true">Feed</button>
+      <button type="button" class="mobile-tab" data-app="tab-vibes" aria-pressed="false">Vibe Space</button>
+    </nav>
+  </div>
+
+  <script src="../../kit/vibekit.js"></script>
+  <script src="../../kit/vibespace.js"></script>
+  <script src="../../vibes/focus-timer.js"></script>
+  <script src="vibes.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

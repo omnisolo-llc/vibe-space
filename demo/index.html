@@ -1,0 +1,399 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VibeProtocol demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --surface: #ffffff;
+      --border: #dfe4ec;
+      --text: #111827;
+      --muted: #4b5563;
+      --accent: #2563eb;
+      --accent-soft: #eff6ff;
+      --dark-card-bg: #0d131f;
+      --dark-card-border: #24324d;
+      --dark-card-accent: #38bdf8;
+      --light-card-bg: #faf7f5;
+      --light-card-border: #ece6e1;
+      --light-card-accent: #7c3aed;
+      --radius: 14px;
+      --font: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    *, *::before, *::after {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    a:focus-visible, button:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 2px;
+    }
+
+    .page {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 40px 20px 56px;
+      display: flex;
+      flex-direction: column;
+      gap: 32px;
+    }
+
+    .hero {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .eyebrow {
+      display: inline-flex;
+      align-self: flex-start;
+      padding: 4px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(28px, 4vw, 38px);
+      line-height: 1.15;
+      letter-spacing: -0.025em;
+    }
+
+    .lead {
+      margin: 0;
+      max-width: 72ch;
+      font-size: 17px;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    .hosts-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .host-card {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 22px;
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+      background: var(--surface);
+      color: var(--text);
+      text-decoration: none;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+      transition: transform 170ms ease, border-color 170ms ease, box-shadow 170ms ease;
+    }
+
+    .host-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--accent);
+      box-shadow: 0 10px 26px rgba(15, 23, 42, 0.09);
+    }
+
+    .host-card-head {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .host-swatch {
+      width: 44px;
+      height: 30px;
+      border-radius: 8px;
+      flex-shrink: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid var(--border);
+    }
+
+    .host-swatch-dark {
+      background: var(--dark-card-bg);
+      border-color: var(--dark-card-border);
+    }
+
+    .host-swatch-dark::after {
+      content: "";
+      width: 18px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--dark-card-accent);
+    }
+
+    .host-swatch-light {
+      background: var(--light-card-bg);
+      border-color: var(--light-card-border);
+    }
+
+    .host-swatch-light::after {
+      content: "";
+      width: 18px;
+      height: 5px;
+      border-radius: 999px;
+      background: var(--light-card-accent);
+    }
+
+    .host-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.015em;
+    }
+
+    .host-subtitle {
+      margin: 4px 0 0;
+      font-size: 14.5px;
+      color: var(--muted);
+    }
+
+    .host-caps {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .cap-pill {
+      font-family: var(--mono);
+      font-size: 11.5px;
+      padding: 3px 8px;
+      border-radius: 999px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    .host-cta {
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--accent);
+    }
+
+    .card-section {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .card-section h2 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .tour-list {
+      margin: 0;
+      padding-left: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .tour-list li {
+      padding-left: 4px;
+      font-size: 14.5px;
+      color: var(--text);
+    }
+
+    .tour-list em {
+      font-style: normal;
+      font-weight: 600;
+    }
+
+    .reality-box {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: var(--radius);
+      padding: 20px 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .reality-box h2 {
+      margin: 0;
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .reality-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      font-size: 14.5px;
+    }
+
+    .reality-list strong {
+      display: inline-block;
+      min-width: 84px;
+      color: var(--text);
+    }
+
+    .reality-list span {
+      color: var(--muted);
+    }
+
+    .readme-link {
+      align-self: flex-start;
+      display: inline-flex;
+      align-items: center;
+      min-height: 36px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--accent);
+      font-size: 13.5px;
+      font-weight: 600;
+      text-decoration: none;
+      transition: border-color 160ms ease, background-color 160ms ease;
+    }
+
+    .readme-link:hover {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    @media (max-width: 720px) {
+      .page {
+        padding: 24px 16px 40px;
+        gap: 22px;
+      }
+
+      .hosts-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .card-section,
+      .reality-box {
+        padding: 18px;
+      }
+    }
+
+    @media (pointer: coarse) {
+      .host-cta,
+      .readme-link {
+        min-height: 44px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .host-card,
+      .readme-link {
+        transition-duration: 0.01ms !important;
+      }
+
+      .host-card:hover {
+        transform: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page">
+    <header class="hero">
+      <span class="eyebrow">VibeProtocol</span>
+      <h1>VibeProtocol demo</h1>
+      <p class="lead">
+        An open protocol that lets any app be modded by its own users, safely. A user makes a wish, their AI writes a small sandboxed program called a vibe, and the app runs it inside a box it controls.
+      </p>
+    </header>
+
+    <section class="hosts-grid" aria-label="Demo host apps">
+      <a class="host-card" href="apps/leapterm/index.html">
+        <div>
+          <div class="host-card-head">
+            <div>
+              <h2 class="host-title">LeapTerm (demo host)</h2>
+              <p class="host-subtitle">A server tool</p>
+            </div>
+            <span class="host-swatch host-swatch-dark" aria-hidden="true"></span>
+          </div>
+        </div>
+        <div class="host-caps">
+          <span class="cap-pill">telemetry.disk</span>
+          <span class="cap-pill">telemetry.load</span>
+        </div>
+        <span class="host-cta">Open LeapTerm &rarr;</span>
+      </a>
+
+      <a class="host-card" href="apps/moments/index.html">
+        <div>
+          <div class="host-card-head">
+            <div>
+              <h2 class="host-title">Moments (demo host)</h2>
+              <p class="host-subtitle">A photo app</p>
+            </div>
+            <span class="host-swatch host-swatch-light" aria-hidden="true"></span>
+          </div>
+        </div>
+        <div class="host-caps">
+          <span class="cap-pill">posts.mine</span>
+          <span class="cap-pill">likes.byFollower</span>
+        </div>
+        <span class="host-cta">Open Moments &rarr;</span>
+      </a>
+    </section>
+
+    <section class="card-section">
+      <h2>The tour</h2>
+      <ol class="tour-list">
+        <li>In <em>LeapTerm</em>, pick the wish &ldquo;Show disk usage for my servers, red above 80%&rdquo;. Watch the scripted AI read what LeapTerm offers, write the vibe against sample data, and preview it.</li>
+        <li>Check the generated permission label (<em>Reads</em>, <em>Shows</em>, <em>Cannot</em>) and press <em>Allow and add</em>.</li>
+        <li><em>Disk Watch</em> runs live in the panel. Open its <em>&#8943;</em> menu and press <em>Inspect</em> to see the opaque handles it received instead of server names, plus a ledger of what it read.</li>
+        <li>Pick the second wish, &ldquo;Make it red above 90% and show only the worst three&rdquo;, to update <em>Disk Watch</em> to version 2 with no new permissions.</li>
+        <li>In the agent chat, ask &ldquo;Why is db-1 slow?&rdquo;. The reply embeds a live CPU and memory view marked <em>Temporary</em>; press <em>Pin to Vibe Space</em> to keep it.</li>
+        <li>Open the <em>&#8943;</em> menu on <em>Disk Watch</em>, press <em>Share&hellip;</em>, and choose <em>Open as a teammate</em> to see the label again and run it against the teammate&rsquo;s servers.</li>
+        <li>Switch to <em>Moments</em>: run &ldquo;Who are my top fans?&rdquo; (which ranks followers without identifying them), test a <em>Disk Watch</em> link to see it refused safely, and install <em>Focus timer</em> from Portable vibes in both apps.</li>
+        <li>Manage, edit, and title your vibes: open a card&rsquo;s <em>&#8943;</em> menu to <em>Rename</em>, <em>Edit&hellip;</em> (remix by wish or tweak code with a live sandbox test), restore earlier versions, or pause, reorder, filter, and undo deletes.</li>
+        <li>Graceful when data sources go offline or are revoked: disconnect <em>Telemetry feed</em> or take <em>db-1</em> offline in LeapTerm, or turn off <em>Follower likes access</em> in Moments &mdash; cards keep their last reading calmly, let you preview sample data, and recover automatically when the source returns.</li>
+      </ol>
+    </section>
+
+    <section class="reality-box">
+      <h2>What is real here</h2>
+      <ul class="reality-list">
+        <li><strong>Real:</strong> <span>the sandbox, the label, sealed values (plus capability checks, the read ledger, share links, and two hosts on one kit).</span></li>
+        <li><strong>Scripted:</strong> <span>the AI and the data (including the agent&rsquo;s replies).</span></li>
+        <li><strong>Stand-in:</strong> <span>a browser sandbox instead of Wasm.</span></li>
+      </ul>
+      <a class="readme-link" href="README.md">Read README.md &rarr;</a>
+    </section>
+  </main>
+</body>
+</html>

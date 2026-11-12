@@ -23,12 +23,27 @@ export interface Effect {
   method:'network.fetch' | 'terminal.read' | 'terminal.write' | 'host.call';
   arguments:Record<string,Json>;
 }
+export interface SealedHandle {
+  sealed:string;
+}
+export type ViewTone = 'default' | 'ok' | 'warn' | 'danger';
+export type ViewTextValue = string | number | SealedHandle;
+export interface ViewOption {
+  id:string; label:string; value?:string; checked?:boolean; selected?:boolean;
+}
 export type View =
-  | {type:'text' | 'heading' | 'badge'; text:string; bold?:boolean; italic?:boolean; code?:boolean}
+  | {type:'text' | 'heading' | 'badge'; text:ViewTextValue; tone?:ViewTone; bold?:boolean; italic?:boolean; code?:boolean; strong?:boolean; mono?:boolean}
   | {type:'input'; id:string; label:string; secret?:boolean; multiline?:boolean}
-  | {type:'column' | 'row' | 'card'; children:View[]}
-  | {type:'action'; title:string; command:string; arguments?:Record<string,Json>}
-  | {type:'divider'} | {type:'progress'; value:number};
+  | {type:'checkbox'; id:string; label:string; checked?:boolean; command?:string}
+  | {type:'option_group'; id:string; label?:string; multiSelect?:boolean; command?:string; options:ViewOption[]; autoSubmitTimeoutSeconds?:number}
+  | {type:'column' | 'row' | 'card'; children:View[]; tone?:ViewTone}
+  | {type:'stat'; label:ViewTextValue; value:ViewTextValue; tone?:ViewTone}
+  | {type:'bar'; label:ViewTextValue; value:number; max?:number; caption?:ViewTextValue; tone?:ViewTone; swatch?:string}
+  | {type:'sparkline'; values:number[]; tone?:ViewTone}
+  | {type:'button'; text:ViewTextValue; command:string; args?:Record<string,Json>; arguments?:Record<string,Json>; tone?:ViewTone}
+  | {type:'action'; title:string; command:string; arguments?:Record<string,Json>; tone?:ViewTone}
+  | {type:'table'; headers:ViewTextValue[]; rows:(ViewTextValue | boolean | null)[][]; tone?:ViewTone}
+  | {type:'divider'} | {type:'progress'; value:number; tone?:ViewTone};
 export interface Result {state?:Json; view?:View; effects?:Effect[]}
 export interface Schema {
   type:'object' | 'array' | 'string' | 'number' | 'integer' | 'boolean' | 'null';

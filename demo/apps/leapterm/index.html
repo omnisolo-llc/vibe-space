@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LeapTerm — demo host</title>
+  <link rel="stylesheet" href="../../kit/vibespace.css">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <div class="lt-app">
+    <header class="lt-topbar">
+      <div class="lt-brand">
+        <span class="lt-logo" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
+            <rect x="1.5" y="2.5" width="17" height="15" rx="3.5" stroke="currentColor" stroke-width="1.6"/>
+            <path d="M5.5 7.5L8.5 10L5.5 12.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M10.5 12.5H14.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <span class="lt-wordmark">LeapTerm</span>
+        <span class="lt-tag" id="lt-host-tag">demo host</span>
+      </div>
+      <div class="lt-topbar-actions">
+        <button type="button" class="lt-offer-pill" id="lt-offer-pill" data-app="offer-pill">
+          <span class="lt-pill-dot" aria-hidden="true"></span>
+          <span>VibeProtocol on</span>
+        </button>
+        <button type="button" class="lt-how-link" id="lt-how-link" data-app="how-turned-on">
+          How this app turned it on
+        </button>
+      </div>
+    </header>
+
+    <main class="lt-workspace" id="lt-workspace" data-active-tab="agent">
+      <aside class="lt-pane lt-servers-pane" id="lt-servers-pane" aria-label="Servers">
+        <div class="lt-pane-head">
+          <h2 class="lt-pane-title">Servers</h2>
+          <span class="lt-pane-meta" id="lt-server-count">5 online</span>
+        </div>
+        <div class="lt-telemetry-card" id="lt-telemetry-card">
+          <div class="lt-telemetry-meta">
+            <span class="lt-status-dot is-ok" id="lt-telemetry-dot" aria-hidden="true"></span>
+            <div class="lt-telemetry-copy">
+              <span class="lt-telemetry-title">Telemetry feed</span>
+              <span class="lt-telemetry-state" id="lt-telemetry-state">Live</span>
+            </div>
+          </div>
+          <button type="button" class="lt-telemetry-btn" id="lt-telemetry-toggle" data-app="toggle-telemetry" aria-pressed="false">
+            Go offline
+          </button>
+        </div>
+        <ul class="lt-server-list" id="lt-server-list" data-app="server-list"></ul>
+        <p class="lt-rail-note">
+          Telemetry ticks every 2s. Vibes only see sealed server handles.
+        </p>
+      </aside>
+
+      <section class="lt-pane lt-centre-pane" id="lt-centre-pane" aria-label="Terminal and Agent">
+        <section class="lt-terminal" aria-label="Shell session">
+          <div class="lt-terminal-bar">
+            <div class="lt-terminal-dots" aria-hidden="true">
+              <span></span><span></span><span></span>
+            </div>
+            <span class="lt-terminal-title" id="lt-term-title">ops@db-1.prod.internal — bash</span>
+            <span class="lt-terminal-badge">ssh session</span>
+          </div>
+          <pre class="lt-terminal-body" id="lt-term-body"></pre>
+        </section>
+
+        <section class="lt-chat" aria-label="Ops Agent">
+          <div class="lt-chat-head">
+            <div class="lt-chat-title-wrap">
+              <span class="lt-agent-badge" aria-hidden="true">AI</span>
+              <div>
+                <h2 class="lt-chat-title">Ops Agent</h2>
+                <p class="lt-chat-sub">Can embed live read-only Vibe views</p>
+              </div>
+            </div>
+          </div>
+          <div class="lt-chat-messages" id="lt-chat-messages" aria-live="polite">
+            <div class="lt-chat-empty" id="lt-chat-empty">
+              Pick a prompt below to inspect host telemetry with an embedded vibe.
+            </div>
+          </div>
+          <div class="lt-chat-suggestions" id="lt-chat-suggestions">
+            <button type="button" class="lt-chip" id="lt-agent-chip" data-app="agent-chip">
+              Why is db-1 slow?
+            </button>
+          </div>
+          <div class="lt-chat-input-wrap">
+            <input
+              type="text"
+              class="lt-chat-input"
+              disabled
+              placeholder="Ask the agent (scripted in this demo)"
+              aria-label="Ask the agent (scripted in this demo)"
+            >
+          </div>
+        </section>
+      </section>
+
+      <aside class="lt-pane lt-vibes-pane" id="vibe-space" aria-label="Vibe Space"></aside>
+    </main>
+
+    <nav class="lt-bottom-tabs" aria-label="Sections">
+      <button type="button" class="lt-tab-btn" data-app="tab-servers" aria-pressed="false">
+        Servers
+      </button>
+      <button type="button" class="lt-tab-btn is-active" data-app="tab-agent" aria-pressed="true">
+        Agent
+      </button>
+      <button type="button" class="lt-tab-btn" data-app="tab-vibes" aria-pressed="false">
+        Vibe Space
+      </button>
+    </nav>
+  </div>
+
+  <div class="lt-dialog-scrim" id="lt-how-scrim" hidden>
+    <div class="lt-dialog" role="dialog" aria-modal="true" aria-labelledby="lt-how-title">
+      <div class="lt-dialog-head">
+        <h2 class="lt-dialog-title" id="lt-how-title">How LeapTerm turned VibeProtocol on</h2>
+        <button type="button" class="lt-dialog-close" id="lt-how-close" aria-label="Close">Close</button>
+      </div>
+      <div class="lt-dialog-body">
+        <p class="lt-dialog-lead">LeapTerm declares what it offers. A vibe can use nothing else.</p>
+        <pre class="lt-code-block"><code id="lt-how-code"></code></pre>
+      </div>
+    </div>
+  </div>
+
+  <script src="../../kit/vibekit.js"></script>
+  <script src="../../kit/vibespace.js"></script>
+  <script src="../../vibes/focus-timer.js"></script>
+  <script src="vibes.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

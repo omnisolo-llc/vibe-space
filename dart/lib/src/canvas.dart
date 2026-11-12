@@ -272,40 +272,385 @@ bool isReadOnlyCanvasMcpTool(
   );
 }
 
+const Set<String> _kAllowedReadOnlySingleBinaries = <String>{
+  'uname',
+  'uptime',
+  'hostname',
+  'whoami',
+  'id',
+  'pwd',
+  'date',
+  'df',
+  'free',
+  'ps',
+  'ls',
+  'stat',
+  'wc',
+  'du',
+  'cat',
+  'head',
+  'tail',
+  'grep',
+  'sort',
+  'uniq',
+  'cut',
+  'lscpu',
+  'lsblk',
+  'lsof',
+  'ss',
+  'netstat',
+  'vmstat',
+  'iostat',
+  'mpstat',
+  'sar',
+  'nproc',
+  'arch',
+  'lsmod',
+  'lspci',
+  'lsusb',
+  'dmesg',
+  'last',
+  'w',
+  'who',
+  'groups',
+};
+
+final RegExp _kShellMetacharRegex = RegExp(r'[;&$`><()\\\n\r\x00]');
+final RegExp _kSensitivePathRegex = RegExp(
+  r'(?:^|[\s/\x27"=:])(?:'
+  r'\.ssh|\.aws|\.gnupg|\.kube|\.docker|\.netrc|\.npmrc|\.pypirc|'
+  r'\.git-credentials|\.env(?:\.[a-z0-9_-]+)?|'
+  r'id_rsa(?:\.pub)?|id_ed25519(?:\.pub)?|id_ecdsa(?:\.pub)?|id_dsa(?:\.pub)?|'
+  r'authorized_keys|known_hosts|shadow|gshadow|sudoers(?:\.d)?|master\.passwd|'
+  r'environ|\.[a-z0-9_-]*_history|\.pgpass|\.my\.cnf|\.vault-token|'
+  r'\.config/gh|\.config/gcloud|\.azure|\.terraform\.d|credentials(?:\.json)?'
+  r')(?:$|[\s/\x27"])',
+  caseSensitive: false,
+);
+
 /// Validates that [command] is strictly read-only and safe to execute via MCP
-/// from a live Vibe Canvas component.
+/// from a live Vibe Canvas component using an explicit binary and flag allowlist.
 bool isReadOnlyCanvasShellCommand(String command) {
   final trimmed = command.trim();
   if (trimmed.isEmpty || trimmed.length > 2000) return false;
 
-  // Reject output redirection, subshell mutation, or backgrounding
-  if (RegExp(r'(?:^|[^0-9])>>?|<\(|`\s*rm\b|\$\(\s*rm\b').hasMatch(trimmed)) {
+  // Reject shell metacharacters, command chaining, subshells, redirection,
+  // escaping, newlines, and NUL bytes.
+  if (_kShellMetacharRegex.hasMatch(trimmed)) {
     return false;
   }
 
-  // Reject mutating/destructive binaries or subcommands
-  final forbiddenPattern = RegExp(
-    r'(?:^|[;&|\s])('
-    r'rm|mv|cp|dd|mkfs|fdisk|parted|mount|umount|chmod|chown|chgrp|'
-    r'kill|pkill|killall|reboot|shutdown|poweroff|halt|init|'
-    r'sudo|su|useradd|usermod|userdel|groupadd|passwd|visudo|'
-    r'apt|apt-get|dpkg|yum|dnf|apk|pacman|snap|flatpak|brew|'
-    r'pip|pip3|npm|pnpm|yarn|cargo|'
-    r'tee|truncate|shred|unlink|mkdir|rmdir|touch|ln|'
-    r'iptables|ip6tables|ufw|nft|firewall-cmd|'
-    r'crontab|at|nc|netcat|socat|curl\s+-[^\n]*?(?:-X|--request|-d|--data|--upload-file)|'
-    r'wget\s+|--post-data|--post-file|'
-    r'systemctl\s+(?:start|stop|restart|reload|enable|disable|mask|unmask|daemon-reload|kill|reset-failed)|'
-    r'service\s+\S+\s+(?:start|stop|restart|reload)|'
-    r'docker\s+(?:run|exec|rm|rmi|stop|start|restart|kill|build|pull|push|compose)|'
-    r'git\s+(?:push|commit|reset|clean|checkout|merge|rebase|cherry-pick|tag|branch\s+-[dD])'
-    r')(?:\s|$)',
-    caseSensitive: false,
-  );
-  if (forbiddenPattern.hasMatch(trimmed)) {
+  // Reject access to sensitive credential, key, or auth files/directories.
+  if (_kSensitivePathRegex.hasMatch(trimmed)) {
     return false;
   }
+
+  final segments = trimmed.split('|');
+  for (var segIndex = 0; segIndex < segments.length; segIndex++) {
+    final segTrimmed = segments[segIndex].trim();
+    if (segTrimmed.isEmpty) return false;
+
+    final tokens = segTrimmed.split(RegExp(r'\s+'));
+    var tokenOffset = 0;
+    if (tokens[0] == 'LC_ALL=C' || tokens[0] == 'LANG=C') {
+      tokenOffset = 1;
+    }
+    if (tokenOffset >= tokens.length) return false;
+
+    final binary = tokens[tokenOffset].toLowerCase();
+    final args = tokens.sublist(tokenOffset + 1);
+    if (!_isAllowedReadOnlySegment(binary, args)) {
+      return false;
+    }
+  }
   return true;
+}
+
+bool _hasShortFlag(String arg, Set<String> forbiddenChars) {
+  if (!arg.startsWith('-') || arg.startsWith('--') || arg.length < 2) {
+    return false;
+  }
+  for (var i = 1; i < arg.length; i++) {
+    if (forbiddenChars.contains(arg[i])) {
+      return true;
+    }
+  }
+  return false;
+}
+
+String _longOptionLower(String arg) =>
+    arg.startsWith('--') ? arg.toLowerCase() : arg;
+
+bool _isAllowedReadOnlySegment(String binary, List<String> args) {
+  for (final arg in args) {
+    final lower = _longOptionLower(arg);
+    if (lower == '--command' ||
+        lower.startsWith('--command=') ||
+        arg.startsWith('-exec') ||
+        lower == '--exec' ||
+        lower.startsWith('--exec=') ||
+        lower.startsWith('--upload-pack') ||
+        lower.startsWith('--receive-pack') ||
+        lower.startsWith('--to-program') ||
+        lower.startsWith('--compress-program')) {
+      return false;
+    }
+  }
+
+  if (_kAllowedReadOnlySingleBinaries.contains(binary)) {
+    return _hasSafeSingleBinaryFlags(binary, args);
+  }
+
+  final subcommand = args.isNotEmpty ? args.first.toLowerCase() : '';
+  switch (binary) {
+    case 'git':
+      const allowedGitSubcommands = <String>{
+        'status',
+        'log',
+        'diff',
+        'branch',
+        'rev-parse',
+        'show',
+        'tag',
+      };
+      if (!allowedGitSubcommands.contains(subcommand)) return false;
+      for (final arg in args.skip(1)) {
+        final longLower = _longOptionLower(arg);
+        if (_hasShortFlag(arg, const <String>{'c', 'o'}) ||
+            arg.startsWith('-c=') ||
+            longLower.startsWith('--output')) {
+          return false;
+        }
+      }
+      if (subcommand == 'branch') {
+        const allowedBranchFlags = <String>{
+          '-a',
+          '--all',
+          '-r',
+          '--remotes',
+          '-v',
+          '-vv',
+          '--verbose',
+          '--list',
+          '--show-current',
+          '--no-color',
+        };
+        for (final arg in args.skip(1)) {
+          if (!allowedBranchFlags.contains(arg)) return false;
+        }
+      }
+      return true;
+    case 'systemctl':
+      return const <String>{
+        'status',
+        'is-active',
+        'is-enabled',
+        'is-failed',
+        'list-units',
+        'list-unit-files',
+        'list-timers',
+        'show',
+      }.contains(subcommand);
+    case 'journalctl':
+      for (final arg in args) {
+        final longLower = _longOptionLower(arg);
+        if (longLower.startsWith('--flush') ||
+            longLower.startsWith('--rotate') ||
+            longLower.startsWith('--vacuum') ||
+            longLower.startsWith('--sync') ||
+            longLower.startsWith('--setup-keys')) {
+          return false;
+        }
+      }
+      return true;
+    case 'docker':
+      return const <String>{
+        'ps',
+        'stats',
+        'images',
+        'info',
+        'version',
+        'logs',
+        'top',
+      }.contains(subcommand);
+    case 'kubectl':
+      if (!const <String>{
+        'get',
+        'describe',
+        'top',
+        'version',
+        'cluster-info',
+        'logs',
+        'api-resources',
+        'explain',
+      }.contains(subcommand)) {
+        return false;
+      }
+      if (subcommand == 'get' || subcommand == 'describe') {
+        for (final arg in args.skip(1)) {
+          final parts = arg.toLowerCase().split(RegExp(r'[,/]'));
+          if (parts.contains('secret') || parts.contains('secrets')) {
+            return false;
+          }
+        }
+      }
+      return true;
+    case 'ip':
+      if (!const <String>{
+        'addr',
+        'address',
+        'a',
+        'route',
+        'r',
+        'link',
+        'l',
+        'neigh',
+        'n',
+        '-s',
+        '-br',
+        '-4',
+        '-6',
+      }.contains(subcommand)) {
+        return false;
+      }
+      for (final arg in args) {
+        if (const <String>{
+          'add',
+          'del',
+          'delete',
+          'set',
+          'flush',
+          'change',
+          'replace',
+        }.contains(arg.toLowerCase())) {
+          return false;
+        }
+      }
+      return true;
+    case 'ifconfig':
+      for (final arg in args) {
+        if (const <String>{
+          'up',
+          'down',
+          'add',
+          'del',
+          'mtu',
+          'netmask',
+          'hw',
+          'promisc',
+        }.contains(arg.toLowerCase())) {
+          return false;
+        }
+      }
+      return true;
+    default:
+      return false;
+  }
+}
+
+bool _hasSafeSingleBinaryFlags(String binary, List<String> args) {
+  switch (binary) {
+    case 'hostname':
+      const allowedHostnameFlags = <String>{
+        '-f',
+        '--fqdn',
+        '-s',
+        '--short',
+        '-i',
+        '--ip-address',
+        '-I',
+        '--all-ip-addresses',
+      };
+      return args.every(allowedHostnameFlags.contains);
+    case 'date':
+      for (final arg in args) {
+        final longLower = _longOptionLower(arg);
+        if (_hasShortFlag(arg, const <String>{'s', 'f'}) ||
+            longLower.startsWith('--set') ||
+            longLower.startsWith('--file')) {
+          return false;
+        }
+      }
+      return true;
+    case 'sort':
+      for (final arg in args) {
+        final longLower = _longOptionLower(arg);
+        if (_hasShortFlag(arg, const <String>{'o', 'T'}) ||
+            longLower.startsWith('--output') ||
+            longLower.startsWith('--files0-from') ||
+            longLower.startsWith('--temporary-directory')) {
+          return false;
+        }
+      }
+      return true;
+    case 'uniq':
+      var positionalCount = 0;
+      for (final arg in args) {
+        if (!arg.startsWith('-') || arg == '-') {
+          positionalCount++;
+          if (positionalCount > 1) return false;
+        }
+      }
+      return true;
+    case 'wc':
+    case 'cut':
+      for (final arg in args) {
+        final longLower = _longOptionLower(arg);
+        if (arg == '-o' || longLower.startsWith('--output')) {
+          if (binary == 'cut' && longLower.startsWith('--output-delimiter')) {
+            continue;
+          }
+          return false;
+        }
+      }
+      return true;
+    case 'ps':
+      return true;
+    case 'tail':
+      for (final arg in args) {
+        final longLower = _longOptionLower(arg);
+        if (_hasShortFlag(arg, const <String>{'f', 'F', 'o'}) ||
+            longLower.startsWith('--follow') ||
+            longLower.startsWith('--output')) {
+          return false;
+        }
+      }
+      return true;
+    case 'grep':
+      for (final arg in args) {
+        final longLower = _longOptionLower(arg);
+        if (_hasShortFlag(arg, const <String>{'f'}) ||
+            longLower.startsWith('--file') ||
+            longLower.startsWith('--exclude-from')) {
+          return false;
+        }
+      }
+      return true;
+    case 'dmesg':
+      for (final arg in args) {
+        final longLower = _longOptionLower(arg);
+        if (_hasShortFlag(arg, const <String>{'c', 'C', 'D', 'E', 'n', 'F'}) ||
+            longLower == '--clear' ||
+            longLower == '--read-clear' ||
+            longLower == '--console-off' ||
+            longLower == '--console-on' ||
+            longLower.startsWith('--console-level') ||
+            longLower.startsWith('--file')) {
+          return false;
+        }
+      }
+      return true;
+    default:
+      for (final arg in args) {
+        final longLower = _longOptionLower(arg);
+        if (arg == '-c' ||
+            arg == '-o' ||
+            longLower.startsWith('--output')) {
+          return false;
+        }
+      }
+      return true;
+  }
 }
 
 /// JSON Schema for the `vibe.canvas` v1 host API input.

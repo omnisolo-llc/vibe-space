@@ -2,6 +2,60 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 
+const Set<String> _validTones = <String>{'default', 'ok', 'warn', 'danger'};
+final RegExp _hexColorRe = RegExp(r'^#[0-9a-fA-F]{6}$');
+
+bool _isSealedHandleMap(Object? raw) {
+  if (raw is! Map || raw.length != 1) return false;
+  final sealed = raw['sealed'];
+  return sealed is String && sealed.isNotEmpty && sealed.length <= 128;
+}
+
+/// Inherited tone palette scope so [VibeSpacePanel] and [VibeEmbedCard]
+/// theme nested [VibeView] nodes consistently.
+class VibeViewToneScope extends InheritedWidget {
+  const VibeViewToneScope({
+    super.key,
+    required this.accent,
+    required this.ok,
+    required this.warn,
+    required this.danger,
+    required this.border,
+    required this.surface,
+    required this.text,
+    required this.mutedText,
+    required this.radius,
+    required super.child,
+  });
+
+  final Color accent;
+  final Color ok;
+  final Color warn;
+  final Color danger;
+  final Color border;
+  final Color surface;
+  final Color text;
+  final Color mutedText;
+  final double radius;
+
+  static VibeViewToneScope? maybeOf(BuildContext context) {
+    return context.dependOnInheritedWidgetOfExactType<VibeViewToneScope>();
+  }
+
+  @override
+  bool updateShouldNotify(VibeViewToneScope oldWidget) {
+    return accent != oldWidget.accent ||
+        ok != oldWidget.ok ||
+        warn != oldWidget.warn ||
+        danger != oldWidget.danger ||
+        border != oldWidget.border ||
+        surface != oldWidget.surface ||
+        text != oldWidget.text ||
+        mutedText != oldWidget.mutedText ||
+        radius != oldWidget.radius;
+  }
+}
+
 /// Only declarative widgets cross the extension boundary; no downloaded Flutter widget code runs.
 void validateVibeView(Map<String, dynamic> view) {
   var count = 0;
@@ -17,15 +71,69 @@ void validateVibeView(Map<String, dynamic> view) {
       }
     }
 
+    void textOrSealed(
+      String name, {
+      int maximum = 64000,
+      bool allowNull = false,
+      bool allowNum = false,
+    }) {
+      final value = node[name];
+      if (allowNull && value == null) return;
+      if (_isSealedHandleMap(value)) return;
+      if (allowNum && value is num && value.isFinite) return;
+      if (value is String && value.length <= maximum) return;
+      throw FormatException('Invalid extension $name');
+    }
+
+    void validateTone() {
+      final tone = node['tone'];
+      if (tone != null && (tone is! String || !_validTones.contains(tone))) {
+        throw const FormatException('Invalid extension tone');
+      }
+    }
+
     switch (node['type']) {
       case 'heading':
       case 'badge':
       case 'text':
-        text('text');
-        for (final key in ['bold', 'italic', 'code']) {
-          if (node[key] != null && node[key] is! bool)
+        textOrSealed('text');
+        for (final key in ['bold', 'italic', 'code', 'strong', 'mono']) {
+          if (node[key] != null && node[key] is! bool) {
             throw const FormatException('Invalid text style');
+          }
         }
+        validateTone();
+      case 'stat':
+        textOrSealed('label', maximum: 256);
+        textOrSealed('value', maximum: 256, allowNum: true);
+        validateTone();
+      case 'bar':
+        textOrSealed('label', maximum: 256);
+        final barVal = node['value'];
+        if (barVal is! num || !barVal.isFinite || barVal < 0) {
+          throw const FormatException('Invalid extension bar value');
+        }
+        final barMax = node['max'];
+        if (barMax != null && (barMax is! num || !barMax.isFinite || barMax <= 0)) {
+          throw const FormatException('Invalid extension bar max');
+        }
+        textOrSealed('caption', maximum: 256, allowNull: true, allowNum: true);
+        final swatch = node['swatch'];
+        if (swatch != null && (swatch is! String || !_hexColorRe.hasMatch(swatch))) {
+          throw const FormatException('Invalid extension bar swatch');
+        }
+        validateTone();
+      case 'sparkline':
+        final values = node['values'];
+        if (values is! List || values.length < 2 || values.length > 240) {
+          throw const FormatException('Invalid extension sparkline values');
+        }
+        for (final v in values) {
+          if (v is! num || !v.isFinite) {
+            throw const FormatException('Invalid extension sparkline point');
+          }
+        }
+        validateTone();
       case 'input':
         text('id', maximum: 64);
         text('label', maximum: 256);
@@ -39,11 +147,20 @@ void validateVibeView(Map<String, dynamic> view) {
           }
         }
       case 'action':
-        text('title', maximum: 256);
+      case 'button':
+        if (node['title'] != null) {
+          textOrSealed('title', maximum: 256);
+        } else {
+          textOrSealed('text', maximum: 256);
+        }
         text('command', maximum: 128);
         if (node['arguments'] != null && node['arguments'] is! Map) {
           throw const FormatException('Invalid action arguments');
         }
+        if (node['args'] != null && node['args'] is! Map) {
+          throw const FormatException('Invalid action args');
+        }
+        validateTone();
       case 'checkbox':
         text('id', maximum: 64);
         text('label', maximum: 256);
@@ -118,6 +235,7 @@ void validateVibeView(Map<String, dynamic> view) {
           throw const FormatException('Invalid extension table headers');
         }
         for (final h in headers) {
+          if (_isSealedHandleMap(h)) continue;
           if (h is! String || h.length > 256) {
             throw const FormatException('Invalid extension table header');
           }
@@ -130,6 +248,7 @@ void validateVibeView(Map<String, dynamic> view) {
             throw const FormatException('Invalid extension table row');
           }
           for (final cell in row) {
+            if (_isSealedHandleMap(cell)) continue;
             if (cell is! String &&
                 cell is! num &&
                 cell is! bool &&
@@ -154,31 +273,307 @@ class VibeView extends StatelessWidget {
     this.onInput,
     this.depth = 0,
     this.autoSubmitTimeoutSeconds,
+    this.resolveSealed,
   });
   final Map<String, dynamic> value;
   final void Function(String, Map<String, dynamic>) onCommand;
   final void Function(String, String)? onInput;
   final int depth;
   final int? autoSubmitTimeoutSeconds;
+  final String? Function(Object? handle)? resolveSealed;
+
+  Color _accentColor(BuildContext context) {
+    final scope = VibeViewToneScope.maybeOf(context);
+    return scope?.accent ?? Theme.of(context).colorScheme.primary;
+  }
+
+  Color _mutedColor(BuildContext context) {
+    final scope = VibeViewToneScope.maybeOf(context);
+    if (scope != null) return scope.mutedText;
+    return Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.72) ??
+        Colors.grey;
+  }
+
+  Color? _toneColor(BuildContext context, Object? toneRaw) {
+    final tone = toneRaw is String ? toneRaw : null;
+    if (tone == null || tone == 'default') return null;
+    final scope = VibeViewToneScope.maybeOf(context);
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    switch (tone) {
+      case 'ok':
+        return scope?.ok ??
+            (isDark ? const Color(0xFF4ADE80) : const Color(0xFF16A34A));
+      case 'warn':
+        return scope?.warn ??
+            (isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706));
+      case 'danger':
+        return scope?.danger ??
+            (isDark ? const Color(0xFFF87171) : const Color(0xFFDC2626));
+      default:
+        return null;
+    }
+  }
+
+  Color _borderColor(BuildContext context) {
+    final scope = VibeViewToneScope.maybeOf(context);
+    if (scope != null) return scope.border;
+    return Theme.of(context).dividerColor.withValues(alpha: 0.35);
+  }
+
+  Color _surfaceColor(BuildContext context) {
+    final scope = VibeViewToneScope.maybeOf(context);
+    if (scope != null) return scope.surface;
+    return Theme.of(context).colorScheme.surface;
+  }
+
+  double _radius(BuildContext context) {
+    return VibeViewToneScope.maybeOf(context)?.radius ?? 10;
+  }
+
+  String _resolvePlainString(Object? raw) {
+    if (_isSealedHandleMap(raw)) {
+      final resolved = resolveSealed?.call(raw);
+      return (resolved != null && resolved.isNotEmpty) ? resolved : '';
+    }
+    if (raw == null) return '';
+    final str = raw.toString();
+    return str.length > 64000 ? str.substring(0, 64000) : str;
+  }
+
+  Widget _buildValueWidget(
+    BuildContext context,
+    Object? raw, {
+    TextStyle? style,
+    bool selectable = false,
+    bool ellipsis = false,
+  }) {
+    if (_isSealedHandleMap(raw)) {
+      final resolved = resolveSealed?.call(raw);
+      if (resolved == null || resolved.isEmpty) {
+        return const SizedBox.shrink();
+      }
+      final accent = _accentColor(context);
+      final sealedStyle = (style ?? const TextStyle()).copyWith(
+        decoration: TextDecoration.underline,
+        decorationStyle: TextDecorationStyle.dotted,
+        decorationColor: accent.withValues(alpha: 0.8),
+        decorationThickness: 1.5,
+      );
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          Icon(Icons.lock_outline, size: 13, color: accent),
+          const SizedBox(width: 4),
+          Flexible(
+            child: Text(
+              resolved,
+              style: sealedStyle,
+              maxLines: ellipsis ? 1 : null,
+              overflow: ellipsis ? TextOverflow.ellipsis : TextOverflow.visible,
+            ),
+          ),
+        ],
+      );
+    }
+
+    final text = _resolvePlainString(raw);
+    if (selectable) {
+      return SelectableText(text, style: style);
+    }
+    return Text(
+      text,
+      style: style,
+      maxLines: ellipsis ? 1 : null,
+      overflow: ellipsis ? TextOverflow.ellipsis : TextOverflow.visible,
+    );
+  }
+
+  Color? _parseHexColor(Object? raw) {
+    if (raw is! String || !_hexColorRe.hasMatch(raw)) return null;
+    final hex = raw.substring(1);
+    final rgb = int.tryParse(hex, radix: 16);
+    if (rgb == null) return null;
+    return Color(0xFF000000 | rgb);
+  }
+
   @override
   Widget build(BuildContext context) {
     if (depth > 16) throw const FormatException('Extension view is too deep');
     switch (value['type']) {
       case 'heading':
-      case 'badge':
-      case 'text':
-        return SelectableText(
-          (value['text'] as String? ?? '').substring(
-            0,
-            (value['text'] as String? ?? '').length.clamp(0, 64000),
-          ),
+        return _buildValueWidget(
+          context,
+          value['text'],
+          selectable: !_isSealedHandleMap(value['text']),
           style: TextStyle(
-            fontSize: value['type'] == 'heading' ? 22 : null,
-            fontWeight: value['bold'] == true || value['type'] == 'heading'
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+            color: _toneColor(context, value['tone']),
+          ),
+        );
+      case 'text':
+        return _buildValueWidget(
+          context,
+          value['text'],
+          selectable: !_isSealedHandleMap(value['text']),
+          style: TextStyle(
+            fontWeight: (value['bold'] == true || value['strong'] == true)
                 ? FontWeight.bold
                 : null,
             fontStyle: value['italic'] == true ? FontStyle.italic : null,
-            fontFamily: value['code'] == true ? 'monospace' : null,
+            fontFamily: (value['code'] == true || value['mono'] == true)
+                ? 'monospace'
+                : null,
+            color: _toneColor(context, value['tone']),
+          ),
+        );
+      case 'badge':
+        final badgeColor =
+            _toneColor(context, value['tone']) ?? _accentColor(context);
+        return Align(
+          alignment: Alignment.centerLeft,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+            decoration: BoxDecoration(
+              color: badgeColor.withValues(alpha: 0.14),
+              borderRadius: BorderRadius.circular(999),
+              border: Border.all(color: badgeColor.withValues(alpha: 0.45)),
+            ),
+            child: _buildValueWidget(
+              context,
+              value['text'],
+              style: TextStyle(
+                fontSize: 11.5,
+                fontWeight: FontWeight.w600,
+                color: badgeColor,
+              ),
+            ),
+          ),
+        );
+      case 'stat':
+        final statTone = _toneColor(context, value['tone']);
+        final border = _borderColor(context);
+        final surface = _surfaceColor(context);
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: BorderRadius.circular((_radius(context) - 2).clamp(4, 16)),
+            border: Border.all(color: border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              _buildValueWidget(
+                context,
+                value['value'],
+                style: TextStyle(
+                  fontSize: 20,
+                  fontWeight: FontWeight.w700,
+                  fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+                  color: statTone,
+                ),
+              ),
+              const SizedBox(height: 2),
+              _buildValueWidget(
+                context,
+                value['label'],
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: _mutedColor(context),
+                ),
+              ),
+            ],
+          ),
+        );
+      case 'bar':
+        final rawVal = (value['value'] as num?)?.toDouble() ?? 0;
+        final rawMax = (value['max'] as num?)?.toDouble() ?? 1;
+        final safeMax = rawMax > 0 ? rawMax : 1.0;
+        final ratio = (rawVal / safeMax).clamp(0.0, 1.0);
+        final fillColor =
+            _toneColor(context, value['tone']) ?? _accentColor(context);
+        final swatchColor = _parseHexColor(value['swatch']);
+        final trackColor = _borderColor(context).withValues(alpha: 0.65);
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                if (swatchColor != null) ...<Widget>[
+                  Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: swatchColor,
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                  const SizedBox(width: 6),
+                ],
+                Expanded(
+                  child: _buildValueWidget(
+                    context,
+                    value['label'],
+                    ellipsis: true,
+                    style: const TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                if (value['caption'] != null) ...<Widget>[
+                  const SizedBox(width: 8),
+                  _buildValueWidget(
+                    context,
+                    value['caption'],
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      color: _mutedColor(context),
+                      fontFeatures: const <FontFeature>[
+                        FontFeature.tabularFigures(),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+            const SizedBox(height: 5),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(999),
+              child: Container(
+                height: 8,
+                color: trackColor,
+                alignment: Alignment.centerLeft,
+                child: FractionallySizedBox(
+                  widthFactor: ratio,
+                  heightFactor: 1,
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: fillColor,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        );
+      case 'sparkline':
+        final rawPoints = (value['values'] as List?) ?? const <Object?>[];
+        final points = <double>[
+          for (final p in rawPoints)
+            if (p is num && p.isFinite) p.toDouble(),
+        ];
+        final strokeColor =
+            _toneColor(context, value['tone']) ?? _accentColor(context);
+        return SizedBox(
+          height: 28,
+          width: double.infinity,
+          child: CustomPaint(
+            painter: _SparklinePainter(points: points, color: strokeColor),
           ),
         );
       case 'row':
@@ -193,19 +588,27 @@ class VibeView extends StatelessWidget {
               onInput: onInput,
               depth: depth + 1,
               autoSubmitTimeoutSeconds: autoSubmitTimeoutSeconds,
+              resolveSealed: resolveSealed,
             ),
         ];
-        if (value['type'] == 'row')
-          return Wrap(spacing: 12, runSpacing: 8, children: widgets);
+        if (value['type'] == 'row') {
+          return Wrap(spacing: 10, runSpacing: 8, children: widgets);
+        }
         final column = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
-          children: widgets,
+          children: <Widget>[
+            for (var i = 0; i < widgets.length; i++) ...<Widget>[
+              if (i > 0) const SizedBox(height: 8),
+              widgets[i],
+            ],
+          ],
         );
-        if (value['type'] == 'card')
+        if (value['type'] == 'card') {
           return Card(
-            child: Padding(padding: const EdgeInsets.all(16), child: column),
+            child: Padding(padding: const EdgeInsets.all(14), child: column),
           );
+        }
         return column;
       case 'divider':
         return const Divider();
@@ -214,31 +617,44 @@ class VibeView extends StatelessWidget {
           value: (value['value'] as num).toDouble(),
         );
       case 'action':
+      case 'button':
         final cmd = value['command'] as String;
-        final title = value['title'] as String;
-        final args = Map<String, dynamic>.from(value['arguments'] as Map? ?? {});
-        if (cmd == 'approval.approve') {
-          return FilledButton.tonalIcon(
-            onPressed: () => onCommand(cmd, args),
-            icon: const Icon(Icons.check, size: 16),
-            label: Text(title),
-          );
+        final rawTitle = value['title'] ?? value['text'];
+        final title = _resolvePlainString(rawTitle);
+        final rawArgs = value['arguments'] ?? value['args'];
+        final args = Map<String, dynamic>.from(rawArgs as Map? ?? {});
+        if (value['type'] == 'action') {
+          if (cmd == 'approval.approve') {
+            return FilledButton.tonalIcon(
+              onPressed: () => onCommand(cmd, args),
+              icon: const Icon(Icons.check, size: 16),
+              label: Text(title),
+            );
+          }
+          if (cmd == 'approval.yolo') {
+            return OutlinedButton.icon(
+              onPressed: () => onCommand(cmd, args),
+              icon: const Icon(Icons.bolt, size: 16),
+              label: Text(title),
+            );
+          }
+          if (cmd == 'approval.deny') {
+            return OutlinedButton.icon(
+              onPressed: () => onCommand(cmd, args),
+              icon: const Icon(Icons.close, size: 16),
+              label: Text(title),
+            );
+          }
         }
-        if (cmd == 'approval.yolo') {
-          return OutlinedButton.icon(
-            onPressed: () => onCommand(cmd, args),
-            icon: const Icon(Icons.bolt, size: 16),
-            label: Text(title),
-          );
-        }
-        if (cmd == 'approval.deny') {
-          return OutlinedButton.icon(
-            onPressed: () => onCommand(cmd, args),
-            icon: const Icon(Icons.close, size: 16),
-            label: Text(title),
-          );
-        }
+        final btnTone = _toneColor(context, value['tone']);
         return OutlinedButton(
+          style: btnTone != null
+              ? OutlinedButton.styleFrom(
+                  foregroundColor: btnTone,
+                  side: BorderSide(color: btnTone.withValues(alpha: 0.55)),
+                  backgroundColor: btnTone.withValues(alpha: 0.08),
+                )
+              : null,
           onPressed: () => onCommand(cmd, args),
           child: Text(title),
         );
@@ -282,7 +698,6 @@ class VibeView extends StatelessWidget {
       case 'table':
         final headers = (value['headers'] as List)
             .take(32)
-            .map((h) => h.toString())
             .toList(growable: false);
         final rows = (value['rows'] as List).take(200);
         return SingleChildScrollView(
@@ -296,7 +711,8 @@ class VibeView extends StatelessWidget {
             columns: <DataColumn>[
               for (final h in headers)
                 DataColumn(
-                  label: Text(
+                  label: _buildValueWidget(
+                    context,
                     h,
                     style: const TextStyle(fontWeight: FontWeight.w700),
                   ),
@@ -309,9 +725,13 @@ class VibeView extends StatelessWidget {
                     cells: <DataCell>[
                       for (var i = 0; i < headers.length; i++)
                         DataCell(
-                          SelectableText(
-                            i < row.length ? (row[i]?.toString() ?? '') : '',
-                          ),
+                          i < row.length
+                              ? _buildValueWidget(
+                                  context,
+                                  row[i],
+                                  selectable: !_isSealedHandleMap(row[i]),
+                                )
+                              : const Text(''),
                         ),
                     ],
                   ),
@@ -321,6 +741,54 @@ class VibeView extends StatelessWidget {
       default:
         return const SizedBox.shrink();
     }
+  }
+}
+
+class _SparklinePainter extends CustomPainter {
+  const _SparklinePainter({required this.points, required this.color});
+
+  final List<double> points;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    if (points.length < 2 || size.width <= 0 || size.height <= 0) return;
+    var minVal = points[0];
+    var maxVal = points[0];
+    for (var i = 1; i < points.length; i++) {
+      if (points[i] < minVal) minVal = points[i];
+      if (points[i] > maxVal) maxVal = points[i];
+    }
+    final span = maxVal - minVal;
+    final path = Path();
+    for (var i = 0; i < points.length; i++) {
+      final x = (i / (points.length - 1)) * size.width;
+      final normalized = span == 0 ? 0.5 : (points[i] - minVal) / span;
+      final y = size.height - 3 - normalized * (size.height - 6);
+      if (i == 0) {
+        path.moveTo(x, y);
+      } else {
+        path.lineTo(x, y);
+      }
+    }
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.8
+      ..strokeCap = StrokeCap.round
+      ..strokeJoin = StrokeJoin.round;
+    canvas.drawPath(path, paint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SparklinePainter oldDelegate) {
+    if (color != oldDelegate.color || points.length != oldDelegate.points.length) {
+      return true;
+    }
+    for (var i = 0; i < points.length; i++) {
+      if (points[i] != oldDelegate.points[i]) return true;
+    }
+    return false;
   }
 }
 
