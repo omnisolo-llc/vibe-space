@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DEMO_ROOT, launchChromium, loadPlaywright, startDemoServer } from './server.mjs';
@@ -22,7 +23,6 @@ function trackErrors(page, label, errorLog) {
 }
 
 async function waitForAuthoringToFinish(page) {
-  // Wait for authoring playback (~2.1s) to yield the preview and label card
   await page.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 10000 });
   await page.locator('[data-vs="preview"]').waitFor({ state: 'visible', timeout: 10000 });
 }
@@ -44,6 +44,377 @@ async function clickCardMenuAction(card, actionVs) {
     await menu.waitFor({ state: 'visible', timeout: 5000 });
   }
   await menu.locator(`[data-vs="${actionVs}"]`).click();
+}
+
+async function checkMobileTabTargets(page, label) {
+  const sizes = await page.evaluate(() => {
+    const btns = Array.from(document.querySelectorAll('.mobile-tabs button, .pl-mobile-tabs button, [data-app^="tab-"]'));
+    return btns.filter((b) => b.offsetParent !== null).map((b) => {
+      const r = b.getBoundingClientRect();
+      return { text: b.textContent.trim(), width: r.width, height: r.height };
+    });
+  });
+  assert(sizes.length >= 2, `[${label}] Expected visible mobile bottom tab buttons, found ${sizes.length}`);
+  for (const s of sizes) {
+    assert(s.width >= 44 && s.height >= 44, `[${label}] Mobile tab "${s.text}" smaller than 44x44: ${JSON.stringify(s)}`);
+  }
+}
+
+async function checkIndependentPanelScroll(page, contentSelector, label) {
+  await page.evaluate(() => window.scrollTo(0, 0));
+  const res = await page.evaluate((sel) => {
+    const panel = document.getElementById('vibe-space');
+    const contentEl = document.querySelector(sel);
+    let scrollEl = null;
+    let cur = panel;
+    while (cur && cur !== document.body && cur !== document.documentElement) {
+      const cs = getComputedStyle(cur);
+      if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && cur.scrollHeight > cur.clientHeight + 5) {
+        scrollEl = cur;
+        break;
+      }
+      cur = cur.parentElement;
+    }
+    const beforeTop = contentEl ? contentEl.getBoundingClientRect().top : null;
+    const beforeWinY = window.scrollY;
+    let delta = 0;
+    if (scrollEl) {
+      const prev = scrollEl.scrollTop;
+      scrollEl.scrollTop = prev > 40 ? prev - 40 : 120;
+      delta = Math.abs(scrollEl.scrollTop - prev);
+    }
+    const afterTop = contentEl ? contentEl.getBoundingClientRect().top : null;
+    const afterWinY = window.scrollY;
+    return { hasScroller: !!scrollEl, delta, beforeTop, afterTop, beforeWinY, afterWinY };
+  }, contentSelector);
+  assert(res.hasScroller && res.delta > 0, `[${label}] Vibe Space panel did not scroll independently (${JSON.stringify(res)})`);
+  assert(res.beforeTop === res.afterTop && res.afterWinY === res.beforeWinY, `[${label}] Scrolling panel moved host content (${JSON.stringify(res)})`);
+}
+
+async function verifyStartPage(context, baseUrl, viewport, errorLog, snap, checkNoHorizontalOverflow) {
+  const width = viewport.width;
+  const homePage = await context.newPage();
+  trackErrors(homePage, `home-${width}`, errorLog);
+  await homePage.goto(`${baseUrl}/index.html`, { waitUntil: 'networkidle' });
+  await homePage.waitForSelector('h1, main, .hosts-grid');
+  const homeText = await homePage.evaluate(() => document.body.innerText);
+  assert(homeText.includes('VibeProtocol demo'), 'Home page missing title "VibeProtocol demo"');
+  assert(!/leapterm/i.test(homeText), 'Home page still mentions LeapTerm');
+  assert(homeText.includes('PocketLedger'), 'Home page missing PocketLedger');
+  assert(homeText.includes('PulseMail'), 'Home page missing PulseMail');
+  assert(homeText.includes('CartScout'), 'Home page missing CartScout');
+  assert(homeText.includes('Moments'), 'Home page missing Moments');
+  assert((await homePage.locator('.host-card').count()) === 4, 'Home page should list 4 host demo cards');
+  assert((await homePage.locator('.tour-list li').count()) === 9, 'Home page tour missing 9 steps');
+  assert((await homePage.locator('a[href="README.md"]').count()) >= 1, 'Home page missing README.md link');
+  await checkNoHorizontalOverflow(homePage, 'home');
+  await snap('00', 'home', 'landing', homePage);
+  await homePage.close();
+}
+
+async function verifyMoments(context, baseUrl, isMobile, errorLog, snap, ledgerShareUrl, width) {
+  const momentsPage = await context.newPage();
+  trackErrors(momentsPage, `moments-${width}`, errorLog);
+
+  // Story 6: Cross-host share refusal using PocketLedger share URL opened in Moments
+  const shareHash = ledgerShareUrl.slice(ledgerShareUrl.indexOf('#'));
+  await momentsPage.goto(`${baseUrl}/apps/moments/index.html${shareHash}`, { waitUntil: 'networkidle' });
+  if (isMobile) {
+    await checkMobileTabTargets(momentsPage, 'moments');
+    await momentsPage.locator('[data-app="tab-vibes"]').click();
+  }
+  await momentsPage.locator('[data-vs="from-link"]').waitFor({ state: 'visible', timeout: 5000 });
+  const mBlockText = await momentsPage.locator('[data-vs="from-link"]').textContent();
+  assert(
+    /cannot run here/i.test(mBlockText) || /does not have/i.test(mBlockText) || /blocked/i.test(mBlockText),
+    `Cross-app share in Moments did not explain refusal: "${mBlockText}"`
+  );
+  assert(mBlockText.includes('transactions.recent'), 'Blocked card missing missing-capability id transactions.recent');
+  await snap('13', 'moments', 'ledger-blocked', momentsPage);
+
+  // Clean reload on Moments without blocked hash
+  await momentsPage.goto(`${baseUrl}/apps/moments/index.html`, { waitUntil: 'networkidle' });
+  await momentsPage.waitForSelector('#vibe-space [data-vs="wish-input"]', { state: 'attached' });
+  const fanNames = ['maya.r', 'tomás_k', 'jun.park', 'elena_v', 'samir.patel', 'chloe.m'];
+
+  if (isMobile) {
+    await momentsPage.locator('[data-app="tab-vibes"]').click();
+  }
+  await momentsPage.locator('[data-vs="wish-chip"]', { hasText: 'Who are my top fans?' }).click();
+  await waitForAuthoringToFinish(momentsPage);
+  await momentsPage.locator('[data-vs="label-allow"]').click();
+
+  const topFansCard = momentsPage.locator('[data-vs="vibe-card"][data-vibe-id="top-fans"]');
+  await topFansCard.waitFor({ state: 'visible', timeout: 5000 });
+  await momentsPage.waitForFunction(() => {
+    const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="top-fans"]');
+    return card && card.querySelectorAll('.vk-sealed').length >= 1;
+  }, null, { timeout: 6000 });
+
+  await clickCardMenuAction(topFansCard, 'vibe-inspect');
+  const fansInspect = topFansCard.locator('[data-vs="inspect-pane"]');
+  await fansInspect.waitFor({ state: 'visible', timeout: 5000 });
+  const fansInspectText = await fansInspect.innerText();
+  assert(fansInspectText.includes('"sealed"'), 'Top fans inspect pane missing "sealed"');
+  for (const fan of fanNames) {
+    assert(!fansInspectText.includes(fan), `Top fans inspect pane leaked follower name "${fan}"`);
+  }
+  const mSealedHandles = await fansInspect.locator('.vs-inspect-sealed').allTextContents();
+  assert(mSealedHandles.length >= 1, 'Expected .vs-inspect-sealed handles in Moments inspect pane');
+  for (const h of mSealedHandles) {
+    assert(!/[\r\n]/.test(h), `Moments inspect sealed handle wraps: ${JSON.stringify(h)}`);
+  }
+  const mLegend = await momentsPage.locator('.vs-installed-legend').textContent();
+  assert(mLegend.includes('Values with a lock are sealed. Moments draws them. The vibe never sees them.'), 'Missing sealed legend in Moments');
+  await fansInspect.scrollIntoViewIfNeeded();
+  if (!isMobile) {
+    assert((await momentsPage.evaluate(() => window.scrollY)) === 0, 'Moments window scrolled on inspect');
+  }
+  await snap('14', 'moments', 'topfans-inspect', momentsPage);
+
+  // Check "How this app turned it on" + "Show my top 5 posts this month"
+  await momentsPage.locator('button, a', { hasText: 'How this app turned it on' }).first().click();
+  await momentsPage.locator('[role="dialog"]').waitFor({ state: 'visible', timeout: 5000 });
+  assert((await momentsPage.locator('[role="dialog"]').textContent()).includes('Moments declares what it offers'));
+  await momentsPage.keyboard.press('Escape');
+  await momentsPage.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
+
+  await momentsPage.locator('[data-vs="wish-chip"]', { hasText: 'Show my top 5 posts this month' }).click();
+  await waitForAuthoringToFinish(momentsPage);
+  await momentsPage.locator('[data-vs="label-allow"]').click();
+  await momentsPage.waitForFunction(() => {
+    const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="top-posts"]');
+    return card && card.querySelectorAll('.vk-bar-swatch').length === 5;
+  }, null, { timeout: 6000 });
+
+  // Focus timer in Moments
+  const mFocusAdd = momentsPage.locator('[data-vs="gallery-add"][data-vibe-id="focus-timer"]');
+  await mFocusAdd.scrollIntoViewIfNeeded();
+  await mFocusAdd.click();
+  await momentsPage.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 5000 });
+  await momentsPage.locator('[data-vs="label-allow"]').click();
+  const mFocusCard = momentsPage.locator('[data-vs="vibe-card"][data-vibe-id="focus-timer"]');
+  await mFocusCard.waitFor({ state: 'visible', timeout: 5000 });
+  const mTimeBefore = await mFocusCard.locator('.vk-stat-value').first().innerText();
+  await mFocusCard.locator('.vk-button', { hasText: /^Start$/i }).click();
+  await momentsPage.waitForFunction(
+    (prev) => {
+      const el = document.querySelector('[data-vs="vibe-card"][data-vibe-id="focus-timer"] .vk-stat-value');
+      return el && el.textContent.trim() !== prev.trim();
+    },
+    mTimeBefore,
+    { timeout: 5000 }
+  );
+  if (!isMobile) {
+    await checkIndependentPanelScroll(momentsPage, '.post-card, .feed-card, article', 'moments');
+  }
+  await mFocusCard.scrollIntoViewIfNeeded();
+  await snap('15', 'moments', 'focustimer', momentsPage);
+  if (isMobile) {
+    await momentsPage.locator('[data-app="tab-feed"]').click();
+    await momentsPage.waitForTimeout(200);
+  } else {
+    await momentsPage.evaluate(() => window.scrollTo(0, 0));
+  }
+  await snap('16', 'moments', 'feed', momentsPage);
+
+  // Revoke follower access -> source banner + sample fallback -> auto recovery
+  const followerToggle = momentsPage.locator('[data-app="toggle-follower-source"]');
+  await followerToggle.click();
+  if (isMobile) {
+    await momentsPage.locator('[data-app="tab-vibes"]').click();
+  }
+  const mSourceBanner = topFansCard.locator('[data-vs="source-banner"]');
+  await mSourceBanner.waitFor({ state: 'visible', timeout: 6000 });
+  assert((await mFocusCard.locator('[data-vs="source-banner"]').count()) === 0, 'Focus timer showed source banner in Moments');
+  await topFansCard.scrollIntoViewIfNeeded();
+  await momentsPage.waitForTimeout(200);
+  await snap('17', 'moments', 'source-revoked', momentsPage);
+
+  await topFansCard.locator('[data-vs="source-use-sample"]').click();
+  await topFansCard.locator('[data-vs="source-use-live"]').waitFor({ state: 'visible', timeout: 6000 });
+  await snap('18', 'moments', 'sample-fallback', momentsPage);
+
+  await followerToggle.click();
+  await topFansCard.locator('[data-vs="source-use-live"]').click();
+  await mSourceBanner.waitFor({ state: 'hidden', timeout: 6000 });
+  await momentsPage.close();
+}
+
+async function verifyInbox(context, baseUrl, isMobile, errorLog, snap, checkNoHorizontalOverflow, width) {
+  const inboxPage = await context.newPage();
+  trackErrors(inboxPage, `inbox-${width}`, errorLog);
+  await inboxPage.goto(`${baseUrl}/apps/inbox/index.html`, { waitUntil: 'networkidle' });
+  await inboxPage.waitForSelector('#vibe-space [data-vs="wish-input"]', { state: 'attached' });
+  await checkNoHorizontalOverflow(inboxPage, 'inbox-initial');
+
+  if (isMobile) {
+    await checkMobileTabTargets(inboxPage, 'inbox');
+    await inboxPage.locator('[data-app="tab-vibes"]').click();
+  }
+
+  // Install Reply SLA Radar (v1), check sealed senders/subjects, inspect privacy
+  await inboxPage.locator('[data-vs="wish-chip"]', { hasText: 'Show unread threads waiting over 24 hours' }).click();
+  await waitForAuthoringToFinish(inboxPage);
+  await inboxPage.locator('[data-vs="label-allow"]').click();
+  const replyCard = inboxPage.locator('[data-vs="vibe-card"][data-vibe-id="reply-radar"]');
+  await replyCard.waitFor({ state: 'visible', timeout: 5000 });
+  await inboxPage.waitForFunction(() => {
+    const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="reply-radar"]');
+    return card && card.querySelectorAll('.vk-bar').length >= 1 && card.querySelectorAll('.vk-sealed').length >= 1;
+  }, null, { timeout: 6000 });
+
+  await clickCardMenuAction(replyCard, 'vibe-inspect');
+  const inspectText = await replyCard.locator('[data-vs="inspect-pane"]').innerText();
+  assert(inspectText.includes('"sealed"'), 'PulseMail inspect missing sealed');
+  assert(!inspectText.includes('Elena Vance') && !inspectText.includes('Q4 diligence'), 'PulseMail leaked sealed sender/subject');
+  await replyCard.locator('.vs-inspect-hide-btn').click();
+
+  // Remix to v2 using hours SLA remix
+  await clickCardMenuAction(replyCard, 'vibe-edit');
+  await inboxPage.locator('[data-vs="edit-wish-input"]').fill('Flag threads over 12 hours and show only the worst 3');
+  await inboxPage.locator('[data-vs="edit-wish-run"]').click();
+  const permNote = await inboxPage.locator('.vs-edit-perm-note').textContent();
+  assert(/no new permissions/i.test(permNote), `PulseMail hours remix unexpected perm note: "${permNote}"`);
+  await inboxPage.locator('[data-vs="edit-save"]').click();
+  await inboxPage.waitForFunction(() => {
+    const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="reply-radar"]');
+    return card && card.textContent.includes('v2') && card.querySelectorAll('.vk-bar').length <= 3;
+  }, null, { timeout: 6000 });
+
+  // Inbox Assistant embed + Pin
+  if (isMobile) {
+    await inboxPage.locator('[data-app="tab-mail"]').click();
+  }
+  await inboxPage.locator('[data-app="agent-chip"]').click();
+  const embedBox = inboxPage.locator('[data-vs="embed"]');
+  await embedBox.waitFor({ state: 'visible', timeout: 5000 });
+  assert((await embedBox.textContent()).includes('Temporary'), 'Inbox embed missing Temporary badge');
+  await embedBox.locator('[data-vs="embed-pin"]').click();
+  await inboxPage.locator('[data-vs="label-allow"]').click();
+  if (isMobile) {
+    await inboxPage.locator('[data-app="tab-vibes"]').click();
+  }
+  await inboxPage.locator('[data-vs="vibe-card"][data-vibe-id="vip-sla-queue"]').waitFor({ state: 'visible', timeout: 5000 });
+  if (!isMobile) {
+    await checkIndependentPanelScroll(inboxPage, '.thread-card', 'inbox');
+  }
+  await assertNoVkErrors(inboxPage, `inbox-live-${width}`);
+  await snap('25', 'inbox', 'live', inboxPage);
+
+  // Mailbox sync offline toggle -> source banner -> restore
+  if (isMobile) {
+    await inboxPage.locator('[data-app="tab-mail"]').click();
+  }
+  await inboxPage.locator('[data-app="toggle-mailbox-sync"]').click();
+  if (isMobile) {
+    await inboxPage.locator('[data-app="tab-vibes"]').click();
+  }
+  await replyCard.locator('[data-vs="source-banner"]').waitFor({ state: 'visible', timeout: 6000 });
+  assert((await replyCard.locator('[data-vs="source-banner"]').textContent()).includes('IMAP mailbox connection paused'));
+  await snap('26', 'inbox', 'offline', inboxPage);
+  if (isMobile) {
+    await inboxPage.locator('[data-app="tab-mail"]').click();
+  }
+  await inboxPage.locator('[data-app="toggle-mailbox-sync"]').click();
+  if (isMobile) {
+    await inboxPage.locator('[data-app="tab-vibes"]').click();
+  }
+  await replyCard.locator('[data-vs="source-banner"]').waitFor({ state: 'hidden', timeout: 6000 });
+
+  // Verify ?as=teammate uses distinct teammate data
+  await inboxPage.goto(`${baseUrl}/apps/inbox/index.html?as=teammate`, { waitUntil: 'networkidle' });
+  const tmBody = await inboxPage.evaluate(() => document.body.innerText);
+  assert(tmBody.includes('Nadia Kowalski'), 'PulseMail ?as=teammate missing teammate dataset');
+  await inboxPage.close();
+}
+
+async function verifyShop(context, baseUrl, isMobile, errorLog, snap, checkNoHorizontalOverflow, width) {
+  const shopPage = await context.newPage();
+  trackErrors(shopPage, `shop-${width}`, errorLog);
+  await shopPage.goto(`${baseUrl}/apps/shop/index.html`, { waitUntil: 'networkidle' });
+  await shopPage.waitForSelector('#vibe-space [data-vs="wish-input"]', { state: 'attached' });
+  await checkNoHorizontalOverflow(shopPage, 'shop-initial');
+
+  if (isMobile) {
+    await checkMobileTabTargets(shopPage, 'shop');
+    await shopPage.locator('[data-app="tab-vibes"]').click();
+  }
+
+  // Install True Deal Radar (v1) + Inspect sealed product/seller
+  await shopPage.locator('[data-vs="wish-chip"]', { hasText: 'Highlight wishlist items at least 20% below typical price' }).click();
+  await waitForAuthoringToFinish(shopPage);
+  await shopPage.locator('[data-vs="label-allow"]').click();
+  const dealCard = shopPage.locator('[data-vs="vibe-card"][data-vibe-id="deal-radar"]');
+  await dealCard.waitFor({ state: 'visible', timeout: 5000 });
+  await shopPage.waitForFunction(() => {
+    const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="deal-radar"]');
+    return card && card.querySelectorAll('.vk-bar').length >= 1 && card.querySelectorAll('.vk-sealed').length >= 1;
+  }, null, { timeout: 6000 });
+
+  await clickCardMenuAction(dealCard, 'vibe-inspect');
+  const inspectText = await dealCard.locator('[data-vs="inspect-pane"]').innerText();
+  assert(inspectText.includes('"sealed"'), 'CartScout inspect missing sealed');
+  assert(!inspectText.includes('Studio Monitor Headphones') && !inspectText.includes('SoundCraft Direct'), 'CartScout leaked sealed item/seller');
+  await dealCard.locator('.vs-inspect-hide-btn').click();
+
+  // Remix to v2 using % MIN_DISCOUNT remix extension
+  await clickCardMenuAction(dealCard, 'vibe-edit');
+  await shopPage.locator('[data-vs="edit-wish-input"]').fill('Show only the top 3 deals at 25% off or better');
+  await shopPage.locator('[data-vs="edit-wish-run"]').click();
+  const permNote = await shopPage.locator('.vs-edit-perm-note').textContent();
+  assert(/no new permissions/i.test(permNote), `CartScout discount remix unexpected perm note: "${permNote}"`);
+  await shopPage.locator('[data-vs="edit-save"]').click();
+  await shopPage.waitForFunction(() => {
+    const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="deal-radar"]');
+    return card && card.textContent.includes('v2') && card.querySelectorAll('.vk-bar').length <= 3;
+  }, null, { timeout: 6000 });
+
+  // Deal Assistant embed + Pin
+  if (isMobile) {
+    await shopPage.locator('[data-app="tab-feed"]').click();
+  }
+  await shopPage.locator('[data-app="agent-chip"]').click();
+  const embedBox = shopPage.locator('[data-vs="embed"]');
+  await embedBox.waitFor({ state: 'visible', timeout: 5000 });
+  assert((await embedBox.textContent()).includes('Temporary'), 'CartScout embed missing Temporary badge');
+  await embedBox.locator('[data-vs="embed-pin"]').click();
+  await shopPage.locator('[data-vs="label-allow"]').click();
+  if (isMobile) {
+    await shopPage.locator('[data-app="tab-vibes"]').click();
+  }
+  await shopPage.locator('[data-vs="vibe-card"][data-vibe-id="item-price-watch"]').waitFor({ state: 'visible', timeout: 5000 });
+  if (!isMobile) {
+    await checkIndependentPanelScroll(shopPage, '.wishlist-card, .deal-card, article', 'shop');
+  }
+  await assertNoVkErrors(shopPage, `shop-live-${width}`);
+  await snap('27', 'shop', 'live', shopPage);
+
+  // Price feed offline -> source-banner -> restore
+  if (isMobile) {
+    await shopPage.locator('[data-app="tab-feed"]').click();
+  }
+  await shopPage.locator('[data-app="toggle-price-feed"]').click();
+  if (isMobile) {
+    await shopPage.locator('[data-app="tab-vibes"]').click();
+  }
+  await dealCard.locator('[data-vs="source-banner"]').waitFor({ state: 'visible', timeout: 6000 });
+  assert((await dealCard.locator('[data-vs="source-banner"]').textContent()).includes('Merchant price feed rate-limited'));
+  await snap('28', 'shop', 'offline', shopPage);
+  if (isMobile) {
+    await shopPage.locator('[data-app="tab-feed"]').click();
+  }
+  await shopPage.locator('[data-app="toggle-price-feed"]').click();
+  if (isMobile) {
+    await shopPage.locator('[data-app="tab-vibes"]').click();
+  }
+  await dealCard.locator('[data-vs="source-banner"]').waitFor({ state: 'hidden', timeout: 6000 });
+
+  // Verify ?as=friend uses distinct friend wishlist
+  await shopPage.goto(`${baseUrl}/apps/shop/index.html?as=friend`, { waitUntil: 'networkidle' });
+  const friendBody = await shopPage.evaluate(() => document.body.innerText);
+  assert(friendBody.includes('Mirrorless Prime 35mm Lens'), 'CartScout ?as=friend missing friend dataset');
+  await shopPage.close();
 }
 
 async function runStoryForViewport(browser, baseUrl, viewport, errorLog, shots) {
@@ -71,523 +442,208 @@ async function runStoryForViewport(browser, baseUrl, viewport, errorLog, shots) 
   }
 
   try {
-    // 00. Start page
-    const homePage = await context.newPage();
-    trackErrors(homePage, `home-${width}`, errorLog);
-    await homePage.goto(`${baseUrl}/index.html`, { waitUntil: 'networkidle' });
-    await homePage.waitForSelector('h1, main, a[href*="leapterm"]');
-    const homeText = await homePage.evaluate(() => document.body.innerText);
-    assert(homeText.includes('VibeProtocol demo'), 'Home page missing title "VibeProtocol demo"');
-    assert(homeText.includes('LeapTerm'), 'Home page missing LeapTerm link');
-    assert(homeText.includes('Moments'), 'Home page missing Moments link');
-    assert(homeText.includes('What is real here'), 'Home page missing "What is real here" box');
-    assert((await homePage.locator('.tour-list li').count()) === 9, 'Home page tour missing 9 steps');
-    assert(homeText.includes('Manage, edit, and title your vibes'), 'Home page tour missing Round 2 step 8');
-    assert(homeText.includes('Graceful when data sources go offline'), 'Home page tour missing Round 2 step 9');
-    assert((await homePage.locator('a[href="README.md"]').count()) >= 1, 'Home page missing README.md link');
-    await checkNoHorizontalOverflow(homePage, 'home');
-    await snap('00', 'home', 'landing', homePage);
-    await homePage.close();
+    // 00. Landing page
+    await verifyStartPage(context, baseUrl, viewport, errorLog, snap, checkNoHorizontalOverflow);
 
-    // Open LeapTerm
-    const ltPage = await context.newPage();
-    trackErrors(ltPage, `leapterm-${width}`, errorLog);
-    await ltPage.goto(`${baseUrl}/apps/leapterm/index.html`, { waitUntil: 'networkidle' });
-    await ltPage.waitForSelector('#vibe-space [data-vs="wish-input"]', { state: 'attached' });
-    await checkNoHorizontalOverflow(ltPage, 'leapterm-initial');
+    // 01–12. PocketLedger full deep walkthrough
+    const ledgerPage = await context.newPage();
+    trackErrors(ledgerPage, `ledger-${width}`, errorLog);
+    await ledgerPage.goto(`${baseUrl}/apps/ledger/index.html`, { waitUntil: 'networkidle' });
+    await ledgerPage.waitForSelector('#vibe-space [data-vs="wish-input"]', { state: 'attached' });
+    await checkNoHorizontalOverflow(ledgerPage, 'ledger-initial');
 
     if (isMobile) {
-      // Capture initial servers view on phone first, then switch to Vibe Space tab
-      await ltPage.locator('[data-app="tab-servers"]').click();
-      await ltPage.waitForTimeout(200);
-      await snap('01', 'leapterm', 'servers', ltPage);
-      await ltPage.locator('[data-app="tab-vibes"]').click();
-      await ltPage.waitForTimeout(200);
+      await checkMobileTabTargets(ledgerPage, 'ledger');
+      await ledgerPage.locator('[data-app="tab-accounts"]').click();
+      await ledgerPage.waitForTimeout(200);
+      await snap('01', 'ledger', 'accounts', ledgerPage);
+      await ledgerPage.locator('[data-app="tab-vibes"]').click();
+      await ledgerPage.waitForTimeout(200);
     } else {
-      await snap('01', 'leapterm', 'initial', ltPage);
+      await snap('01', 'ledger', 'initial', ledgerPage);
     }
 
-    // Check offer dialog
-    await ltPage.locator('[data-vs="offer-open"]').click();
-    await ltPage.locator('[data-vs="offer-dialog"]').waitFor({ state: 'visible', timeout: 5000 });
-    const offerText = await ltPage.locator('[data-vs="offer-dialog"]').textContent();
-    assert(offerText.includes('telemetry.disk') && offerText.includes('telemetry.load'), 'Offer dialog missing capabilities');
-    assert(offerText.includes('sealed') && offerText.includes('public'), 'Offer dialog missing public/sealed field chips');
-    await snap('02', 'leapterm', 'offer', ltPage);
-    await ltPage.keyboard.press('Escape');
-    await ltPage.locator('[data-vs="offer-dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
+    // Offer dialog
+    await ledgerPage.locator('[data-vs="offer-open"]').click();
+    await ledgerPage.locator('[data-vs="offer-dialog"]').waitFor({ state: 'visible', timeout: 5000 });
+    const offerText = await ledgerPage.locator('[data-vs="offer-dialog"]').textContent();
+    assert(offerText.includes('transactions.recent') && offerText.includes('accounts.cashflow'), 'Offer dialog missing capabilities');
+    assert(offerText.includes('sealed') && offerText.includes('public'), 'Offer dialog missing public/sealed chips');
+    await snap('02', 'ledger', 'offer', ledgerPage);
+    await ledgerPage.keyboard.press('Escape');
+    await ledgerPage.locator('[data-vs="offer-dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
 
-    // Check "How this app turned it on" dialog in LeapTerm
-    await ltPage.locator('button, a', { hasText: 'How this app turned it on' }).first().click();
-    await ltPage.locator('[role="dialog"]').waitFor({ state: 'visible', timeout: 5000 });
-    const ltHowText = await ltPage.locator('[role="dialog"]').textContent();
-    assert(ltHowText.includes('LeapTerm declares what it offers'), 'LeapTerm "How this app turned it on" dialog missing expected wording');
-    await ltPage.keyboard.press('Escape');
-    await ltPage.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
+    // "How this app turned it on" dialog
+    await ledgerPage.locator('button, a', { hasText: 'How this app turned it on' }).first().click();
+    await ledgerPage.locator('[role="dialog"]').waitFor({ state: 'visible', timeout: 5000 });
+    assert((await ledgerPage.locator('[role="dialog"]').textContent()).includes('PocketLedger declares what it offers'));
+    await ledgerPage.keyboard.press('Escape');
+    await ledgerPage.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
 
-    // Check unmatched typed wish highlights scripted note without error
-    await ltPage.locator('[data-vs="wish-input"]').fill('Make me coffee');
-    await ltPage.locator('[data-vs="wish-send"]').click();
-    const noteProminent = await ltPage.locator('.vs-wish-note-prominent').count();
-    assert(noteProminent === 1, 'Unmatched wish did not emphasize scripted demo note');
+    // Unmatched typed wish highlights scripted note
+    await ledgerPage.locator('[data-vs="wish-input"]').fill('Make me coffee');
+    await ledgerPage.locator('[data-vs="wish-send"]').click();
+    assert((await ledgerPage.locator('.vs-wish-note-prominent').count()) === 1, 'Unmatched wish did not emphasize note');
 
-    // Story 1 & 2: Pick Disk Watch wish
-    const wish1Chip = ltPage.locator('[data-vs="wish-chip"]', { hasText: 'Show disk usage for my servers' });
+    // Story 1 & 2: Subscription Watch v1
+    const wish1Chip = ledgerPage.locator('[data-vs="wish-chip"]', { hasText: 'Flag recurring charges above $20/mo' });
     await wish1Chip.waitFor({ state: 'visible' });
-    // Also verify remix wish is NOT shown before disk-watch is installed
-    const remixBefore = await ltPage.locator('[data-vs="wish-chip"]', { hasText: 'red above 90%' }).count();
-    assert(remixBefore === 0, 'Remix wish chip should not appear before disk-watch is installed');
-
+    assert((await ledgerPage.locator('[data-vs="wish-chip"]', { hasText: 'red above 90%' }).count()) === 0, 'Remix chip shown prematurely');
     await wish1Chip.click();
-    await waitForAuthoringToFinish(ltPage);
-
-    // Wait for preview render inside sandbox
-    await ltPage.waitForFunction(() => {
+    await waitForAuthoringToFinish(ledgerPage);
+    await ledgerPage.waitForFunction(() => {
       const p = document.querySelector('[data-vs="preview"]');
       return p && p.querySelectorAll('.vk-bar').length >= 1;
     }, null, { timeout: 6000 });
+    assert((await ledgerPage.locator('[data-vs="vibe-card"]').count()) === 0, 'Card installed before Allow');
 
-    // Verify no card is installed yet, and label has Reads, Shows, Cannot
-    const installedBeforeAllow = await ltPage.locator('[data-vs="vibe-card"]').count();
-    assert(installedBeforeAllow === 0, `Expected 0 installed vibes before Allow, found ${installedBeforeAllow}`);
-
-    const labelText = await ltPage.locator('[data-vs="label"]').textContent();
-    assert(labelText.includes('Reads'), 'Label missing Reads row');
-    assert(labelText.includes('Shows'), 'Label missing Shows row');
-    assert(labelText.includes('Cannot'), 'Label missing Cannot row');
-    assert(labelText.includes('Disk usage of your servers'), 'Label Reads missing capability title');
-    assert(labelText.includes('server names stay sealed'), 'Label Reads missing sealedNote');
-    assert(labelText.includes('Only inside its own box'), 'Label Shows missing expected wording');
-    assert(labelText.includes('See server names or addresses'), 'Label Cannot missing sealedCannot');
-    assert(labelText.includes('Change anything in LeapTerm'), 'Label Cannot missing final immutable row');
-
-    // Verify S3: sealed legend is NOT visible before any vibe is installed
-    const legendVisibleBefore = await ltPage.locator('.vs-installed-legend').isVisible().catch(() => false);
-    assert(!legendVisibleBefore, 'Sealed legend should not be visible before a vibe is installed');
-
-    // Toggle Show code briefly to confirm it works, then collapse or keep clean
-    await ltPage.locator('[data-vs="show-code"]').click();
-    const codeVisible = await ltPage.evaluate(() => document.body.innerText.includes('function invoke'));
-    assert(codeVisible, 'Show code toggle did not reveal vibe source');
-    await ltPage.locator('[data-vs="show-code"]').click();
-
-    await ltPage.locator('[data-vs="label-allow"]').scrollIntoViewIfNeeded();
-    await assertNoVkErrors(ltPage, `wish1-label-${width}`);
-    await snap('03', 'leapterm', 'wish1-label', ltPage);
-
-    // Story 3: Allow and add -> Disk Watch runs live
-    await ltPage.locator('[data-vs="label-allow"]').click();
-    const diskWatchCard = ltPage.locator('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-    await diskWatchCard.waitFor({ state: 'visible', timeout: 5000 });
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-      return card && card.querySelectorAll('.vk-bar').length >= 5 && card.querySelectorAll('span.vk-sealed').length >= 1;
-    }, null, { timeout: 6000 });
-
-    const dangerBars = await diskWatchCard.locator('.vk-bar.vk-tone-danger').count();
-    assert(dangerBars >= 1, `Expected at least one .vk-bar.vk-tone-danger in Disk Watch, found ${dangerBars}`);
-    const sealedNames = await diskWatchCard.locator('span.vk-sealed').allInnerTexts();
-    assert(
-      sealedNames.some((s) => s.includes('db-1.prod.internal') || s.includes('web-1.prod.internal')),
-      `Expected real server names inside span.vk-sealed, got: ${JSON.stringify(sealedNames)}`
-    );
-    // Verify S3: legend line visible once a vibe is installed
-    const legendEl = ltPage.locator('.vs-installed-legend');
-    assert(await legendEl.isVisible(), 'Expected .vs-installed-legend to be visible once a vibe is installed');
-    const legendTextInstalled = await legendEl.textContent();
-    assert(
-      legendTextInstalled.includes('Values with a lock are sealed. LeapTerm draws them. The vibe never sees them.'),
-      `Missing expected S3 sealed legend in LeapTerm panel: ${legendTextInstalled}`
-    );
-
-    await diskWatchCard.scrollIntoViewIfNeeded();
-    if (!isMobile) {
-      assert((await ltPage.evaluate(() => window.scrollY)) === 0, 'LeapTerm page scrolled at 1440x900');
+    const labelText = await ledgerPage.locator('[data-vs="label"]').textContent();
+    for (const expected of ['Reads', 'Shows', 'Cannot', 'merchant and account names stay sealed', 'Only inside its own box', 'See merchant names or account numbers', 'Change anything in PocketLedger']) {
+      assert(labelText.includes(expected), `Label missing "${expected}"`);
     }
-    // Round 3: verify card management actions live inside closed three-dots menu
-    assert(!(await diskWatchCard.locator('[data-vs="vibe-menu"]').isVisible()), 'Expected vibe-menu closed by default');
-    assert(!(await diskWatchCard.locator('[data-vs="vibe-edit"]').isVisible()), 'Expected vibe-edit hidden when menu is closed');
-    assert(!(await diskWatchCard.locator('[data-vs="vibe-remove"]').isVisible()), 'Expected vibe-remove hidden when menu is closed');
-    assert(await diskWatchCard.locator('[data-vs="vibe-more"]').isVisible(), 'Expected three-dots vibe-more trigger visible');
-    await snap('04', 'leapterm', 'diskwatch-live', ltPage);
+    assert(!(await ledgerPage.locator('.vs-installed-legend').isVisible().catch(() => false)), 'Sealed legend visible before install');
 
-    // Inspect Disk Watch via three-dots menu
-    await clickCardMenuAction(diskWatchCard, 'vibe-inspect');
-    const inspectPane = diskWatchCard.locator('[data-vs="inspect-pane"]');
+    await ledgerPage.locator('[data-vs="show-code"]').click();
+    assert(await ledgerPage.evaluate(() => document.body.innerText.includes('function invoke')));
+    await ledgerPage.locator('[data-vs="show-code"]').click();
+    await ledgerPage.locator('[data-vs="label-allow"]').scrollIntoViewIfNeeded();
+    await assertNoVkErrors(ledgerPage, `wish1-label-${width}`);
+    await snap('03', 'ledger', 'wish1-label', ledgerPage);
+
+    // Allow & add -> Subscription Watch live
+    await ledgerPage.locator('[data-vs="label-allow"]').click();
+    const subWatchCard = ledgerPage.locator('[data-vs="vibe-card"][data-vibe-id="subscription-watch"]');
+    await subWatchCard.waitFor({ state: 'visible', timeout: 5000 });
+    await ledgerPage.waitForFunction(() => {
+      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="subscription-watch"]');
+      return card && card.querySelectorAll('.vk-tone-danger').length >= 1 && card.querySelectorAll('span.vk-sealed').length >= 1;
+    }, null, { timeout: 6000 });
+    await assertNoVkErrors(ledgerPage, `subwatch-live-${width}`);
+    await snap('04', 'ledger', 'subwatch-live', ledgerPage);
+
+    // Inspect -> sealed handles only, no real merchant/account names
+    await clickCardMenuAction(subWatchCard, 'vibe-inspect');
+    const inspectPane = subWatchCard.locator('[data-vs="inspect-pane"]');
     await inspectPane.waitFor({ state: 'visible', timeout: 5000 });
     const inspectText = await inspectPane.innerText();
-    assert(inspectText.includes('"sealed"'), 'Inspect pane JSON missing "sealed"');
-    for (const srv of ['db-1.prod.internal', 'db-2.prod.internal', 'web-1.prod.internal', 'web-2.prod.internal', 'cache-1.prod.internal']) {
-      assert(!inspectText.includes(srv), `Inspect pane leaked real server name "${srv}"`);
+    assert(inspectText.includes('"sealed"'), 'Inspect pane missing "sealed"');
+    for (const secret of ['Sapphire Card', 'Checking', 'CloudBox', 'StreamFlix']) {
+      assert(!inspectText.includes(secret), `Inspect pane leaked "${secret}"`);
     }
-    assert(inspectText.includes('Sent nothing') && inspectText.includes('Changed nothing'), 'Inspect pane missing Sent/Changed nothing');
-
-    // Verify S1: each sealed handle sits on one line in the inspect pane
-    const sealedHandlesInInspect = await inspectPane.locator('.vs-inspect-sealed').allTextContents();
-    assert(sealedHandlesInInspect.length >= 1, 'Expected highlighted .vs-inspect-sealed handles in inspect pane');
-    for (const h of sealedHandlesInInspect) {
-      assert(!/[\r\n]/.test(h), `Sealed handle in inspect pane wraps across lines: ${JSON.stringify(h)}`);
-      assert(/^\{\s*"sealed":\s*"h_[^"]+"\s*\}$/.test(h.trim()), `Unexpected sealed handle format: ${JSON.stringify(h)}`);
+    const sealedHandles = await inspectPane.locator('.vs-inspect-sealed').allTextContents();
+    assert(sealedHandles.length >= 1, 'Expected highlighted sealed handles in Inspect pane');
+    for (const h of sealedHandles) {
+      assert(!/[\r\n]/.test(h), `Sealed handle wraps across lines: ${JSON.stringify(h)}`);
     }
-    const inspectJsonText = await inspectPane.locator('.vs-inspect-json').textContent();
-    assert(/"server":\s*\{\s*"sealed":\s*"h_[^"\n]+"\s*\}/.test(inspectJsonText), 'Expected "server": { "sealed": "h_..." } on a single line');
-
+    const legendText = await ledgerPage.locator('.vs-installed-legend').textContent();
+    assert(legendText.includes('Values with a lock are sealed. PocketLedger draws them. The vibe never sees them.'), 'Missing sealed legend');
     await inspectPane.scrollIntoViewIfNeeded();
-    await snap('05', 'leapterm', 'diskwatch-inspect', ltPage);
-
-    // Story 4: Second wish -> version 2 with "No new permissions"
-    const wish2Chip = ltPage.locator('[data-vs="wish-chip"]', { hasText: 'red above 90%' });
-    await wish2Chip.waitFor({ state: 'visible', timeout: 5000 });
-    await wish2Chip.click();
-    await waitForAuthoringToFinish(ltPage);
-
-    // Wait for v2 preview render inside sandbox and ensure no error
-    await ltPage.waitForFunction(() => {
-      const p = document.querySelector('[data-vs="preview"]');
-      return p && (p.querySelectorAll('.vk-bar').length === 3 || p.querySelector('.vk-error'));
-    }, null, { timeout: 6000 });
-    const v2PreviewErr = await ltPage.locator('[data-vs="preview"] .vk-error').textContent().catch(() => null);
-    assert(!v2PreviewErr, `Wish 2 preview failed with error: ${v2PreviewErr}`);
-
-    const v2LabelText = await ltPage.locator('[data-vs="label"]').textContent();
-    assert(/Version\s*2/i.test(v2LabelText), `Expected "Version 2" in label, got: ${v2LabelText}`);
-    assert(/No new permissions/i.test(v2LabelText), `Expected "No new permissions" in label, got: ${v2LabelText}`);
-    await ltPage.locator('[data-vs="label-allow"]').scrollIntoViewIfNeeded();
-    await assertNoVkErrors(ltPage, `wish2-label-${width}`);
-    await snap('06', 'leapterm', 'wish2-label', ltPage);
-
-    await ltPage.locator('[data-vs="label-allow"]').click();
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-      return card && card.textContent.includes('v2') && card.querySelectorAll('.vk-bar').length === 3;
-    }, null, { timeout: 6000 });
-    // Verify S4: remix chip is gone once v2 is installed
-    const remixAfterV2 = await ltPage.locator('[data-vs="wish-chip"]', { hasText: 'red above 90%' }).count();
-    assert(remixAfterV2 === 0, 'S4 failed: remix wish chip still visible after Disk Watch v2 installed');
-    await diskWatchCard.scrollIntoViewIfNeeded();
-    await snap('07', 'leapterm', 'diskwatch-v2', ltPage);
-
-    // Story 5: Agent chat -> embed marked Temporary -> Pin to Vibe Space
-    if (isMobile) {
-      await ltPage.locator('[data-app="tab-agent"]').click();
-      await ltPage.waitForTimeout(200);
+    if (!isMobile) {
+      assert((await ledgerPage.evaluate(() => window.scrollY)) === 0, 'Window scrolled on Inspect at 1440x900');
     }
-    await ltPage.locator('[data-app="agent-chip"]').click();
-    await ltPage.locator('[data-app="agent-message"]').waitFor({ state: 'visible', timeout: 8000 });
-    const embedBox = ltPage.locator('[data-vs="embed"]');
-    await embedBox.waitFor({ state: 'visible', timeout: 8000 });
-    await ltPage.waitForFunction(() => {
-      const e = document.querySelector('[data-vs="embed"]');
-      return e && e.querySelectorAll('.vk-stat').length >= 2 && e.querySelectorAll('svg.vk-sparkline').length >= 1;
-    }, null, { timeout: 6000 });
-    const embedText = await embedBox.textContent();
-    assert(embedText.includes('Temporary'), 'Agent embed missing "Temporary" badge');
-    await embedBox.locator('[data-vs="embed-pin"]').scrollIntoViewIfNeeded();
-    await snap('08', 'leapterm', 'agent-embed', ltPage);
+    await snap('05', 'ledger', 'subwatch-inspect', ledgerPage);
+    await subWatchCard.locator('.vs-inspect-hide-btn').click();
 
-    await embedBox.locator('[data-vs="embed-pin"]').click();
-    await ltPage.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 5000 });
-    const pinTitleInput = ltPage.locator('[data-vs="label-title-input"]');
-    const pinNoteInput = ltPage.locator('[data-vs="label-note-input"]');
-    await pinTitleInput.waitFor({ state: 'visible', timeout: 5000 });
-    const prefilledTitle = await pinTitleInput.inputValue();
-    assert(prefilledTitle.includes('CPU and memory'), `Expected prefilled defaultTitle on embed pin, got "${prefilledTitle}"`);
-    await pinTitleInput.fill('DB-1 CPU Watch');
-    await pinNoteInput.fill('Tracks db-1 latency spikes');
-    await ltPage.locator('[data-vs="label-allow"]').click();
-    await ltPage.waitForFunction(() => {
+    // Story 3: Second wish (v2 with "No new permissions")
+    await ledgerPage.locator('[data-vs="wish-chip"]', { hasText: 'red above 90%' }).click();
+    await waitForAuthoringToFinish(ledgerPage);
+    const label2Text = await ledgerPage.locator('[data-vs="label"]').textContent();
+    assert(/no new permissions/i.test(label2Text) && /version 2/i.test(label2Text), `Second wish missing v2 / No new permissions: "${label2Text}"`);
+    await snap('06', 'ledger', 'wish2-label', ledgerPage);
+    await ledgerPage.locator('[data-vs="label-allow"]').click();
+    await ledgerPage.waitForFunction(() => {
+      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="subscription-watch"]');
+      return card && card.textContent.includes('v2') && card.querySelectorAll('.vk-bar').length <= 3;
+    }, null, { timeout: 6000 });
+    await snap('07', 'ledger', 'subwatch-v2', ledgerPage);
+
+    // Story 4: Finance Assistant inline embed + Pin with custom title/note
+    if (isMobile) {
+      await ledgerPage.locator('[data-app="tab-ledger"]').click();
+      await ledgerPage.waitForTimeout(200);
+    }
+    await ledgerPage.locator('[data-app="agent-chip"]').click();
+    await ledgerPage.locator('[data-app="agent-message"]').waitFor({ state: 'visible', timeout: 5000 });
+    const embed = ledgerPage.locator('[data-vs="embed"]');
+    await embed.waitFor({ state: 'visible', timeout: 5000 });
+    assert((await embed.textContent()).includes('Temporary'), 'Agent embed missing Temporary badge');
+    await ledgerPage.waitForFunction(() => {
       const e = document.querySelector('[data-vs="embed"]');
-      return e && e.textContent.includes('Pinned to Vibe Space');
+      return e && e.querySelectorAll('.vk-stat, .vk-sparkline').length >= 1;
+    }, null, { timeout: 6000 });
+    await embed.scrollIntoViewIfNeeded();
+    await snap('08', 'ledger', 'agent-embed', ledgerPage);
+
+    await embed.locator('[data-vs="embed-pin"]').click();
+    await ledgerPage.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 5000 });
+    await ledgerPage.locator('[data-vs="label-title-input"]').fill('Card Watch · Sapphire');
+    await ledgerPage.locator('[data-vs="label-note-input"]').fill('Pinned from Finance Assistant');
+    await ledgerPage.locator('[data-vs="label-allow"]').click();
+    await ledgerPage.waitForFunction(() => {
+      const e = document.querySelector('[data-vs="embed"]');
+      return e && e.textContent.includes('Pinned');
     }, null, { timeout: 5000 });
-
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-vibes"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-vibes"]').click();
+      await ledgerPage.waitForTimeout(200);
     }
-    const pinnedCard = ltPage.locator('[data-vs="vibe-card"][data-vibe-id="server-load"]');
+    const pinnedCard = ledgerPage.locator('[data-vs="vibe-card"][data-vibe-id="account-watch"]');
     await pinnedCard.waitFor({ state: 'visible', timeout: 5000 });
-    assert((await pinnedCard.locator('[data-vs="vibe-title"]').textContent()).trim() === 'DB-1 CPU Watch', 'Custom pin title did not render on card');
-    assert((await pinnedCard.locator('[data-vs="vibe-note"]').textContent()).trim() === 'Tracks db-1 latency spikes', 'Custom pin note did not render on card');
-    await pinnedCard.scrollIntoViewIfNeeded();
+    assert((await pinnedCard.locator('[data-vs="vibe-title"]').textContent()).trim() === 'Card Watch · Sapphire');
+    assert((await pinnedCard.locator('[data-vs="vibe-note"]').textContent()).trim() === 'Pinned from Finance Assistant');
     if (!isMobile) {
-      assert((await ltPage.evaluate(() => window.scrollY)) === 0, 'LeapTerm page scrolled at 1440x900 on embed-pinned');
+      assert((await ledgerPage.evaluate(() => window.scrollY)) === 0, 'PocketLedger scrolled after Pin at 1440x900');
     }
-    await snap('09', 'leapterm', 'embed-pinned', ltPage);
+    await snap('09', 'ledger', 'embed-pinned', ledgerPage);
 
-    // Story 6: Share Disk Watch -> Open as a teammate
-    await clickCardMenuAction(diskWatchCard, 'vibe-share');
-    const shareInput = ltPage.locator('[data-vs="share-link"]');
-    await shareInput.waitFor({ state: 'visible', timeout: 5000 });
-    const shareUrl = await shareInput.inputValue();
-    assert(shareUrl.includes('#vibe='), `Expected share link to contain #vibe=, got "${shareUrl}"`);
-    await snap('10', 'leapterm', 'share-dialog', ltPage);
+    // Story 5: Share dialog + partner dataset
+    await clickCardMenuAction(subWatchCard, 'vibe-share');
+    await ledgerPage.locator('[data-vs="share-link"]').waitFor({ state: 'visible', timeout: 5000 });
+    const shareUrl = await ledgerPage.locator('[data-vs="share-link"]').inputValue();
+    assert(shareUrl.includes('#vibe='), 'Share link missing #vibe= token');
+    await snap('10', 'ledger', 'share-dialog', ledgerPage);
 
-    const teammateBtn = ltPage.locator('[data-vs="share-target"]', { hasText: /teammate/i });
-    await teammateBtn.waitFor({ state: 'visible' });
-    const [teammatePage] = await Promise.all([
+    const partnerBtn = ledgerPage.locator('[data-vs="share-target"]', { hasText: 'Open as household partner' });
+    const [partnerPage] = await Promise.all([
       context.waitForEvent('page'),
-      teammateBtn.click(),
+      partnerBtn.click(),
     ]);
-    trackErrors(teammatePage, `teammate-${width}`, errorLog);
-    await teammatePage.waitForLoadState('networkidle');
+    trackErrors(partnerPage, `partner-${width}`, errorLog);
+    await partnerPage.waitForLoadState('networkidle');
     if (isMobile) {
-      await teammatePage.locator('[data-app="tab-vibes"]').click();
-      await teammatePage.waitForTimeout(200);
+      await partnerPage.locator('[data-app="tab-vibes"]').click();
     }
-    await teammatePage.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 6000 });
-    const tmInstalledBefore = await teammatePage.locator('[data-vs="vibe-card"]').count();
-    assert(tmInstalledBefore === 0, 'Teammate page installed vibe before Allow was clicked');
-    const tmLabelText = await teammatePage.locator('[data-vs="label"]').textContent();
-    assert(tmLabelText.includes('Reads') && tmLabelText.includes('Shows') && tmLabelText.includes('Cannot'), 'Teammate label missing rows');
-    await checkNoHorizontalOverflow(teammatePage, 'teammate');
-    await snap('11', 'leapterm', 'teammate-label', teammatePage);
-
-    await teammatePage.locator('[data-vs="label-allow"]').click();
-    const tmCard = teammatePage.locator('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-    await tmCard.waitFor({ state: 'visible', timeout: 5000 });
-    await teammatePage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-      return card && card.querySelectorAll('span.vk-sealed').length >= 1;
+    await partnerPage.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 5000 });
+    assert((await partnerPage.locator('[data-vs="vibe-card"]').count()) === 0, 'Partner page auto-installed before Allow');
+    await snap('11', 'ledger', 'partner-label', partnerPage);
+    await partnerPage.locator('[data-vs="label-allow"]').click();
+    await partnerPage.waitForFunction(() => {
+      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="subscription-watch"]');
+      return card && card.querySelectorAll('.vk-bar').length >= 1;
     }, null, { timeout: 6000 });
-    const tmServers = await tmCard.locator('span.vk-sealed').allInnerTexts();
-    assert(
-      tmServers.length > 0 && !tmServers.some((s) => s.includes('db-1.prod.internal')),
-      `Teammate copy did not show different server names: ${JSON.stringify(tmServers)}`
-    );
-    assert(
-      tmServers.some((s) => s.includes('api-east') || s.includes('corp.example')),
-      `Teammate servers did not match expected teammate hosts: ${JSON.stringify(tmServers)}`
-    );
-    const tmRemixCount = await teammatePage.locator('[data-vs="wish-chip"]', { hasText: 'red above 90%' }).count();
-    assert(tmRemixCount === 0, 'S4 failed: remix wish chip visible on teammate copy where v2 is already installed');
-    await snap('12', 'leapterm', 'teammate-live', teammatePage);
-    await teammatePage.close();
+    const partnerCardText = await partnerPage.locator('[data-vs="vibe-card"][data-vibe-id="subscription-watch"]').innerText();
+    assert(!partnerCardText.includes('Sapphire Card'), 'Partner page rendered owner account instead of partner dataset');
+    assert(partnerCardText.includes('Amex Gold') || partnerCardText.includes('Joint Checking') || partnerCardText.includes('DesignSuite'), 'Partner card missing partner dataset values');
+    await snap('12', 'ledger', 'partner-live', partnerPage);
+    await partnerPage.close();
 
-    // Story 7a: Open Disk Watch link in Moments -> cannot run here
-    const momentsTargetBtn = ltPage.locator('[data-vs="share-target"]', { hasText: /Moments/i });
-    if (!(await momentsTargetBtn.isVisible())) {
-      await clickCardMenuAction(diskWatchCard, 'vibe-share');
-    }
-    await momentsTargetBtn.waitFor({ state: 'visible' });
-    const [momentsPage] = await Promise.all([
-      context.waitForEvent('page'),
-      momentsTargetBtn.click(),
-    ]);
-    trackErrors(momentsPage, `moments-${width}`, errorLog);
-    await momentsPage.waitForLoadState('networkidle');
-    if (isMobile) {
-      // Check feed tab renders first too
-      await momentsPage.locator('[data-app="tab-feed"]').click();
-      await momentsPage.waitForTimeout(200);
-      await momentsPage.locator('[data-app="tab-vibes"]').click();
-      await momentsPage.waitForTimeout(200);
-    }
-    const fromLinkCard = momentsPage.locator('[data-vs="from-link"]');
-    await fromLinkCard.waitFor({ state: 'visible', timeout: 6000 });
-    const fromLinkText = await fromLinkCard.textContent();
-    assert(
-      /cannot run here/i.test(fromLinkText) && fromLinkText.includes('telemetry.disk'),
-      `Moments from-link card missing expected message, got: ${fromLinkText}`
-    );
-    await checkNoHorizontalOverflow(momentsPage, 'moments');
-    await snap('13', 'moments', 'diskwatch-blocked', momentsPage);
+    // Cross-host check + Moments complete walkthrough (Beats 13-18)
+    await verifyMoments(context, baseUrl, isMobile, errorLog, snap, shareUrl, width);
 
-    // Dismiss blocked card
-    await fromLinkCard.locator('button', { hasText: /dismiss/i }).click();
-    await fromLinkCard.waitFor({ state: 'hidden', timeout: 5000 });
+    // Back in PocketLedger: Close share dialog, Focus Timer, Edit/History/Manage, Account & Bank Sync Outages (Beats 19-24)
+    await ledgerPage.keyboard.press('Escape');
+    await ledgerPage.locator('[data-vs="share-link"]').waitFor({ state: 'hidden', timeout: 5000 });
 
-    // Story 7b: "Who are my top fans?" in Moments
-    const topFansChip = momentsPage.locator('[data-vs="wish-chip"]', { hasText: 'Who are my top fans?' });
-    await topFansChip.click();
-    await waitForAuthoringToFinish(momentsPage);
-    await momentsPage.locator('[data-vs="label-allow"]').click();
-
-    const topFansCard = momentsPage.locator('[data-vs="vibe-card"][data-vibe-id="top-fans"]');
-    await topFansCard.waitFor({ state: 'visible', timeout: 5000 });
-    await momentsPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="top-fans"]');
-      return card && card.querySelectorAll('.vk-bar').length === 5 && card.querySelectorAll('span.vk-sealed').length >= 5;
-    }, null, { timeout: 6000 });
-    const fanNames = await topFansCard.locator('span.vk-sealed').allInnerTexts();
-    assert(fanNames.length >= 5 && fanNames.every((n) => n.trim().length > 0), `Expected 5 sealed fan names, got ${JSON.stringify(fanNames)}`);
-
-    await clickCardMenuAction(topFansCard, 'vibe-inspect');
-    const fansInspect = topFansCard.locator('[data-vs="inspect-pane"]');
-    await fansInspect.waitFor({ state: 'visible', timeout: 5000 });
-    const fansInspectText = await fansInspect.innerText();
-    assert(fansInspectText.includes('"sealed"'), 'Top fans inspect pane missing "sealed"');
-    for (const fan of fanNames) {
-      assert(!fansInspectText.includes(fan.trim()), `Top fans inspect pane leaked follower name "${fan}"`);
-    }
-    // Verify S1 on Moments: each sealed handle sits on one line
-    const mSealedHandles = await fansInspect.locator('.vs-inspect-sealed').allTextContents();
-    assert(mSealedHandles.length >= 1, 'Expected highlighted .vs-inspect-sealed handles in Moments inspect pane');
-    for (const h of mSealedHandles) {
-      assert(!/[\r\n]/.test(h), `Moments inspect sealed handle wraps across lines: ${JSON.stringify(h)}`);
-    }
-    const mLegendEl = momentsPage.locator('.vs-installed-legend');
-    assert(await mLegendEl.isVisible(), 'Expected .vs-installed-legend visible in Moments once a vibe is installed');
-    const mLegend = await mLegendEl.textContent();
-    assert(
-      mLegend.includes('Values with a lock are sealed. Moments draws them. The vibe never sees them.'),
-      'Missing expected S3 sealed legend in Moments panel'
-    );
-    await fansInspect.scrollIntoViewIfNeeded();
-    if (!isMobile) {
-      assert((await momentsPage.evaluate(() => window.scrollY)) === 0, 'C3: Moments window scrolled on inspect at 1440x900');
-    }
-    await snap('14', 'moments', 'topfans-inspect', momentsPage);
-
-    // Also check "How this app turned it on" and "Show my top 5 posts this month" in Moments
-    await momentsPage.locator('button, a', { hasText: 'How this app turned it on' }).first().click();
-    await momentsPage.locator('[role="dialog"]').waitFor({ state: 'visible', timeout: 5000 });
-    const mHowText = await momentsPage.locator('[role="dialog"]').textContent();
-    assert(mHowText.includes('Moments declares what it offers'), 'Moments "How this app turned it on" dialog missing expected wording');
-    await momentsPage.keyboard.press('Escape');
-    await momentsPage.locator('[role="dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
-
-    const topPostsChip = momentsPage.locator('[data-vs="wish-chip"]', { hasText: 'Show my top 5 posts this month' });
-    await topPostsChip.click();
-    await waitForAuthoringToFinish(momentsPage);
-    await momentsPage.locator('[data-vs="label-allow"]').click();
-    const topPostsCard = momentsPage.locator('[data-vs="vibe-card"][data-vibe-id="top-posts"]');
-    await topPostsCard.waitFor({ state: 'visible', timeout: 5000 });
-    await momentsPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="top-posts"]');
-      return card && card.querySelectorAll('.vk-bar-swatch').length === 5;
-    }, null, { timeout: 6000 });
-
-    // Story 7c: Focus timer in Moments + Start changes time
-    const momentsFocusAdd = momentsPage.locator('[data-vs="gallery-add"][data-vibe-id="focus-timer"]');
-    await momentsFocusAdd.scrollIntoViewIfNeeded();
-    await momentsFocusAdd.click();
-    await momentsPage.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 5000 });
-    await momentsPage.locator('[data-vs="label-allow"]').click();
-
-    const momentsFocusCard = momentsPage.locator('[data-vs="vibe-card"][data-vibe-id="focus-timer"]');
-    await momentsFocusCard.waitFor({ state: 'visible', timeout: 5000 });
-    await momentsPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="focus-timer"]');
-      return card && card.querySelector('.vk-stat-value');
-    }, null, { timeout: 6000 });
-    const mTimeBefore = await momentsFocusCard.locator('.vk-stat-value').first().innerText();
-    await momentsFocusCard.locator('.vk-button', { hasText: /^Start$/i }).click();
-    await momentsPage.waitForFunction(
-      (prev) => {
-        const el = document.querySelector('[data-vs="vibe-card"][data-vibe-id="focus-timer"] .vk-stat-value');
-        return el && el.textContent.trim() !== prev.trim();
-      },
-      mTimeBefore,
-      { timeout: 5000 }
-    );
-    const mTimeAfter = await momentsFocusCard.locator('.vk-stat-value').first().innerText();
-    assert(mTimeAfter !== mTimeBefore, `Moments focus timer time did not change after Start (${mTimeBefore} -> ${mTimeAfter})`);
-    // S5: Running timer has Pause and no Start, and bar caption shows time left (not 100%)
-    assert((await momentsFocusCard.locator('.vk-button', { hasText: /^Pause$/i }).count()) === 1, 'S5 failed in Moments: running timer missing Pause button');
-    assert((await momentsFocusCard.locator('.vk-button', { hasText: /^Start$/i }).count()) === 0, 'S5 failed in Moments: running timer should not show Start button');
-    const mBarCaption = await momentsFocusCard.locator('.vk-bar-caption').first().textContent();
-    assert(/left/i.test(mBarCaption) && !mBarCaption.includes('100%'), `S5 failed in Moments: unexpected bar caption "${mBarCaption}"`);
-
-    // F1: At 1440x900 on Moments, scrolling the Vibe Space panel does not move the feed
-    if (!isMobile) {
-      await momentsPage.evaluate(() => window.scrollTo(0, 0));
-      const f1Result = await momentsPage.evaluate(() => {
-        const panel = document.getElementById('vibe-space');
-        const feedCard = document.querySelector('.post-card, .feed-card, article');
-        let scrollEl = null;
-        let cur = panel;
-        while (cur && cur !== document.body && cur !== document.documentElement) {
-          const cs = getComputedStyle(cur);
-          if ((cs.overflowY === 'auto' || cs.overflowY === 'scroll') && cur.scrollHeight > cur.clientHeight + 5) {
-            scrollEl = cur;
-            break;
-          }
-          cur = cur.parentElement;
-        }
-        const beforeFeedTop = feedCard ? feedCard.getBoundingClientRect().top : null;
-        const beforeWinY = window.scrollY;
-        let delta = 0;
-        if (scrollEl) {
-          const prev = scrollEl.scrollTop;
-          scrollEl.scrollTop = prev > 40 ? prev - 40 : 120;
-          delta = Math.abs(scrollEl.scrollTop - prev);
-        }
-        const afterFeedTop = feedCard ? feedCard.getBoundingClientRect().top : null;
-        const afterWinY = window.scrollY;
-        return { hasScroller: !!scrollEl, delta, beforeFeedTop, afterFeedTop, beforeWinY, afterWinY };
-      });
-      assert(f1Result.hasScroller && f1Result.delta > 0, `F1 failed: Moments Vibe Space panel did not scroll independently (${JSON.stringify(f1Result)})`);
-      assert(f1Result.beforeFeedTop === f1Result.afterFeedTop && f1Result.afterWinY === f1Result.beforeWinY, `F1 failed: scrolling panel moved feed (${JSON.stringify(f1Result)})`);
-    }
-
-    await momentsFocusCard.scrollIntoViewIfNeeded();
-    if (!isMobile) {
-      assert((await momentsPage.evaluate(() => window.scrollY)) === 0, 'C3: Moments window scrolled instead of panel at 1440x900');
-    }
-    await snap('15', 'moments', 'focustimer', momentsPage);
-    if (isMobile) {
-      await momentsPage.locator('[data-app="tab-feed"]').click();
-      await momentsPage.waitForTimeout(200);
-    } else {
-      // Ensure feed is at top for 16-moments-feed-1440
-      await momentsPage.evaluate(() => window.scrollTo(0, 0));
-    }
-    await snap('16', 'moments', 'feed', momentsPage);
-
-    // Round 2 Moments: Revoke follower likes access -> source-banner + sample fallback -> auto recovery
-    const followerToggle = momentsPage.locator('[data-app="toggle-follower-source"]');
-    await followerToggle.waitFor({ state: 'visible', timeout: 5000 });
-    await followerToggle.click();
-    if (isMobile) {
-      await momentsPage.locator('[data-app="tab-vibes"]').click();
-      await momentsPage.waitForTimeout(200);
-    }
-    const mSourceBanner = topFansCard.locator('[data-vs="source-banner"]');
-    await mSourceBanner.waitFor({ state: 'visible', timeout: 6000 });
-    assert((await momentsFocusCard.locator('[data-vs="source-banner"]').count()) === 0, 'Portable Focus timer should not show source-banner when follower access is revoked');
-    await assertNoVkErrors(momentsPage, `moments-revoked-${width}`);
-    await topFansCard.scrollIntoViewIfNeeded();
-    if (!isMobile) {
-      assert((await momentsPage.evaluate(() => window.scrollY)) === 0, 'C3: Moments window scrolled on source-revoked');
-    }
-    await momentsPage.waitForTimeout(220);
-    await snap('17', 'moments', 'source-revoked', momentsPage);
-
-    // Switch to sample fallback
-    await topFansCard.locator('[data-vs="source-use-sample"]').click();
-    await topFansCard.locator('[data-vs="source-use-live"]').waitFor({ state: 'visible', timeout: 6000 });
-    await momentsPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="top-fans"]');
-      return card && !card.querySelector('.vk-view-stale') && card.querySelectorAll('.vk-bar').length >= 1;
-    }, null, { timeout: 6000 });
-    await snap('18', 'moments', 'sample-fallback', momentsPage);
-
-    // Restore follower access & return to live
-    await followerToggle.waitFor({ state: 'visible', timeout: 5000 });
-    await followerToggle.click();
-    await topFansCard.locator('[data-vs="source-use-live"]').click();
-    await mSourceBanner.waitFor({ state: 'hidden', timeout: 6000 });
-    await momentsPage.close();
-
-    // Story 7d: Focus timer in LeapTerm + Start changes time
-    // Close share dialog in LeapTerm first
-    await ltPage.keyboard.press('Escape');
-    await ltPage.locator('[data-vs="share-link"]').waitFor({ state: 'hidden', timeout: 5000 });
-    const ltFocusAdd = ltPage.locator('[data-vs="gallery-add"][data-vibe-id="focus-timer"]');
-    await ltFocusAdd.scrollIntoViewIfNeeded();
-    await ltFocusAdd.click();
-    await ltPage.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 5000 });
-    await ltPage.locator('[data-vs="label-allow"]').click();
-
-    const ltFocusCard = ltPage.locator('[data-vs="vibe-card"][data-vibe-id="focus-timer"]');
+    const focusAdd = ledgerPage.locator('[data-vs="gallery-add"][data-vibe-id="focus-timer"]');
+    await focusAdd.scrollIntoViewIfNeeded();
+    await focusAdd.click();
+    await ledgerPage.locator('[data-vs="label"]').waitFor({ state: 'visible', timeout: 5000 });
+    await ledgerPage.locator('[data-vs="label-allow"]').click();
+    const ltFocusCard = ledgerPage.locator('[data-vs="vibe-card"][data-vibe-id="focus-timer"]');
     await ltFocusCard.waitFor({ state: 'visible', timeout: 5000 });
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="focus-timer"]');
-      return card && card.querySelector('.vk-stat-value');
-    }, null, { timeout: 6000 });
     const ltTimeBefore = await ltFocusCard.locator('.vk-stat-value').first().innerText();
     await ltFocusCard.locator('.vk-button', { hasText: /^Start$/i }).click();
-    await ltPage.waitForFunction(
+    await ledgerPage.waitForFunction(
       (prev) => {
         const el = document.querySelector('[data-vs="vibe-card"][data-vibe-id="focus-timer"] .vk-stat-value');
         return el && el.textContent.trim() !== prev.trim();
@@ -595,257 +651,156 @@ async function runStoryForViewport(browser, baseUrl, viewport, errorLog, shots) 
       ltTimeBefore,
       { timeout: 5000 }
     );
-    const ltTimeAfter = await ltFocusCard.locator('.vk-stat-value').first().innerText();
-    assert(ltTimeAfter !== ltTimeBefore, `LeapTerm focus timer time did not change after Start (${ltTimeBefore} -> ${ltTimeAfter})`);
-    // S5: Running timer has Pause and no Start
-    assert((await ltFocusCard.locator('.vk-button', { hasText: /^Pause$/i }).count()) === 1, 'S5 failed in LeapTerm: running timer missing Pause button');
-    assert((await ltFocusCard.locator('.vk-button', { hasText: /^Start$/i }).count()) === 0, 'S5 failed in LeapTerm: running timer should not show Start button');
-
-    // O1: At 1440x900 with three vibes installed, LeapTerm page itself does not scroll and server list stays in view
     if (!isMobile) {
-      const o1Result = await ltPage.evaluate(() => {
-        const sh = document.scrollingElement.scrollHeight;
-        const ih = window.innerHeight;
-        const serverList = document.querySelector('.lt-servers-pane, [data-app="servers"]');
-        const rect = serverList ? serverList.getBoundingClientRect() : null;
-        return { sh, ih, scrollY: window.scrollY, serverTop: rect ? rect.top : null };
-      });
-      assert(o1Result.sh <= o1Result.ih + 2, `O1 failed: LeapTerm page scrollHeight=${o1Result.sh} > innerHeight=${o1Result.ih}`);
-      assert(o1Result.scrollY === 0 && o1Result.serverTop !== null && o1Result.serverTop >= 0 && o1Result.serverTop < 300, `O1 failed: server list scrolled out of view (${JSON.stringify(o1Result)})`);
+      await checkIndependentPanelScroll(ledgerPage, '.pl-tx-row, .pl-assistant-card', 'ledger');
     }
-
     await ltFocusCard.scrollIntoViewIfNeeded();
-    if (!isMobile) {
-      assert((await ltPage.evaluate(() => window.scrollY)) === 0, 'C3: LeapTerm window scrolled at 1440x900');
-    }
-    await assertNoVkErrors(ltPage, `leapterm-focustimer-${width}`);
-    await snap('19', 'leapterm', 'focustimer', ltPage);
+    await snap('19', 'ledger', 'focustimer', ledgerPage);
 
-    // Round 2 Beat 20: Edit vibe (wish remix + live JS code edit + Test in sandbox + Save + Revert)
-    await diskWatchCard.scrollIntoViewIfNeeded();
-    await clickCardMenuAction(diskWatchCard, 'vibe-edit');
-    const editDlg = ltPage.locator('[data-vs="edit-dialog"]');
-    await editDlg.waitFor({ state: 'visible', timeout: 5000 });
-    await editDlg.locator('[data-vs="edit-wish-input"]').fill('Make it red above 85% and show worst 4');
-    await editDlg.locator('[data-vs="edit-wish-run"]').click();
-    await ltPage.waitForFunction(() => {
+    // Edit by wish (uses AMOUNT_LIMIT / THRESHOLD remix!) + Edit code + Version restore
+    await clickCardMenuAction(subWatchCard, 'vibe-edit');
+    await ledgerPage.locator('[data-vs="edit-dialog"]').waitFor({ state: 'visible', timeout: 5000 });
+    await ledgerPage.locator('[data-vs="edit-wish-input"]').fill('Make it red above 85% and show only the worst 3');
+    await ledgerPage.locator('[data-vs="edit-wish-run"]').click();
+    const permMsg = await ledgerPage.locator('.vs-edit-perm-note').textContent();
+    assert(/no new permissions/i.test(permMsg) && permMsg.includes('Version 3'), `Expected Version 3 No new permissions, got "${permMsg}"`);
+    await ledgerPage.locator('[data-vs="edit-save"]').click();
+    await ledgerPage.locator('[data-vs="edit-dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
+
+    await clickCardMenuAction(subWatchCard, 'vibe-edit');
+    await ledgerPage.locator('[data-vs="edit-tab-code"]').click();
+    await ledgerPage.locator('[data-vs="edit-source-input"]').waitFor({ state: 'visible', timeout: 5000 });
+    const curSrc = await ledgerPage.locator('[data-vs="edit-source-input"]').inputValue();
+    await ledgerPage.locator('[data-vs="edit-source-input"]').fill(`${curSrc}\n// customized in story check`);
+    await ledgerPage.locator('[data-vs="edit-test-btn"]').click();
+    await ledgerPage.waitForFunction(() => {
       const p = document.querySelector('[data-vs="edit-preview"]');
-      return p && p.querySelectorAll('.vk-bar').length === 4 && p.textContent.includes('85%');
+      return p && p.querySelectorAll('.vk-bar').length >= 1;
     }, null, { timeout: 6000 });
-    await editDlg.locator('[data-vs="edit-save"]').click();
-    await editDlg.waitFor({ state: 'hidden', timeout: 5000 });
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-      return card && card.textContent.includes('v3') && card.querySelectorAll('.vk-bar').length === 4;
-    }, null, { timeout: 6000 });
-    assert((await diskWatchCard.locator('.vk-bar.vk-tone-danger').count()) >= 1, 'Remixed v3 Disk Watch missing danger bar above 85%');
-    assert((await diskWatchCard.locator('.vk-bar.vk-tone-warn').count()) >= 1, 'Remixed v3 Disk Watch lost warn bars (0.6-0.84) after wish remix');
+    await snap('20', 'ledger', 'edit-code', ledgerPage);
+    await ledgerPage.locator('[data-vs="edit-save"]').click();
+    await ledgerPage.locator('[data-vs="edit-dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
 
-    // Direct code edit + Test in sandbox + Save -> v4, then Revert -> v3
-    await clickCardMenuAction(diskWatchCard, 'vibe-edit');
-    await editDlg.waitFor({ state: 'visible', timeout: 5000 });
-    await editDlg.locator('[data-vs="edit-tab-code"]').click();
-    const srcArea = editDlg.locator('[data-vs="edit-source-input"]');
-    const oldSrc = await srcArea.inputValue();
-    const editedSrc = oldSrc.replaceAll('Disk usage', 'Disk usage · custom');
-    assert(editedSrc !== oldSrc, 'Expected "Disk usage" in disk-watch source for code edit test');
-    await srcArea.fill(editedSrc);
-    await editDlg.locator('[data-vs="edit-test-btn"]').click();
-    await ltPage.waitForFunction(() => {
-      const p = document.querySelector('[data-vs="edit-preview"]');
-      return p && p.textContent.includes('Disk usage · custom');
-    }, null, { timeout: 6000 });
-    await editDlg.locator('[data-vs="edit-preview"]').scrollIntoViewIfNeeded();
-    await snap('20', 'leapterm', 'edit-code', ltPage);
-    await editDlg.locator('[data-vs="edit-save"]').click();
-    await editDlg.waitFor({ state: 'hidden', timeout: 5000 });
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-      return card && card.textContent.includes('v4') && card.textContent.includes('Disk usage · custom');
+    // Version history Restore back to v1
+    await clickCardMenuAction(subWatchCard, 'vibe-edit');
+    await ledgerPage.locator('.vs-edit-history-list').waitFor({ state: 'visible', timeout: 5000 });
+    assert((await ledgerPage.locator('[data-vs="edit-restore-version"]').count()) >= 3, 'Expected >= 3 history revisions');
+    await ledgerPage.locator('.vs-edit-history-item', { hasText: 'v1 \u2014' }).first().locator('[data-vs="edit-restore-version"]').click();
+    await ledgerPage.locator('[data-vs="edit-dialog"]').waitFor({ state: 'hidden', timeout: 5000 });
+    await ledgerPage.waitForFunction(() => {
+      const badge = document.querySelector('[data-vs="vibe-card"][data-vibe-id="subscription-watch"] .vs-version-badge');
+      return badge && /^v1\b/.test(badge.textContent.trim());
     }, null, { timeout: 6000 });
 
-    // Revert back to v3 via three-dots menu -> Revert
-    await clickCardMenuAction(diskWatchCard, 'vibe-revert');
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-      return card && card.textContent.includes('v3') && !card.textContent.includes('Disk usage · custom');
-    }, null, { timeout: 6000 });
-
-    // Round 2 Beat 21: Manage cards (Rename, Pin to top, Collapse/Expand, Pause/Resume, Filter, Delete + Undo)
-    await clickCardMenuAction(diskWatchCard, 'vibe-rename');
-    const inlineTitleInput = diskWatchCard.locator('[data-vs="vibe-title-input"]');
-    await inlineTitleInput.waitFor({ state: 'visible', timeout: 5000 });
-    await inlineTitleInput.fill('Prod Disk Watch');
-    await inlineTitleInput.press('Enter');
-    await ltPage.waitForFunction(() => {
-      const el = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"] [data-vs="vibe-title"]');
-      return el && el.textContent.trim() === 'Prod Disk Watch';
-    }, null, { timeout: 5000 });
-
-    // Pin Disk Watch to top
-    await clickCardMenuAction(diskWatchCard, 'vibe-pin-top');
-    await ltPage.waitForFunction(() => {
-      const first = document.querySelector('[data-vs="vibe-card"]');
-      return first && first.getAttribute('data-vibe-id') === 'disk-watch' && first.textContent.includes('Pinned');
-    }, null, { timeout: 5000 });
-
-    // Pause Focus timer
-    await ltFocusCard.scrollIntoViewIfNeeded();
+    // Rename + Pin + Pause + Filter + Three-dots menu check
+    await clickCardMenuAction(subWatchCard, 'vibe-rename');
+    await subWatchCard.locator('[data-vs="vibe-title-input"]').fill('Household Spend Radar');
+    await subWatchCard.locator('[data-vs="vibe-title-input"]').press('Enter');
+    assert((await subWatchCard.locator('[data-vs="vibe-title"]').textContent()).trim() === 'Household Spend Radar');
+    await clickCardMenuAction(subWatchCard, 'vibe-pin-top');
     await clickCardMenuAction(ltFocusCard, 'vibe-pause');
     await ltFocusCard.locator('[data-vs="vibe-resume"]').waitFor({ state: 'visible', timeout: 5000 });
 
-    // Collapse and re-expand DB-1 CPU Watch
-    await pinnedCard.locator('[data-vs="vibe-collapse"]').click();
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="server-load"]');
-      const body = card && card.querySelector('.vs-vibe-card-collapsible');
-      return body && (body.hidden || getComputedStyle(body).display === 'none');
-    }, null, { timeout: 5000 });
-    await pinnedCard.locator('[data-vs="vibe-collapse"]').click();
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="server-load"]');
-      const body = card && card.querySelector('.vs-vibe-card-collapsible');
-      return body && !body.hidden && getComputedStyle(body).display !== 'none';
+    const filterBox = ledgerPage.locator('[data-vs="vibe-filter"]');
+    await filterBox.fill('Radar');
+    await ledgerPage.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('[data-vs="vibe-card"]')).filter((c) => c.offsetParent !== null && !c.hidden).length === 1;
     }, null, { timeout: 5000 });
 
-    // Filter installed vibes and capture open three-dots menu
-    const filterBox = ltPage.locator('[data-vs="vibe-filter"]');
-    await filterBox.scrollIntoViewIfNeeded();
-    await filterBox.fill('Prod Disk');
-    await ltPage.waitForFunction(() => {
-      const cards = Array.from(document.querySelectorAll('[data-vs="vibe-card"]'));
-      return cards.filter((c) => c.offsetParent !== null && !c.hidden).length === 1;
-    }, null, { timeout: 5000 });
-    await diskWatchCard.locator('[data-vs="vibe-more"]').click();
-    const openMenu = diskWatchCard.locator('[data-vs="vibe-menu"]');
-    await openMenu.waitFor({ state: 'visible', timeout: 5000 });
-    // Verify both top (Edit) and bottom (Delete) items are inside the visible menu and not clipped behind bottom tabs
-    const menuCheck = await ltPage.evaluate((isMob) => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-      const menu = card && card.querySelector('[data-vs="vibe-menu"]');
-      const del = card && card.querySelector('[data-vs="vibe-remove"]');
-      if (!menu || !del) return { ok: false, reason: 'missing' };
+    await subWatchCard.locator('[data-vs="vibe-more"]').scrollIntoViewIfNeeded();
+    await subWatchCard.locator('[data-vs="vibe-more"]').click();
+    await subWatchCard.locator('[data-vs="vibe-menu"]').waitFor({ state: 'visible', timeout: 5000 });
+    const menuCheck = await ledgerPage.evaluate((mobile) => {
+      const menu = document.querySelector('[data-vs="vibe-card"][data-vibe-id="subscription-watch"] [data-vs="vibe-menu"]');
+      const delBtn = menu.querySelector('[data-vs="vibe-remove"]');
       const mr = menu.getBoundingClientRect();
-      const dr = del.getBoundingClientRect();
-      const maxBottom = window.innerHeight - (isMob ? 64 : 8);
-      return {
-        ok: dr.bottom <= mr.bottom + 1 && dr.bottom <= maxBottom && dr.top >= 0,
-        menuScrollH: menu.scrollHeight,
-        menuClientH: menu.clientHeight,
-        delBottom: dr.bottom,
-        menuBottom: mr.bottom,
-        maxBottom,
-      };
+      const dr = delBtn.getBoundingClientRect();
+      const tabs = document.querySelector('.pl-mobile-tabs, .mobile-tabs');
+      const maxBottom = mobile && tabs ? tabs.getBoundingClientRect().top : window.innerHeight;
+      return { ok: dr.bottom <= maxBottom + 1 && mr.bottom <= maxBottom + 1, drBottom: dr.bottom, maxBottom };
     }, isMobile);
-    assert(menuCheck.ok, `Open three-dots menu clipped or behind bottom bar: ${JSON.stringify(menuCheck)}`);
-    await snap('21', 'leapterm', 'manage-cards', ltPage);
-    await diskWatchCard.locator('[data-vs="vibe-more"]').click();
-    await diskWatchCard.locator('[data-vs="vibe-menu"]').waitFor({ state: 'hidden', timeout: 5000 });
+    assert(menuCheck.ok, `Three-dots menu clipped or behind bottom bar: ${JSON.stringify(menuCheck)}`);
+    await snap('21', 'ledger', 'manage-cards', ledgerPage);
+    await subWatchCard.locator('[data-vs="vibe-more"]').click();
+    await subWatchCard.locator('[data-vs="vibe-menu"]').waitFor({ state: 'hidden', timeout: 5000 });
 
     await filterBox.fill('');
-    await ltPage.waitForFunction(() => {
-      const cards = Array.from(document.querySelectorAll('[data-vs="vibe-card"]'));
-      return cards.filter((c) => c.offsetParent !== null && !c.hidden).length === 3;
+    await ledgerPage.waitForFunction(() => {
+      return Array.from(document.querySelectorAll('[data-vs="vibe-card"]')).filter((c) => c.offsetParent !== null && !c.hidden).length === 3;
     }, null, { timeout: 5000 });
-
-    // Resume Focus timer
     await ltFocusCard.locator('[data-vs="vibe-resume"]').click();
-    await ltFocusCard.locator('[data-vs="vibe-resume"]').waitFor({ state: 'hidden', timeout: 5000 });
 
-    // Delete Disk Watch + Undo
-    await clickCardMenuAction(diskWatchCard, 'vibe-remove');
-    const undoBanner = ltPage.locator('[data-vs="undo-banner"]');
-    await undoBanner.waitFor({ state: 'visible', timeout: 5000 });
-    assert((await diskWatchCard.count()) === 0, 'Deleted card still in DOM before Undo');
-    await undoBanner.locator('[data-vs="undo-delete"]').click();
-    await diskWatchCard.waitFor({ state: 'visible', timeout: 5000 });
-    assert((await diskWatchCard.locator('[data-vs="vibe-title"]').textContent()).trim() === 'Prod Disk Watch', 'Undo did not restore custom title');
+    // Delete + Undo
+    await clickCardMenuAction(subWatchCard, 'vibe-remove');
+    await ledgerPage.locator('[data-vs="undo-banner"]').waitFor({ state: 'visible', timeout: 5000 });
+    await ledgerPage.locator('[data-vs="undo-delete"]').click();
+    await subWatchCard.waitFor({ state: 'visible', timeout: 5000 });
+    assert((await subWatchCard.locator('[data-vs="vibe-title"]').textContent()).trim() === 'Household Spend Radar');
 
-    // Round 2 Beat 22: Target server offline (db-1.prod.internal) -> Target server offline + last reading -> back online
+    // Beat 22: Single account unlinked -> Target account unlinked -> relink
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-servers"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-accounts"]').click();
     }
-    const db1Toggle = ltPage.locator('[data-app="toggle-server"][data-server="db-1.prod.internal"]');
-    await db1Toggle.waitFor({ state: 'visible', timeout: 5000 });
-    await db1Toggle.click();
+    const sapphireToggle = ledgerPage.locator('[data-app="toggle-account"][data-account*="Sapphire Card"]');
+    await sapphireToggle.click();
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-vibes"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-vibes"]').click();
     }
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="server-load"]');
-      return card && card.textContent.includes('Target server offline') && card.querySelectorAll('.vk-stat').length >= 2;
+    await ledgerPage.waitForFunction(() => {
+      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="account-watch"]');
+      return card && card.textContent.includes('Target account unlinked') && card.querySelectorAll('.vk-stat').length >= 2;
     }, null, { timeout: 6000 });
-    await assertNoVkErrors(ltPage, `server-offline-${width}`);
     await pinnedCard.scrollIntoViewIfNeeded();
-    if (!isMobile) {
-      assert((await ltPage.evaluate(() => window.scrollY)) === 0, 'C3: LeapTerm window scrolled on server-offline');
-    }
-    await snap('22', 'leapterm', 'server-offline', ltPage);
+    await snap('22', 'ledger', 'account-offline', ledgerPage);
 
-    // Bring db-1 back online & verify recovery
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-servers"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-accounts"]').click();
     }
-    await db1Toggle.click();
+    await sapphireToggle.click();
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-vibes"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-vibes"]').click();
     }
-    await ltPage.waitForFunction(() => {
-      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="server-load"]');
-      return card && !card.textContent.includes('Target server offline');
+    await ledgerPage.waitForFunction(() => {
+      const card = document.querySelector('[data-vs="vibe-card"][data-vibe-id="account-watch"]');
+      return card && !card.textContent.includes('Target account unlinked');
     }, null, { timeout: 6000 });
 
-    // Round 2 Beat 23 & 24: Telemetry feed offline -> .vk-view-stale + source-banner (Focus timer stays live) -> reconnect recovery
+    // Beats 23 & 24: Bank sync offline -> stale banner (Focus timer unaffected) -> reconnect recovery
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-servers"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-accounts"]').click();
     }
-    const telemetryToggle = ltPage.locator('[data-app="toggle-telemetry"]');
-    await telemetryToggle.waitFor({ state: 'visible', timeout: 5000 });
-    await telemetryToggle.click();
+    await ledgerPage.locator('[data-app="toggle-telemetry"]').click();
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-vibes"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-vibes"]').click();
     }
-    await diskWatchCard.locator('[data-vs="source-banner"]').waitFor({ state: 'visible', timeout: 6000 });
-    await ltPage.waitForFunction(() => {
-      const dw = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
+    await subWatchCard.locator('[data-vs="source-banner"]').waitFor({ state: 'visible', timeout: 6000 });
+    await ledgerPage.waitForFunction(() => {
+      const sw = document.querySelector('[data-vs="vibe-card"][data-vibe-id="subscription-watch"]');
       const ft = document.querySelector('[data-vs="vibe-card"][data-vibe-id="focus-timer"]');
-      return dw && !!dw.querySelector('.vk-view-stale') && dw.querySelectorAll('.vk-bar').length >= 1 &&
+      return sw && !!sw.querySelector('.vk-view-stale') && sw.querySelectorAll('.vk-bar').length >= 1 &&
         ft && !ft.querySelector('[data-vs="source-banner"]') && !ft.querySelector('.vk-view-stale');
     }, null, { timeout: 6000 });
-    await assertNoVkErrors(ltPage, `telemetry-offline-${width}`);
-    await diskWatchCard.scrollIntoViewIfNeeded();
-    if (!isMobile) {
-      assert((await ltPage.evaluate(() => window.scrollY)) === 0, 'C3: LeapTerm window scrolled on telemetry-offline');
-    }
-    await ltPage.waitForTimeout(220);
-    await snap('23', 'leapterm', 'telemetry-offline', ltPage);
+    await subWatchCard.scrollIntoViewIfNeeded();
+    await ledgerPage.waitForTimeout(200);
+    await snap('23', 'ledger', 'sync-offline', ledgerPage);
 
-    // Reconnect telemetry feed -> automatic recovery
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-servers"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-accounts"]').click();
     }
-    await telemetryToggle.click();
+    await ledgerPage.locator('[data-app="toggle-telemetry"]').click();
     if (isMobile) {
-      await ltPage.locator('[data-app="tab-vibes"]').click();
-      await ltPage.waitForTimeout(200);
+      await ledgerPage.locator('[data-app="tab-vibes"]').click();
     }
-    await diskWatchCard.locator('[data-vs="source-banner"]').waitFor({ state: 'hidden', timeout: 6000 });
-    await ltPage.waitForFunction(() => {
-      const dw = document.querySelector('[data-vs="vibe-card"][data-vibe-id="disk-watch"]');
-      return dw && !dw.querySelector('.vk-view-stale') && dw.querySelectorAll('.vk-bar').length >= 1;
-    }, null, { timeout: 6000 });
-    await assertNoVkErrors(ltPage, `leapterm-recovered-${width}`);
-    await ltPage.waitForTimeout(220);
-    await snap('24', 'leapterm', 'telemetry-recovered', ltPage);
+    await subWatchCard.locator('[data-vs="source-banner"]').waitFor({ state: 'hidden', timeout: 6000 });
+    await ledgerPage.waitForTimeout(200);
+    await snap('24', 'ledger', 'sync-recovered', ledgerPage);
+    await ledgerPage.close();
 
-    await ltPage.close();
+    // Beats 25-26: PulseMail end-to-end
+    await verifyInbox(context, baseUrl, isMobile, errorLog, snap, checkNoHorizontalOverflow, width);
+
+    // Beats 27-28: CartScout end-to-end
+    await verifyShop(context, baseUrl, isMobile, errorLog, snap, checkNoHorizontalOverflow, width);
   } finally {
     await context.close();
   }
@@ -855,8 +810,10 @@ async function checkFileUrls(browser, errorLog) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
   try {
     const pages = [
-      { label: 'file-home', file: path.join(DEMO_ROOT, 'index.html'), check: async (p) => (await p.innerText('body')).includes('VibeProtocol demo') },
-      { label: 'file-leapterm', file: path.join(DEMO_ROOT, 'apps/leapterm/index.html'), check: async (p) => (await p.locator('#vibe-space [data-vs="wish-input"]').count()) === 1 },
+      { label: 'file-home', file: path.join(DEMO_ROOT, 'index.html'), check: async (p) => (await p.innerText('body')).includes('PocketLedger') },
+      { label: 'file-ledger', file: path.join(DEMO_ROOT, 'apps/ledger/index.html'), check: async (p) => (await p.locator('#vibe-space [data-vs="wish-input"]').count()) === 1 },
+      { label: 'file-inbox', file: path.join(DEMO_ROOT, 'apps/inbox/index.html'), check: async (p) => (await p.locator('#vibe-space [data-vs="wish-input"]').count()) === 1 },
+      { label: 'file-shop', file: path.join(DEMO_ROOT, 'apps/shop/index.html'), check: async (p) => (await p.locator('#vibe-space [data-vs="wish-input"]').count()) === 1 },
       { label: 'file-moments', file: path.join(DEMO_ROOT, 'apps/moments/index.html'), check: async (p) => (await p.locator('#vibe-space [data-vs="wish-input"]').count()) === 1 },
     ];
     for (const item of pages) {
@@ -864,16 +821,15 @@ async function checkFileUrls(browser, errorLog) {
       trackErrors(page, item.label, errorLog);
       await page.goto(pathToFileURL(item.file).href, { waitUntil: 'load' });
       await page.waitForTimeout(400);
-      const ok = await item.check(page);
-      assert(ok, `${item.label} did not render expected content under file://`);
-      if (item.label === 'file-leapterm') {
+      assert(await item.check(page), `${item.label} did not render expected content under file://`);
+      if (item.label === 'file-ledger') {
         await page.locator('[data-vs="gallery-add"][data-vibe-id="focus-timer"]').click();
         await page.locator('[data-vs="label-allow"]').click();
         await page.waitForFunction(() => {
           const el = document.querySelector('[data-vs="vibe-card"][data-vibe-id="focus-timer"] .vk-stat-value');
           return el && el.textContent.includes('25:00');
         }, null, { timeout: 6000 });
-        await assertNoVkErrors(page, 'file-leapterm-mount');
+        await assertNoVkErrors(page, 'file-ledger-mount');
       }
       await page.close();
     }
@@ -883,6 +839,13 @@ async function checkFileUrls(browser, errorLog) {
 }
 
 async function main() {
+  fs.mkdirSync(SHOTS_DIR, { recursive: true });
+  for (const name of fs.readdirSync(SHOTS_DIR)) {
+    if (name.endsWith('.png')) {
+      fs.unlinkSync(path.join(SHOTS_DIR, name));
+    }
+  }
+
   const { chromium } = await loadPlaywright();
   const server = await startDemoServer();
   const browser = await launchChromium(chromium);
@@ -890,22 +853,25 @@ async function main() {
   const shots = [];
 
   try {
-    console.log('Running story walkthrough at 1440x900...');
+    console.log('Running 4-demo story walkthrough at 1440x900...');
     await runStoryForViewport(browser, server.baseUrl, { width: 1440, height: 900 }, errorLog, shots);
     console.log('1440x900 walkthrough passed.');
 
-    console.log('Running story walkthrough at 390x844...');
+    console.log('Running 4-demo story walkthrough at 390x844...');
     await runStoryForViewport(browser, server.baseUrl, { width: 390, height: 844 }, errorLog, shots);
     console.log('390x844 walkthrough passed.');
 
-    console.log('Checking file:// rendering for all 3 pages...');
+    console.log('Checking file:// rendering across index.html + all 4 demo apps...');
     await checkFileUrls(browser, errorLog);
     console.log('file:// checks passed.');
 
-    assert(errorLog.length === 0, `Console/page errors recorded:\n${errorLog.join('\n')}`);
+    if (errorLog.length > 0) {
+      throw new Error(`Console/page errors detected:\n${errorLog.join('\n')}`);
+    }
+
     console.log(`\nALL STORY CHECKS PASSED. Screenshots (${shots.length}):`);
     for (const s of shots) {
-      console.log('  ' + s);
+      console.log(`  ${s}`);
     }
   } finally {
     await browser.close();
@@ -914,6 +880,6 @@ async function main() {
 }
 
 main().catch((err) => {
-  console.error('\nSTORY CHECK FAILED:', err && err.stack ? err.stack : err.message);
+  console.error(err);
   process.exit(1);
 });

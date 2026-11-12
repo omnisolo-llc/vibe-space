@@ -31,7 +31,7 @@ Vibe Space panel (⋯ management) & inline Temporary agent embeds
 | `runtime` | Rust Wasm interpreter, Ed25519 signature verification, `PackageStore`, activation revisions, resource limits |
 | `dart` | `package:vibe_space`: `VibeProtocolHost`, `VibeSealedHandle`, `VibePermissionLabel`, `VibeSpaceStore`, `VibeReadLedger`, `VibeHostRegistry`, schemas, and effect snapshots |
 | `flutter` | `package:vibe_space_flutter`: `VibeView`, `VibeCanvasView`, `VibeSpacePanel` (`⋯` lifecycle menu, edit/history, source banners), `VibeEmbedCard`, and generated browser worker source |
-| `demo` | Zero-dependency interactive browser demo of VibeProtocol across two unrelated hosts (**LeapTerm** and **Moments**) |
+| `demo` | Zero-dependency interactive browser demo of VibeProtocol across four everyday host apps (**PocketLedger**, **PulseMail**, **CartScout**, and **Moments**) |
 | `sdk/rust`, `sdk/c` | Guest ABI helpers and compiling examples (`examples/hello-rust`, `examples/hello-c`) |
 | `sdk/typescript` | JSON protocol types (`index.d.ts`), `SealedHandle` / `ViewTone`, and package verification helpers (`index.mjs`) |
 | `web/worker.js` | Disposable browser worker with no Wasm imports |
@@ -54,15 +54,31 @@ Vibe Space supports every major guest language, UI toolkit, and human language b
   - **Terminal / TUI, Markdown & Escaped HTML**: `renderToTerminal`, `renderToMarkdown`, and `renderToHtmlString`.
 - **All human languages (i18n, UTF-8 & RTL)**: Built-in locale packs (`en`, `zh`, `ja`, `ko`, `es`, `fr`, `de`, `ar` with `rtl: true`), automatic RTL layout direction, and full UTF-8 CJK/Arabic/emoji safety in share tokens and host metadata.
 
+## Interactive Demos
+
+Run all four interactive VibeProtocol host demos locally with zero build step, `npm install`, or external network access:
+
+```sh
+cd demo && python3 -m http.server 8765
+```
+
+Then open <http://localhost:8765/> (or open `demo/index.html` directly from disk via `file://`).
+
+| Demo App | Entry Point | What Users Vibe | What Stays Sealed |
+| --- | --- | --- | --- |
+| **PocketLedger** | `demo/apps/ledger/index.html` | Personal finance & subscriptions: *Subscription Watch* ($20/mo & budget bars), *Account Cashflow* assistant embed + 90d sparklines, `?as=partner` household copy | Merchant names & account names/numbers |
+| **PulseMail** | `demo/apps/inbox/index.html` | Email & VIP inbox triage: *Reply SLA Radar* (wait-hours alerts), *Newsletter Clutter*, *VIP Reply Queue* assistant embed, `?as=teammate` copy | Sender addresses & subject lines |
+| **CartScout** | `demo/apps/shop/index.html` | Wishlist & 90-day price tracker: *True Deal Radar* (% below typical price), *90-Day Price Watch* assistant embed + sparkline, `?as=friend` copy | Product names, seller names & package details |
+| **Moments** | `demo/apps/moments/index.html` | Social photo feed: *Top posts this month* (swatch bars), *Top fans* ranking | Follower usernames |
+
+All four apps also run the portable **Focus timer** (`demo/vibes/focus-timer.js`, `needs: []`), support full `⋯` card lifecycle management (custom titles/notes, wish/code editing, version history & revert, pause/pin/reorder/filter, delete + undo), and demonstrate graceful offline/revoked data-source recovery. See [demo/README.md](demo/README.md) for the full real vs. scripted breakdown.
+
 ## Quickstart
 
 ### 1. Run the interactive browser demo
 
-No build step, `npm install`, or external network access is needed:
-
 ```sh
-cd demo
-python3 -m http.server 8765
+cd demo && python3 -m http.server 8765
 ```
 
 Open `http://localhost:8765/` (or open `demo/index.html` directly from disk via `file://`).

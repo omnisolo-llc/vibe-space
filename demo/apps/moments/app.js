@@ -628,7 +628,8 @@
         ],
         gallery: window.VIBE_GALLERY || [],
         shareTargets: [
-          { label: 'Open in LeapTerm', url: '../leapterm/index.html' }
+          { label: 'Open in PocketLedger', url: '../ledger/index.html' },
+          { label: 'Open in PulseMail', url: '../inbox/index.html' }
         ]
       });
     }
