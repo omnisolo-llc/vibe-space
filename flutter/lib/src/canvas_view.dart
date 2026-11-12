@@ -31,6 +31,7 @@ class VibeCanvasView extends StatefulWidget {
     this.markdownBuilder,
     this.webViewportBuilder,
     this.autoSubmitTimeoutSeconds,
+    this.formatBadgeLabel,
   });
 
   final VibeCanvasPayload payload;
@@ -40,6 +41,10 @@ class VibeCanvasView extends StatefulWidget {
   final VibeCanvasMarkdownBuilder? markdownBuilder;
   final VibeCanvasWebViewportBuilder? webViewportBuilder;
   final int? autoSubmitTimeoutSeconds;
+
+  /// Overrides the header format pill label. `null` keeps the default format
+  /// label behavior; `''` hides the format badge.
+  final String? formatBadgeLabel;
 
   @override
   State<VibeCanvasView> createState() => _VibeCanvasViewState();
@@ -94,8 +99,12 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
     return LayoutBuilder(
       builder: (context, constraints) {
         final isCompact = constraints.maxWidth < 600;
-        final showFormatBadge = payload.format != VibeCanvasFormat.vibeUi &&
-            !payload.format.label.contains('Vibe Declarative');
+        final customBadgeLabel = widget.formatBadgeLabel;
+        final badgeText = customBadgeLabel ?? payload.format.label;
+        final showFormatBadge = customBadgeLabel != null
+            ? customBadgeLabel.isNotEmpty
+            : payload.format != VibeCanvasFormat.vibeUi &&
+                !payload.format.label.contains('Vibe Declarative');
         final badgeWidget = showFormatBadge
             ? Container(
                 key: const ValueKey('vibe-canvas-format-badge'),
@@ -105,7 +114,7 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: Text(
-                  payload.format.label,
+                  badgeText,
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: theme.textTheme.labelSmall?.copyWith(

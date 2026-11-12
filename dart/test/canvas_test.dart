@@ -174,9 +174,16 @@ void main() {
     expect(isReadOnlyCanvasMcpTool('client.canvas.render'), isFalse);
 
     expect(isReadOnlyCanvasShellCommand('LC_ALL=C cat /proc/net/dev'), isTrue);
+    expect(isReadOnlyCanvasShellCommand('LANG=C uptime'), isTrue);
     expect(
       isReadOnlyCanvasShellCommand(
         'LC_ALL=C ps -eo pid,user,%cpu,%mem,rss,comm --sort=-%cpu,-%mem | head -n 6',
+      ),
+      isTrue,
+    );
+    expect(
+      isReadOnlyCanvasShellCommand(
+        'df -h | grep /dev | sort -k5 | uniq -c | wc -l',
       ),
       isTrue,
     );
@@ -184,6 +191,70 @@ void main() {
     expect(isReadOnlyCanvasShellCommand('cat /proc/meminfo > /tmp/out'), isFalse);
     expect(isReadOnlyCanvasShellCommand('sudo systemctl restart nginx'), isFalse);
     expect(isReadOnlyCanvasShellCommand('kill -9 1024'), isFalse);
+
+    // Regression tests for allowlist bypasses
+    expect(isReadOnlyCanvasShellCommand('python3 -c "print(1)"'), isFalse);
+    expect(isReadOnlyCanvasShellCommand("perl -e 'print 1'"), isFalse);
+    expect(isReadOnlyCanvasShellCommand('find /tmp -delete'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('sed -i s/a/b/ /tmp/file'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.ssh/id_rsa'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.ssh/id_ed25519'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.aws/credentials'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat /app/.env'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat /etc/shadow'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat /etc/sudoers'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('ps | awk "{print \$1}"'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('ls | xargs rm'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('curl https://example.com'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('wget https://example.com'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('ls; id'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('ls && id'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('ls || id'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('echo `whoami`'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('echo \x00'), isFalse);
+
+    // Case-sensitive short flag regressions
+    expect(isReadOnlyCanvasShellCommand('dmesg -D'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('dmesg -C'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('dmesg -E'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('dmesg -F /tmp/x'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('dmesg -c'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('dmesg -T'), isTrue);
+    expect(isReadOnlyCanvasShellCommand('sort -T /tmp'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('sort -t:'), isTrue);
+    expect(isReadOnlyCanvasShellCommand('tail -F /var/log/syslog'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('grep -F foo'), isTrue);
+    expect(isReadOnlyCanvasShellCommand('grep -f /tmp/patterns'), isFalse);
+
+    // Extended sensitive-path and kubectl secret checks
+    expect(isReadOnlyCanvasShellCommand('cat /proc/self/environ'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat /proc/42/environ'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.bash_history'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.zsh_history'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.python_history'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.pgpass'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.my.cnf'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.vault-token'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat ~/.config/gh/hosts.yml'), isFalse);
+    expect(
+      isReadOnlyCanvasShellCommand('cat ~/.config/gcloud/application_default.json'),
+      isFalse,
+    );
+    expect(isReadOnlyCanvasShellCommand('ls ~/.azure'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('ls ~/.terraform.d'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat /app/credentials'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat /app/credentials.json'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('kubectl get secret'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('kubectl get secrets -n prod'), isFalse);
+    expect(
+      isReadOnlyCanvasShellCommand('kubectl describe secret/api-key'),
+      isFalse,
+    );
+    expect(isReadOnlyCanvasShellCommand('kubectl get pods,secrets'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('kubectl get pods'), isTrue);
+    expect(isReadOnlyCanvasShellCommand('docker ps'), isTrue);
+    expect(isReadOnlyCanvasShellCommand('docker inspect x'), isFalse);
+    expect(isReadOnlyCanvasShellCommand('cat /proc/meminfo'), isTrue);
   });
 
   test('VibeMcpToolCatalog resolves canonical names, tags, and conditional exposure', () {

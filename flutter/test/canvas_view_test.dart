@@ -218,4 +218,62 @@ void main() {
     expect(find.byType(DataTable), findsOneWidget);
     expect(find.text('redis-server'), findsOneWidget);
   });
+
+  testWidgets(
+    'VibeCanvasView formatBadgeLabel controls format badge visibility and text',
+    (tester) async {
+      const payload = VibeCanvasPayload(
+        canvasId: 'canvas-badge-1',
+        taskId: 'task-badge-1',
+        title: 'Format Badge Test',
+        format: VibeCanvasFormat.markdown,
+        content: '# Hello',
+        layout: VibeCanvasLayout.splitRight,
+      );
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: VibeCanvasView(payload: payload),
+          ),
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('vibe-canvas-format-badge')),
+        findsOneWidget,
+      );
+      expect(find.text(VibeCanvasFormat.markdown.label), findsOneWidget);
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: VibeCanvasView(
+              payload: payload,
+              formatBadgeLabel: '',
+            ),
+          ),
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('vibe-canvas-format-badge')),
+        findsNothing,
+      );
+
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: VibeCanvasView(
+              payload: payload,
+              formatBadgeLabel: 'Custom Badge',
+            ),
+          ),
+        ),
+      );
+      expect(
+        find.byKey(const ValueKey('vibe-canvas-format-badge')),
+        findsOneWidget,
+      );
+      expect(find.text('Custom Badge'), findsOneWidget);
+    },
+  );
 }
