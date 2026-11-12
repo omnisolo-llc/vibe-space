@@ -1,9 +1,60 @@
 import 'dart:async';
 
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:vibe_space/vibe_space.dart' show VibeUiCompatibilityAdapter;
+
+import 'vibe_widget_adapter.dart';
 
 const Set<String> _validTones = <String>{'default', 'ok', 'warn', 'danger'};
 final RegExp _hexColorRe = RegExp(r'^#[0-9a-fA-F]{6}$');
+
+const Set<String> _kCanonicalVibeNodeTypes = <String>{
+  'heading',
+  'text',
+  'badge',
+  'stat',
+  'bar',
+  'sparkline',
+  'row',
+  'card',
+  'column',
+  'divider',
+  'progress',
+  'action',
+  'button',
+  'input',
+  'checkbox',
+  'option_group',
+  'table',
+};
+
+/// Returns whether [map] looks like an external UI dialect (A2UI,
+/// AdaptiveCard, Markdown wrapper, or PascalCase A2UI component).
+bool isExternalUiPayloadMap(Map<dynamic, dynamic> map) {
+  final rawType = map['type'];
+  if (rawType == 'AdaptiveCard' || rawType == 'markdown') return true;
+  if (map['format'] == 'markdown') return true;
+  if (map.containsKey('surfaceUpdate') ||
+      map.containsKey('beginRendering') ||
+      map['components'] is List ||
+      map.containsKey('component')) {
+    return true;
+  }
+  if (rawType is String && !_kCanonicalVibeNodeTypes.contains(rawType)) {
+    return true;
+  }
+  return false;
+}
+
+/// Normalizes canonical `VibeView`, A2UI, AdaptiveCard, or Markdown wrapper
+/// maps into a canonical `VibeView` map.
+Map<String, dynamic> normalizeVibeViewInput(Map<String, dynamic> raw) {
+  if (isExternalUiPayloadMap(raw)) {
+    return Map<String, dynamic>.from(VibeUiCompatibilityAdapter.adapt(raw));
+  }
+  return raw;
+}
 
 bool _isSealedHandleMap(Object? raw) {
   if (raw is! Map || raw.length != 1) return false;
@@ -274,6 +325,7 @@ class VibeView extends StatelessWidget {
     this.depth = 0,
     this.autoSubmitTimeoutSeconds,
     this.resolveSealed,
+    this.adapter,
   });
   final Map<String, dynamic> value;
   final void Function(String, Map<String, dynamic>) onCommand;
@@ -281,15 +333,29 @@ class VibeView extends StatelessWidget {
   final int depth;
   final int? autoSubmitTimeoutSeconds;
   final String? Function(Object? handle)? resolveSealed;
+  final VibeWidgetAdapter? adapter;
+
+  VibeWidgetAdapter _effectiveAdapter(BuildContext context) {
+    return adapter ??
+        VibeWidgetAdapterScope.maybeOf(context) ??
+        const VibeWidgetAdapter.material();
+  }
 
   Color _accentColor(BuildContext context) {
     final scope = VibeViewToneScope.maybeOf(context);
-    return scope?.accent ?? Theme.of(context).colorScheme.primary;
+    if (scope != null) return scope.accent;
+    if (_effectiveAdapter(context).usesCupertino) {
+      return CupertinoColors.activeBlue.resolveFrom(context);
+    }
+    return Theme.of(context).colorScheme.primary;
   }
 
   Color _mutedColor(BuildContext context) {
     final scope = VibeViewToneScope.maybeOf(context);
     if (scope != null) return scope.mutedText;
+    if (_effectiveAdapter(context).usesCupertino) {
+      return CupertinoColors.secondaryLabel.resolveFrom(context);
+    }
     return Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.72) ??
         Colors.grey;
   }
@@ -317,12 +383,20 @@ class VibeView extends StatelessWidget {
   Color _borderColor(BuildContext context) {
     final scope = VibeViewToneScope.maybeOf(context);
     if (scope != null) return scope.border;
+    if (_effectiveAdapter(context).usesCupertino) {
+      return CupertinoColors.separator.resolveFrom(context);
+    }
     return Theme.of(context).dividerColor.withValues(alpha: 0.35);
   }
 
   Color _surfaceColor(BuildContext context) {
     final scope = VibeViewToneScope.maybeOf(context);
     if (scope != null) return scope.surface;
+    if (_effectiveAdapter(context).usesCupertino) {
+      return CupertinoColors.secondarySystemGroupedBackground.resolveFrom(
+        context,
+      );
+    }
     return Theme.of(context).colorScheme.surface;
   }
 
@@ -343,6 +417,7 @@ class VibeView extends StatelessWidget {
   Widget _buildValueWidget(
     BuildContext context,
     Object? raw, {
+    required VibeWidgetAdapter effectiveAdapter,
     TextStyle? style,
     bool selectable = false,
     bool ellipsis = false,
@@ -351,6 +426,9 @@ class VibeView extends StatelessWidget {
       final resolved = resolveSealed?.call(raw);
       if (resolved == null || resolved.isEmpty) {
         return const SizedBox.shrink();
+      }
+      if (effectiveAdapter.sealedTextBuilder != null) {
+        return effectiveAdapter.sealedTextBuilder!(context, resolved, style);
       }
       final accent = _accentColor(context);
       final sealedStyle = (style ?? const TextStyle()).copyWith(
@@ -377,7 +455,7 @@ class VibeView extends StatelessWidget {
     }
 
     final text = _resolvePlainString(raw);
-    if (selectable) {
+    if (selectable && !effectiveAdapter.usesCupertino) {
       return SelectableText(text, style: style);
     }
     return Text(
@@ -399,37 +477,76 @@ class VibeView extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (depth > 16) throw const FormatException('Extension view is too deep');
-    switch (value['type']) {
+    final node = depth == 0 ? normalizeVibeViewInput(value) : value;
+    final effectiveAdapter = _effectiveAdapter(context);
+    final usesCupertino = effectiveAdapter.usesCupertino;
+
+    switch (node['type']) {
       case 'heading':
-        return _buildValueWidget(
+        final toneColor = _toneColor(context, node['tone']);
+        final child = _buildValueWidget(
           context,
-          value['text'],
-          selectable: !_isSealedHandleMap(value['text']),
+          node['text'],
+          effectiveAdapter: effectiveAdapter,
+          selectable: !_isSealedHandleMap(node['text']),
           style: TextStyle(
             fontSize: 18,
             fontWeight: FontWeight.bold,
-            color: _toneColor(context, value['tone']),
+            color: toneColor,
           ),
         );
+        if (effectiveAdapter.headingBuilder != null) {
+          return effectiveAdapter.headingBuilder!(
+            context,
+            node,
+            child,
+            toneColor,
+          );
+        }
+        return child;
       case 'text':
-        return _buildValueWidget(
+        final toneColor = _toneColor(context, node['tone']);
+        final child = _buildValueWidget(
           context,
-          value['text'],
-          selectable: !_isSealedHandleMap(value['text']),
+          node['text'],
+          effectiveAdapter: effectiveAdapter,
+          selectable: !_isSealedHandleMap(node['text']),
           style: TextStyle(
-            fontWeight: (value['bold'] == true || value['strong'] == true)
+            fontWeight: (node['bold'] == true || node['strong'] == true)
                 ? FontWeight.bold
                 : null,
-            fontStyle: value['italic'] == true ? FontStyle.italic : null,
-            fontFamily: (value['code'] == true || value['mono'] == true)
+            fontStyle: node['italic'] == true ? FontStyle.italic : null,
+            fontFamily: (node['code'] == true || node['mono'] == true)
                 ? 'monospace'
                 : null,
-            color: _toneColor(context, value['tone']),
+            color: toneColor,
           ),
         );
+        if (effectiveAdapter.textBuilder != null) {
+          return effectiveAdapter.textBuilder!(context, node, child, toneColor);
+        }
+        return child;
       case 'badge':
         final badgeColor =
-            _toneColor(context, value['tone']) ?? _accentColor(context);
+            _toneColor(context, node['tone']) ?? _accentColor(context);
+        final inner = _buildValueWidget(
+          context,
+          node['text'],
+          effectiveAdapter: effectiveAdapter,
+          style: TextStyle(
+            fontSize: 11.5,
+            fontWeight: FontWeight.w600,
+            color: badgeColor,
+          ),
+        );
+        if (effectiveAdapter.badgeBuilder != null) {
+          return effectiveAdapter.badgeBuilder!(
+            context,
+            node,
+            inner,
+            badgeColor,
+          );
+        }
         return Align(
           alignment: Alignment.centerLeft,
           child: Container(
@@ -437,64 +554,111 @@ class VibeView extends StatelessWidget {
             decoration: BoxDecoration(
               color: badgeColor.withValues(alpha: 0.14),
               borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: badgeColor.withValues(alpha: 0.45)),
+              border: usesCupertino
+                  ? null
+                  : Border.all(color: badgeColor.withValues(alpha: 0.45)),
             ),
-            child: _buildValueWidget(
-              context,
-              value['text'],
-              style: TextStyle(
-                fontSize: 11.5,
-                fontWeight: FontWeight.w600,
-                color: badgeColor,
-              ),
-            ),
+            child: inner,
           ),
         );
       case 'stat':
-        final statTone = _toneColor(context, value['tone']);
+        final statTone = _toneColor(context, node['tone']);
+        final valueWidget = _buildValueWidget(
+          context,
+          node['value'],
+          effectiveAdapter: effectiveAdapter,
+          style: TextStyle(
+            fontSize: 20,
+            fontWeight: FontWeight.w700,
+            fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
+            color: statTone,
+          ),
+        );
+        final labelWidget = _buildValueWidget(
+          context,
+          node['label'],
+          effectiveAdapter: effectiveAdapter,
+          style: TextStyle(
+            fontSize: 11.5,
+            color: _mutedColor(context),
+          ),
+        );
+        if (effectiveAdapter.statBuilder != null) {
+          return effectiveAdapter.statBuilder!(
+            context,
+            node,
+            valueWidget,
+            labelWidget,
+            statTone,
+          );
+        }
         final border = _borderColor(context);
         final surface = _surfaceColor(context);
         return Container(
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
           decoration: BoxDecoration(
             color: surface,
-            borderRadius: BorderRadius.circular((_radius(context) - 2).clamp(4, 16)),
-            border: Border.all(color: border),
+            borderRadius: BorderRadius.circular(
+              (_radius(context) - 2).clamp(4, 16),
+            ),
+            border: Border.all(
+              color: border,
+              width: usesCupertino ? 0.7 : 1.0,
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              _buildValueWidget(
-                context,
-                value['value'],
-                style: TextStyle(
-                  fontSize: 20,
-                  fontWeight: FontWeight.w700,
-                  fontFeatures: const <FontFeature>[FontFeature.tabularFigures()],
-                  color: statTone,
-                ),
-              ),
+              valueWidget,
               const SizedBox(height: 2),
-              _buildValueWidget(
-                context,
-                value['label'],
-                style: TextStyle(
-                  fontSize: 11.5,
-                  color: _mutedColor(context),
-                ),
-              ),
+              labelWidget,
             ],
           ),
         );
       case 'bar':
-        final rawVal = (value['value'] as num?)?.toDouble() ?? 0;
-        final rawMax = (value['max'] as num?)?.toDouble() ?? 1;
+        final rawVal = (node['value'] as num?)?.toDouble() ?? 0;
+        final rawMax = (node['max'] as num?)?.toDouble() ?? 1;
         final safeMax = rawMax > 0 ? rawMax : 1.0;
         final ratio = (rawVal / safeMax).clamp(0.0, 1.0);
         final fillColor =
-            _toneColor(context, value['tone']) ?? _accentColor(context);
-        final swatchColor = _parseHexColor(value['swatch']);
+            _toneColor(context, node['tone']) ?? _accentColor(context);
+        final swatchColor = _parseHexColor(node['swatch']);
+        final labelWidget = _buildValueWidget(
+          context,
+          node['label'],
+          effectiveAdapter: effectiveAdapter,
+          ellipsis: true,
+          style: const TextStyle(
+            fontSize: 12.5,
+            fontWeight: FontWeight.w600,
+          ),
+        );
+        final captionWidget = node['caption'] != null
+            ? _buildValueWidget(
+                context,
+                node['caption'],
+                effectiveAdapter: effectiveAdapter,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: _mutedColor(context),
+                  fontFeatures: const <FontFeature>[
+                    FontFeature.tabularFigures(),
+                  ],
+                ),
+              )
+            : null;
+        if (effectiveAdapter.barBuilder != null) {
+          return effectiveAdapter.barBuilder!(
+            context,
+            node,
+            labelWidget,
+            captionWidget,
+            ratio,
+            fillColor,
+            swatchColor,
+          );
+        }
         final trackColor = _borderColor(context).withValues(alpha: 0.65);
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -513,30 +677,10 @@ class VibeView extends StatelessWidget {
                   ),
                   const SizedBox(width: 6),
                 ],
-                Expanded(
-                  child: _buildValueWidget(
-                    context,
-                    value['label'],
-                    ellipsis: true,
-                    style: const TextStyle(
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ),
-                if (value['caption'] != null) ...<Widget>[
+                Expanded(child: labelWidget),
+                if (captionWidget != null) ...<Widget>[
                   const SizedBox(width: 8),
-                  _buildValueWidget(
-                    context,
-                    value['caption'],
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      color: _mutedColor(context),
-                      fontFeatures: const <FontFeature>[
-                        FontFeature.tabularFigures(),
-                      ],
-                    ),
-                  ),
+                  captionWidget,
                 ],
               ],
             ),
@@ -544,7 +688,7 @@ class VibeView extends StatelessWidget {
             ClipRRect(
               borderRadius: BorderRadius.circular(999),
               child: Container(
-                height: 8,
+                height: usesCupertino ? 6 : 8,
                 color: trackColor,
                 alignment: Alignment.centerLeft,
                 child: FractionallySizedBox(
@@ -562,13 +706,21 @@ class VibeView extends StatelessWidget {
           ],
         );
       case 'sparkline':
-        final rawPoints = (value['values'] as List?) ?? const <Object?>[];
+        final rawPoints = (node['values'] as List?) ?? const <Object?>[];
         final points = <double>[
           for (final p in rawPoints)
             if (p is num && p.isFinite) p.toDouble(),
         ];
         final strokeColor =
-            _toneColor(context, value['tone']) ?? _accentColor(context);
+            _toneColor(context, node['tone']) ?? _accentColor(context);
+        if (effectiveAdapter.sparklineBuilder != null) {
+          return effectiveAdapter.sparklineBuilder!(
+            context,
+            node,
+            points,
+            strokeColor,
+          );
+        }
         return SizedBox(
           height: 28,
           width: double.infinity,
@@ -579,7 +731,7 @@ class VibeView extends StatelessWidget {
       case 'row':
       case 'card':
       case 'column':
-        final children = (value['children'] as List).take(100);
+        final children = (node['children'] as List).take(100);
         final widgets = <Widget>[
           for (final child in children)
             VibeView(
@@ -589,9 +741,10 @@ class VibeView extends StatelessWidget {
               depth: depth + 1,
               autoSubmitTimeoutSeconds: autoSubmitTimeoutSeconds,
               resolveSealed: resolveSealed,
+              adapter: adapter,
             ),
         ];
-        if (value['type'] == 'row') {
+        if (node['type'] == 'row') {
           return Wrap(spacing: 10, runSpacing: 8, children: widgets);
         }
         final column = Column(
@@ -604,49 +757,96 @@ class VibeView extends StatelessWidget {
             ],
           ],
         );
-        if (value['type'] == 'card') {
+        if (node['type'] == 'card') {
+          if (effectiveAdapter.cardBuilder != null) {
+            return effectiveAdapter.cardBuilder!(context, node, column);
+          }
+          if (usesCupertino) {
+            return VibeWidgetAdapter.buildCupertinoCard(context, column);
+          }
           return Card(
             child: Padding(padding: const EdgeInsets.all(14), child: column),
           );
         }
         return column;
       case 'divider':
+        if (usesCupertino) {
+          return Container(
+            height: 0.5,
+            color: CupertinoColors.separator.resolveFrom(context),
+          );
+        }
         return const Divider();
       case 'progress':
-        return LinearProgressIndicator(
-          value: (value['value'] as num).toDouble(),
-        );
+        final pVal = (node['value'] as num).toDouble().clamp(0.0, 1.0);
+        if (usesCupertino) {
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: Container(
+              height: 6,
+              color: CupertinoColors.systemFill.resolveFrom(context),
+              alignment: Alignment.centerLeft,
+              child: FractionallySizedBox(
+                widthFactor: pVal,
+                heightFactor: 1,
+                child: Container(color: _accentColor(context)),
+              ),
+            ),
+          );
+        }
+        return LinearProgressIndicator(value: pVal);
       case 'action':
       case 'button':
-        final cmd = value['command'] as String;
-        final rawTitle = value['title'] ?? value['text'];
+        final cmd = node['command'] as String;
+        final rawTitle = node['title'] ?? node['text'];
         final title = _resolvePlainString(rawTitle);
-        final rawArgs = value['arguments'] ?? value['args'];
+        final rawArgs = node['arguments'] ?? node['args'];
         final args = Map<String, dynamic>.from(rawArgs as Map? ?? {});
-        if (value['type'] == 'action') {
+        final btnTone = _toneColor(context, node['tone']);
+        void onPressed() => onCommand(cmd, args);
+        if (effectiveAdapter.buttonBuilder != null) {
+          return effectiveAdapter.buttonBuilder!(
+            context,
+            node,
+            title,
+            cmd,
+            args,
+            onPressed,
+            btnTone,
+          );
+        }
+        if (usesCupertino) {
+          return VibeWidgetAdapter.buildCupertinoButton(
+            context: context,
+            title: title,
+            onPressed: onPressed,
+            toneColor: btnTone,
+            filled: node['type'] == 'action' && cmd == 'approval.approve',
+          );
+        }
+        if (node['type'] == 'action') {
           if (cmd == 'approval.approve') {
             return FilledButton.tonalIcon(
-              onPressed: () => onCommand(cmd, args),
+              onPressed: onPressed,
               icon: const Icon(Icons.check, size: 16),
               label: Text(title),
             );
           }
           if (cmd == 'approval.yolo') {
             return OutlinedButton.icon(
-              onPressed: () => onCommand(cmd, args),
+              onPressed: onPressed,
               icon: const Icon(Icons.bolt, size: 16),
               label: Text(title),
             );
           }
           if (cmd == 'approval.deny') {
             return OutlinedButton.icon(
-              onPressed: () => onCommand(cmd, args),
+              onPressed: onPressed,
               icon: const Icon(Icons.close, size: 16),
               label: Text(title),
             );
           }
         }
-        final btnTone = _toneColor(context, value['tone']);
         return OutlinedButton(
           style: btnTone != null
               ? OutlinedButton.styleFrom(
@@ -655,51 +855,171 @@ class VibeView extends StatelessWidget {
                   backgroundColor: btnTone.withValues(alpha: 0.08),
                 )
               : null,
-          onPressed: () => onCommand(cmd, args),
+          onPressed: onPressed,
           child: Text(title),
         );
       case 'input':
+        final inputId = node['id'] as String;
+        final inputLabel = node['label'] as String;
+        final isSecret = node['secret'] == true;
+        final isMultiline = node['multiline'] == true;
+        void handleInputChanged(String text) => onInput?.call(inputId, text);
+        if (effectiveAdapter.inputBuilder != null) {
+          return effectiveAdapter.inputBuilder!(
+            context,
+            node,
+            inputId,
+            inputLabel,
+            isSecret,
+            isMultiline,
+            handleInputChanged,
+          );
+        }
+        if (usesCupertino) {
+          return Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              if (inputLabel.isNotEmpty) ...<Widget>[
+                Text(
+                  inputLabel,
+                  style: TextStyle(fontSize: 12.5, color: _mutedColor(context)),
+                ),
+                const SizedBox(height: 4),
+              ],
+              CupertinoTextField(
+                key: ValueKey(inputId),
+                placeholder: inputLabel,
+                obscureText: isSecret,
+                maxLines: isSecret ? 1 : (isMultiline ? 5 : 1),
+                onChanged: handleInputChanged,
+              ),
+            ],
+          );
+        }
         return TextField(
-          key: ValueKey(value['id']),
-          obscureText: value['secret'] == true,
-          maxLines: value['secret'] == true
-              ? 1
-              : value['multiline'] == true
-              ? 5
-              : 1,
-          onChanged: (text) => onInput?.call(value['id'] as String, text),
-          decoration: InputDecoration(labelText: value['label'] as String),
+          key: ValueKey(inputId),
+          obscureText: isSecret,
+          maxLines: isSecret ? 1 : (isMultiline ? 5 : 1),
+          onChanged: handleInputChanged,
+          decoration: InputDecoration(labelText: inputLabel),
         );
       case 'checkbox':
         return _VibeCheckboxField(
-          id: value['id'] as String,
-          label: value['label'] as String,
-          initialChecked: value['checked'] == true,
-          command: value['command'] as String?,
+          id: node['id'] as String,
+          label: node['label'] as String,
+          initialChecked: node['checked'] == true,
+          command: node['command'] as String?,
           onInput: onInput,
           onCommand: onCommand,
+          node: node,
+          adapter: effectiveAdapter,
         );
       case 'option_group':
-        final rawTimeout = value['autoSubmitTimeoutSeconds'];
+        final rawTimeout = node['autoSubmitTimeoutSeconds'];
         final nodeTimeout = rawTimeout is int ? rawTimeout : null;
         return _VibeOptionGroupField(
-          id: value['id'] as String,
-          label: value['label'] as String?,
-          multiSelect: value['multiSelect'] == true,
-          options: (value['options'] as List)
+          id: node['id'] as String,
+          label: node['label'] as String?,
+          multiSelect: node['multiSelect'] == true,
+          options: (node['options'] as List)
               .take(50)
               .map((item) => Map<String, dynamic>.from(item as Map))
               .toList(growable: false),
-          command: value['command'] as String?,
+          command: node['command'] as String?,
           onInput: onInput,
           onCommand: onCommand,
           autoSubmitTimeoutSeconds: autoSubmitTimeoutSeconds ?? nodeTimeout,
+          node: node,
+          adapter: effectiveAdapter,
         );
       case 'table':
-        final headers = (value['headers'] as List)
+        final headers = (node['headers'] as List)
             .take(32)
             .toList(growable: false);
-        final rows = (value['rows'] as List).take(200);
+        final rows = (node['rows'] as List).take(200);
+        final headerWidgets = <Widget>[
+          for (final h in headers)
+            _buildValueWidget(
+              context,
+              h,
+              effectiveAdapter: effectiveAdapter,
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+        ];
+        final rowWidgets = <List<Widget>>[
+          for (final row in rows)
+            if (row is List)
+              <Widget>[
+                for (var i = 0; i < headers.length; i++)
+                  i < row.length
+                      ? _buildValueWidget(
+                          context,
+                          row[i],
+                          effectiveAdapter: effectiveAdapter,
+                          selectable: !_isSealedHandleMap(row[i]),
+                        )
+                      : const Text(''),
+              ],
+        ];
+        if (effectiveAdapter.tableBuilder != null) {
+          return effectiveAdapter.tableBuilder!(
+            context,
+            node,
+            headerWidgets,
+            rowWidgets,
+          );
+        }
+        if (usesCupertino) {
+          final sepColor = CupertinoColors.separator.resolveFrom(context);
+          return Container(
+            decoration: BoxDecoration(
+              border: Border.all(color: sepColor, width: 0.7),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Table(
+                defaultColumnWidth: const IntrinsicColumnWidth(),
+                border: TableBorder.symmetric(
+                  inside: BorderSide(color: sepColor, width: 0.5),
+                ),
+                children: <TableRow>[
+                  TableRow(
+                    decoration: BoxDecoration(
+                      color: CupertinoColors.tertiarySystemFill.resolveFrom(
+                        context,
+                      ),
+                    ),
+                    children: <Widget>[
+                      for (final hw in headerWidgets)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 8,
+                          ),
+                          child: hw,
+                        ),
+                    ],
+                  ),
+                  for (final rw in rowWidgets)
+                    TableRow(
+                      children: <Widget>[
+                        for (final cell in rw)
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 8,
+                            ),
+                            child: cell,
+                          ),
+                      ],
+                    ),
+                ],
+              ),
+            ),
+          );
+        }
         return SingleChildScrollView(
           scrollDirection: Axis.horizontal,
           child: DataTable(
@@ -709,32 +1029,15 @@ class VibeView extends StatelessWidget {
             columnSpacing: 18,
             horizontalMargin: 12,
             columns: <DataColumn>[
-              for (final h in headers)
-                DataColumn(
-                  label: _buildValueWidget(
-                    context,
-                    h,
-                    style: const TextStyle(fontWeight: FontWeight.w700),
-                  ),
-                ),
+              for (final hw in headerWidgets) DataColumn(label: hw),
             ],
             rows: <DataRow>[
-              for (final row in rows)
-                if (row is List)
-                  DataRow(
-                    cells: <DataCell>[
-                      for (var i = 0; i < headers.length; i++)
-                        DataCell(
-                          i < row.length
-                              ? _buildValueWidget(
-                                  context,
-                                  row[i],
-                                  selectable: !_isSealedHandleMap(row[i]),
-                                )
-                              : const Text(''),
-                        ),
-                    ],
-                  ),
+              for (final rw in rowWidgets)
+                DataRow(
+                  cells: <DataCell>[
+                    for (final cell in rw) DataCell(cell),
+                  ],
+                ),
             ],
           ),
         );
@@ -800,6 +1103,8 @@ class _VibeCheckboxField extends StatefulWidget {
     this.command,
     this.onInput,
     required this.onCommand,
+    required this.node,
+    required this.adapter,
   });
 
   final String id;
@@ -808,6 +1113,8 @@ class _VibeCheckboxField extends StatefulWidget {
   final String? command;
   final void Function(String, String)? onInput;
   final void Function(String, Map<String, dynamic>) onCommand;
+  final Map<String, dynamic> node;
+  final VibeWidgetAdapter adapter;
 
   @override
   State<_VibeCheckboxField> createState() => _VibeCheckboxFieldState();
@@ -830,8 +1137,43 @@ class _VibeCheckboxFieldState extends State<_VibeCheckboxField> {
     }
   }
 
+  void _setChecked(bool checked) {
+    setState(() => _checked = checked);
+    widget.onInput?.call(widget.id, checked ? 'true' : 'false');
+    if (widget.command != null && widget.command!.isNotEmpty) {
+      widget.onCommand(widget.command!, <String, dynamic>{
+        'id': widget.id,
+        'label': widget.label,
+        'checked': checked,
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    if (widget.adapter.checkboxBuilder != null) {
+      return widget.adapter.checkboxBuilder!(
+        context,
+        widget.node,
+        widget.id,
+        widget.label,
+        _checked,
+        _setChecked,
+      );
+    }
+    if (widget.adapter.usesCupertino) {
+      return Row(
+        key: ValueKey('vibe-checkbox-${widget.id}'),
+        children: <Widget>[
+          CupertinoSwitch(
+            value: _checked,
+            onChanged: _setChecked,
+          ),
+          const SizedBox(width: 10),
+          Expanded(child: Text(widget.label)),
+        ],
+      );
+    }
     return CheckboxListTile(
       key: ValueKey('vibe-checkbox-${widget.id}'),
       dense: true,
@@ -839,18 +1181,7 @@ class _VibeCheckboxFieldState extends State<_VibeCheckboxField> {
       controlAffinity: ListTileControlAffinity.leading,
       title: Text(widget.label),
       value: _checked,
-      onChanged: (next) {
-        final checked = next ?? false;
-        setState(() => _checked = checked);
-        widget.onInput?.call(widget.id, checked ? 'true' : 'false');
-        if (widget.command != null && widget.command!.isNotEmpty) {
-          widget.onCommand(widget.command!, <String, dynamic>{
-            'id': widget.id,
-            'label': widget.label,
-            'checked': checked,
-          });
-        }
-      },
+      onChanged: (next) => _setChecked(next ?? false),
     );
   }
 }
@@ -865,6 +1196,8 @@ class _VibeOptionGroupField extends StatefulWidget {
     this.onInput,
     required this.onCommand,
     this.autoSubmitTimeoutSeconds,
+    required this.node,
+    required this.adapter,
   });
 
   final String id;
@@ -875,6 +1208,8 @@ class _VibeOptionGroupField extends StatefulWidget {
   final void Function(String, String)? onInput;
   final void Function(String, Map<String, dynamic>) onCommand;
   final int? autoSubmitTimeoutSeconds;
+  final Map<String, dynamic> node;
+  final VibeWidgetAdapter adapter;
 
   @override
   State<_VibeOptionGroupField> createState() => _VibeOptionGroupFieldState();
@@ -991,6 +1326,134 @@ class _VibeOptionGroupFieldState extends State<_VibeOptionGroupField> {
 
   @override
   Widget build(BuildContext context) {
+    if (widget.adapter.optionGroupBuilder != null) {
+      return widget.adapter.optionGroupBuilder!(
+        context,
+        widget.node,
+        widget.id,
+        widget.label,
+        widget.multiSelect,
+        widget.options,
+        Set<String>.unmodifiable(_selectedIds),
+        _toggleOption,
+      );
+    }
+
+    if (widget.adapter.usesCupertino) {
+      if (!widget.multiSelect &&
+          widget.options.length >= 2 &&
+          widget.options.length <= 5) {
+        final segChildren = <String, Widget>{
+          for (final opt in widget.options)
+            opt['id'].toString(): Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+              child: Text(
+                opt['label'].toString(),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+        };
+        final firstSel = _selectedIds.isNotEmpty &&
+                segChildren.containsKey(_selectedIds.first)
+            ? _selectedIds.first
+            : null;
+        return Column(
+          key: ValueKey('vibe-option-group-${widget.id}'),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            if (widget.label != null && widget.label!.trim().isNotEmpty) ...<Widget>[
+              Text(
+                widget.label!,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 13.5,
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+            CupertinoSlidingSegmentedControl<String>(
+              groupValue: firstSel,
+              children: segChildren,
+              onValueChanged: (next) {
+                if (next != null) _toggleOption(next);
+              },
+            ),
+          ],
+        );
+      }
+
+      return Column(
+        key: ValueKey('vibe-option-group-${widget.id}'),
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        mainAxisSize: MainAxisSize.min,
+        children: <Widget>[
+          if (widget.label != null && widget.label!.trim().isNotEmpty) ...<Widget>[
+            Text(
+              widget.label!,
+              style: const TextStyle(
+                fontWeight: FontWeight.w700,
+                fontSize: 13.5,
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: <Widget>[
+              for (final opt in widget.options)
+                () {
+                  final optId = opt['id'].toString();
+                  final optLabel = opt['label'].toString();
+                  final selected = _selectedIds.contains(optId);
+                  return VibeWidgetAdapter.buildCupertinoButton(
+                    context: context,
+                    title: optLabel,
+                    filled: selected,
+                    onPressed: () => _toggleOption(optId),
+                  );
+                }(),
+            ],
+          ),
+          if (widget.multiSelect &&
+              widget.command != null &&
+              widget.command!.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 10),
+            Align(
+              alignment: Alignment.centerRight,
+              child: CupertinoButton.filled(
+                key: ValueKey('vibe-option-submit-${widget.id}'),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 14,
+                  vertical: 8,
+                ),
+                onPressed: _selectedIds.isEmpty
+                    ? null
+                    : () {
+                        _countdownTimer?.cancel();
+                        widget.onCommand(
+                          widget.command!,
+                          <String, dynamic>{
+                            'id': widget.id,
+                            'selected': _selectedIds.toList(growable: false),
+                            'values': _selectedValues(),
+                          },
+                        );
+                      },
+                child: Text(
+                  _remainingSeconds != null
+                      ? 'Submit Selected (${_selectedIds.length}) · ${_remainingSeconds}s'
+                      : 'Submit Selected (${_selectedIds.length})',
+                ),
+              ),
+            ),
+          ],
+        ],
+      );
+    }
+
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
     final isDark = theme.brightness == Brightness.dark;

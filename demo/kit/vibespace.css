@@ -1853,3 +1853,28 @@ span.vk-sealed::before {
     animation-duration: 0.01ms !important;
   }
 }
+
+/* RTL / multi-script layout support */
+.vs-panel[dir="rtl"],
+.vs-embed[dir="rtl"],
+.vs-dialog[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+}
+
+.vs-panel[dir="rtl"] .vs-more-menu {
+  right: auto;
+  left: 0;
+}
+
+.vs-panel[dir="rtl"] .vk-sealed::before,
+.vs-embed[dir="rtl"] .vk-sealed::before {
+  margin-right: 0;
+  margin-left: 3px;
+}
+
+.vs-panel[dir="rtl"] .vs-vibe-card-name,
+.vs-panel[dir="rtl"] .vs-vibe-note,
+.vs-panel[dir="rtl"] .vs-label-row {
+  text-align: right;
+}

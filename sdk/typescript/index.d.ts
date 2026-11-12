@@ -59,3 +59,27 @@ export function effectBatch(effects:Effect[]):readonly Readonly<Effect>[];
 export function freezeJson<T extends Json>(value:T):Readonly<T>;
 export function validateManifest(manifest:unknown):Readonly<Manifest>;
 export function verifyPackage(pkg:SignedPackage,publisher:string):Promise<{manifest:Readonly<Manifest>;module:Uint8Array}>;
+
+export type SealedResolver = (handleId:string, rawHandle?:SealedHandle) => string | null | undefined;
+export interface VibeStrings {
+  locale:string; rtl:boolean; [key:string]:string | boolean;
+}
+export function isSealedHandle(value:unknown):value is SealedHandle;
+export function adaptExternalUi(raw:unknown):View;
+export function resolveViewTree(view:unknown, options?:{resolveSealed?:SealedResolver}):Record<string,unknown>;
+export function renderWithH<TNode = unknown>(
+  h:(tag:string, props:Record<string,unknown> | null, ...children:unknown[]) => TNode,
+  view:unknown,
+  options?:{
+    resolveSealed?:SealedResolver;
+    onCommand?:(command:string, args:Record<string,unknown>) => void;
+    onInput?:(id:string, value:unknown) => void;
+    classPrefix?:string;
+  }
+):TNode;
+export function renderToTerminal(view:unknown, options?:{resolveSealed?:SealedResolver; ansi?:boolean; width?:number}):string;
+export function renderToMarkdown(view:unknown, options?:{resolveSealed?:SealedResolver}):string;
+export function renderToHtmlString(view:unknown, options?:{resolveSealed?:SealedResolver}):string;
+export function defineVibeWebComponents(env?:Record<string,unknown>):boolean | Record<string,unknown>;
+export function getVibeStrings(locale?:string, overrides?:Record<string,string | boolean>):VibeStrings;
+export function isRtlLocale(locale?:string):boolean;

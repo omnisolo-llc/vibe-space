@@ -817,6 +817,8 @@
     var doc = element.ownerDocument || document;
     var prev = getRenderState(element);
 
+    view = maybeAdaptExternalUi(view);
+
     var ctx = {
       resolve: typeof opts.resolve === 'function' ? opts.resolve : null,
       onAction: typeof opts.onAction === 'function' ? opts.onAction : (prev ? prev.onAction : null)
@@ -1186,6 +1188,8 @@
 
     var hostId = config.id;
     var hostName = config.name;
+    var hostLocale = typeof config.locale === 'string' && config.locale.trim() ? config.locale.trim() : 'en';
+    var hostStrings = getVibeStrings(hostLocale, config.strings);
     var capabilities = Array.isArray(config.capabilities) ? config.capabilities.slice() : [];
     var notOffered = Array.isArray(config.notOffered) ? config.notOffered.slice() : [];
     var capByName = new Map();
@@ -2353,6 +2357,7 @@
             var output;
             try {
               output = validateOutputPayload(msg.outputJson);
+              output.view = maybeAdaptExternalUi(output.view);
             } catch (err) {
               failRun(err && err.message ? err.message : String(err), false);
               return;
@@ -2421,6 +2426,8 @@
     return {
       id: hostId,
       name: hostName,
+      locale: hostLocale,
+      strings: hostStrings,
       manifest: manifest,
       seal: seal,
       check: check,
@@ -2439,10 +2446,1074 @@
     };
   }
 
+  var DEMO_LOCALE_PACKS = {
+    en: {
+      locale: 'en',
+      rtl: false,
+      panelTitle: 'Vibe Space',
+      whatOffers: 'What {host} offers',
+      wishPlaceholder: 'I wish {host} would\u2026',
+      send: 'Send',
+      wishNote: 'The AI is scripted in this demo. Pick a wish.',
+      installed: 'Installed',
+      filterPlaceholder: 'Filter installed vibes\u2026',
+      emptyInstalled: 'Nothing here yet. Make a wish.',
+      sealedLegend: 'Values with a lock are sealed. {host} draws them. The vibe never sees them.',
+      portableVibes: 'Portable vibes',
+      portableSub: 'These need nothing from the app, so they run anywhere.',
+      reads: 'Reads',
+      shows: 'Shows',
+      cannot: 'Cannot',
+      onlyInsideBox: 'Only inside its own box',
+      changeNothing: 'Change anything in {host}',
+      nothingFromHost: 'Nothing from {host}',
+      allowAndAdd: 'Allow and add',
+      update: 'Update',
+      cancel: 'Cancel',
+      noNewPermissions: 'Version {version}. No new permissions.',
+      inspect: 'Inspect',
+      hideInspect: 'Hide inspect',
+      share: 'Share',
+      edit: 'Edit',
+      rename: 'Rename',
+      pause: 'Pause',
+      resume: 'Resume',
+      pinToTop: 'Pin to top',
+      unpin: 'Unpin',
+      moveUp: 'Move up',
+      moveDown: 'Move down',
+      revert: 'Revert',
+      deleteLabel: 'Delete',
+      undo: 'Undo',
+      temporary: 'Temporary',
+      pinned: 'Pinned',
+      pinToVibeSpace: 'Pin to Vibe Space',
+      pinnedToVibeSpace: 'Pinned to Vibe Space',
+      madeByAgent: 'Made by the agent for this answer',
+      retry: 'Retry',
+      previewSample: 'Preview sample',
+      returnToLive: 'Return to live',
+      sourceOffline: 'Source offline',
+      sourceRevoked: 'Source access turned off',
+      sourceMissing: 'Source unavailable'
+    },
+    zh: {
+      locale: 'zh',
+      rtl: false,
+      panelTitle: 'Vibe \u7a7a\u95f4',
+      whatOffers: '{host} \u63d0\u4f9b\u7684\u80fd\u529b',
+      wishPlaceholder: '\u6211\u5e0c\u671b {host} \u80fd\u591f\u2026',
+      send: '\u53d1\u9001',
+      wishNote: '\u6b64\u6f14\u793a\u4e2d AI \u4e3a\u9884\u8bbe\u811a\u672c\uff0c\u8bf7\u9009\u62e9\u4e00\u4e2a\u613f\u671b\u3002',
+      installed: '\u5df2\u5b89\u88c5',
+      filterPlaceholder: '\u7b5b\u9009\u5df2\u5b89\u88c5\u7684 vibe\u2026',
+      emptyInstalled: '\u6682\u65e0\u5185\u5bb9\uff0c\u8bd5\u8bd5\u5199\u4e0b\u4e00\u4e2a\u613f\u671b\u3002',
+      sealedLegend: '\u5e26\u9501\u7684\u503c\u5df2\u5c01\u88c5\uff0c\u7531 {host} \u7ed8\u5236\uff0cvibe \u65e0\u6cd5\u770b\u5230\u3002',
+      portableVibes: '\u4fbf\u643a vibe',
+      portableSub: '\u4e0d\u4f9d\u8d56\u5e94\u7528\u6570\u636e\uff0c\u53ef\u5728\u4efb\u610f\u5bbf\u4e3b\u4e2d\u8fd0\u884c\u3002',
+      reads: '\u8bfb\u53d6',
+      shows: '\u663e\u793a',
+      cannot: '\u7981\u6b62',
+      onlyInsideBox: '\u4ec5\u5728\u5176\u81ea\u8eab\u5bb9\u5668\u5185',
+      changeNothing: '\u4fee\u6539 {host} \u4e2d\u7684\u4efb\u4f55\u5185\u5bb9',
+      nothingFromHost: '\u4e0d\u8bfb\u53d6 {host} \u7684\u4efb\u4f55\u6570\u636e',
+      allowAndAdd: '\u5141\u8bb8\u5e76\u6dfb\u52a0',
+      update: '\u66f4\u65b0',
+      cancel: '\u53d6\u6d88',
+      noNewPermissions: '\u7248\u672c {version}\uff0c\u65e0\u65b0\u589e\u6743\u9650\u3002',
+      inspect: '\u68c0\u67e5',
+      hideInspect: '\u9690\u85cf\u68c0\u67e5',
+      share: '\u5206\u4eab',
+      edit: '\u7f16\u8f91',
+      rename: '\u91cd\u547d\u540d',
+      pause: '\u6682\u505c',
+      resume: '\u6062\u590d',
+      pinToTop: '\u7f6e\u9876',
+      unpin: '\u53d6\u6d88\u7f6e\u9876',
+      moveUp: '\u4e0a\u79fb',
+      moveDown: '\u4e0b\u79fb',
+      revert: '\u8fd8\u539f',
+      deleteLabel: '\u5220\u9664',
+      undo: '\u64a4\u9500',
+      temporary: '\u4e34\u65f6',
+      pinned: '\u5df2\u56fa\u5b9a',
+      pinToVibeSpace: '\u56fa\u5b9a\u5230 Vibe \u7a7a\u95f4',
+      pinnedToVibeSpace: '\u5df2\u56fa\u5b9a\u5230 Vibe \u7a7a\u95f4',
+      madeByAgent: '\u7531\u667a\u80fd\u4f53\u4e3a\u6b64\u56de\u590d\u751f\u6210',
+      retry: '\u91cd\u8bd5',
+      previewSample: '\u9884\u89c8\u793a\u4f8b',
+      returnToLive: '\u8fd4\u56de\u5b9e\u65f6\u6570\u636e',
+      sourceOffline: '\u6570\u636e\u6e90\u79bb\u7ebf',
+      sourceRevoked: '\u6570\u636e\u8bbf\u95ee\u5df2\u5173\u95ed',
+      sourceMissing: '\u6570\u636e\u6e90\u4e0d\u53ef\u7528'
+    },
+    ja: {
+      locale: 'ja',
+      rtl: false,
+      panelTitle: 'Vibe Space',
+      whatOffers: '{host} \u304c\u63d0\u4f9b\u3059\u308b\u6a5f\u80fd',
+      wishPlaceholder: '{host} \u306b\u304a\u9858\u3044\u3059\u308b\u2026',
+      send: '\u9001\u4fe1',
+      wishNote: '\u3053\u306e\u30c7\u30e2\u306e AI \u306f\u30b9\u30af\u30ea\u30d7\u30c8\u5316\u3055\u308c\u3066\u3044\u307e\u3059\u3002',
+      installed: '\u30a4\u30f3\u30b9\u30c8\u30fc\u30eb\u6e08\u307f',
+      filterPlaceholder: 'vibe \u3092\u7d5e\u308a\u8fbc\u3080\u2026',
+      emptyInstalled: '\u307e\u3060\u3042\u308a\u307e\u305b\u3093\u3002',
+      sealedLegend: '\u9375\u4ed8\u304d\u306e\u5024\u306f\u5c01\u5370\u3055\u308c\u3001{host} \u304c\u63cf\u753b\u3057\u307e\u3059\u3002',
+      portableVibes: '\u30dd\u30fc\u30bf\u30d6\u30eb vibe',
+      portableSub: '\u30a2\u30d7\u30ea\u306e\u30c7\u30fc\u30bf\u4e0d\u8981\u3067\u52d5\u4f5c\u3057\u307e\u3059\u3002',
+      reads: '\u8aad\u307f\u53d6\u308a',
+      shows: '\u8868\u793a',
+      cannot: '\u4e0d\u53ef',
+      onlyInsideBox: '\u3053\u306e\u30dc\u30c3\u30af\u30b9\u5185\u306e\u307f',
+      changeNothing: '{host} \u306e\u5909\u66f4',
+      nothingFromHost: '{host} \u304b\u3089\u306f\u4f55\u3082\u8aad\u307f\u53d6\u308a\u307e\u305b\u3093',
+      allowAndAdd: '\u8a31\u53ef\u3057\u3066\u8ffd\u52a0',
+      update: '\u66f4\u65b0',
+      cancel: '\u30ad\u30e3\u30f3\u30bb\u30eb',
+      noNewPermissions: '\u30d0\u30fc\u30b8\u30e7\u30f3 {version}\u3002\u65b0\u3057\u3044\u6a29\u9650\u306f\u3042\u308a\u307e\u305b\u3093\u3002',
+      inspect: '\u691c\u67fb',
+      hideInspect: '\u691c\u67fb\u3092\u96a0\u3059',
+      share: '\u5171\u6709',
+      edit: '\u7de8\u96c6',
+      rename: '\u540d\u524d\u3092\u5909\u66f4',
+      pause: '\u4e00\u6642\u505c\u6b62',
+      resume: '\u518d\u958b',
+      pinToTop: '\u5148\u982d\u306b\u56fa\u5b9a',
+      unpin: '\u56fa\u5b9a\u89e3\u9664',
+      moveUp: '\u4e0a\u3078',
+      moveDown: '\u4e0b\u3078',
+      revert: '\u5143\u306b\u623b\u3059',
+      deleteLabel: '\u524a\u9664',
+      undo: '\u5143\u306b\u623b\u3059',
+      temporary: '\u4e00\u6642\u7684',
+      pinned: '\u56fa\u5b9a\u6e08\u307f',
+      pinToVibeSpace: 'Vibe Space \u306b\u56fa\u5b9a',
+      pinnedToVibeSpace: 'Vibe Space \u306b\u56fa\u5b9a\u3057\u307e\u3057\u305f',
+      madeByAgent: '\u3053\u306e\u56de\u7b54\u7528\u306b\u30a8\u30fc\u30b8\u30a7\u30f3\u30c8\u304c\u4f5c\u6210',
+      retry: '\u518d\u8a66\u884c',
+      previewSample: '\u30b5\u30f3\u30d7\u30eb\u3092\u8868\u793a',
+      returnToLive: '\u30e9\u30a4\u30d6\u306b\u623b\u3059',
+      sourceOffline: '\u30bd\u30fc\u30b9\u304c\u30aa\u30d5\u30e9\u30a4\u30f3',
+      sourceRevoked: '\u30a2\u30af\u30bb\u30b9\u304c\u7121\u52b9\u3067\u3059',
+      sourceMissing: '\u30bd\u30fc\u30b9\u304c\u5229\u7528\u3067\u304d\u307e\u305b\u3093'
+    },
+    ko: {
+      locale: 'ko',
+      rtl: false,
+      panelTitle: 'Vibe Space',
+      whatOffers: '{host} \uc81c\uacf5 \uae30\ub2a5',
+      wishPlaceholder: '{host}\uc5d0\uac8c \uc6d0\ud558\ub294 \uae30\ub2a5\u2026',
+      send: '\uc804\uc1a1',
+      wishNote: '\uc774 \ub370\ubaa8\uc758 AI\ub294 \uc2a4\ud06c\ub9bd\ud2b8\ub85c \ub3d9\uc791\ud569\ub2c8\ub2e4.',
+      installed: '\uc124\uce58\ub428',
+      filterPlaceholder: '\uc124\uce58\ub41c vibe \uac80\uc0c9\u2026',
+      emptyInstalled: '\uc544\uc9c1 \uc5c6\uc2b5\ub2c8\ub2e4.',
+      sealedLegend: '\uc790\ubb3c\uc1e0 \uac12\uc740 \ubd09\uc778\ub418\uc5b4 {host}\uac00 \uadf8\ub9bd\ub2c8\ub2e4.',
+      portableVibes: '\ud3ec\ud130\ube14 vibe',
+      portableSub: '\uc571 \ub370\uc774\ud130 \uc5c6\uc774 \uc2e4\ud589\ub429\ub2c8\ub2e4.',
+      reads: '\uc77d\uae30',
+      shows: '\ud45c\uc2dc',
+      cannot: '\ubd88\uac00',
+      onlyInsideBox: '\uc790\uccb4 \uc0c1\uc790 \ub0b4\ubd80\ub9cc',
+      changeNothing: '{host} \ub0b4\uc6a9 \ubcc0\uacbd',
+      nothingFromHost: '{host}\uc5d0\uc11c \uc77d\uc9c0 \uc54a\uc74c',
+      allowAndAdd: '\ud5c8\uc6a9 \ubc0f \ucd94\uac00',
+      update: '\uc5c5\ub370\uc774\ud2b8',
+      cancel: '\ucde8\uc18c',
+      noNewPermissions: '\ubc84\uc804 {version}. \uc0c8 \uad8c\ud55c \uc5c6\uc74c.',
+      inspect: '\uac80\uc0ac',
+      hideInspect: '\uac80\uc0ac \uc228\uae30\uae30',
+      share: '\uacf5\uc720',
+      edit: '\ud3b8\uc9d1',
+      rename: '\uc774\ub984 \ubcc0\uacbd',
+      pause: '\uc77c\uc2dc\uc911\uc9c0',
+      resume: '\uc7ac\uac1c',
+      pinToTop: '\uc0c1\ub2e8 \uace0\uc815',
+      unpin: '\uace0\uc815 \ud574\uc81c',
+      moveUp: '\uc704\ub85c',
+      moveDown: '\uc544\ub798\ub85c',
+      revert: '\ub418\ub3cc\ub9ac\uae30',
+      deleteLabel: '\uc0ad\uc81c',
+      undo: '\uc2e4\ud589 \ucde8\uc18c',
+      temporary: '\uc784\uc2dc',
+      pinned: '\uace0\uc815\ub428',
+      pinToVibeSpace: 'Vibe Space\uc5d0 \uace0\uc815',
+      pinnedToVibeSpace: 'Vibe Space\uc5d0 \uace0\uc815\ub428',
+      madeByAgent: '\uc5d0\uc774\uc804\ud2b8\uac00 \uc0dd\uc131',
+      retry: '\uc7ac\uc2dc\ub3c4',
+      previewSample: '\uc0d8\ud50c \ubbf8\ub9ac\ubcf4\uae30',
+      returnToLive: '\uc2e4\uc2dc\uac04\uc73c\ub85c \ub3cc\uc544\uac00\uae30',
+      sourceOffline: '\uc18c\uc2a4 \uc624\ud504\ub77c\uc778',
+      sourceRevoked: '\uc18c\uc2a4 \uc811\uadfc \uaebc\uc9d0',
+      sourceMissing: '\uc18c\uc2a4 \uc0ac\uc6a9 \ubd88\uac00'
+    },
+    es: {
+      locale: 'es',
+      rtl: false,
+      panelTitle: 'Vibe Space',
+      whatOffers: 'Lo que ofrece {host}',
+      wishPlaceholder: 'Ojal\u00e1 {host} pudiera\u2026',
+      send: 'Enviar',
+      wishNote: 'La IA est\u00e1 guionizada en esta demo. Elige un deseo.',
+      installed: 'Instalados',
+      filterPlaceholder: 'Filtrar vibes instalados\u2026',
+      emptyInstalled: 'Nada aqu\u00ed a\u00fan. Pide un deseo.',
+      sealedLegend: 'Los valores con candado est\u00e1n sellados. {host} los dibuja; el vibe nunca los ve.',
+      portableVibes: 'Vibes port\u00e1tiles',
+      portableSub: 'No necesitan nada de la app, as\u00ed que funcionan en cualquier lugar.',
+      reads: 'Lee',
+      shows: 'Muestra',
+      cannot: 'No puede',
+      onlyInsideBox: 'Solo dentro de su propia caja',
+      changeNothing: 'Cambiar algo en {host}',
+      nothingFromHost: 'Nada de {host}',
+      allowAndAdd: 'Permitir y a\u00f1adir',
+      update: 'Actualizar',
+      cancel: 'Cancelar',
+      noNewPermissions: 'Versi\u00f3n {version}. Sin permisos nuevos.',
+      inspect: 'Inspeccionar',
+      hideInspect: 'Ocultar inspecci\u00f3n',
+      share: 'Compartir',
+      edit: 'Editar',
+      rename: 'Renombrar',
+      pause: 'Pausar',
+      resume: 'Reanudar',
+      pinToTop: 'Fijar arriba',
+      unpin: 'Desfijar',
+      moveUp: 'Subir',
+      moveDown: 'Bajar',
+      revert: 'Revertir',
+      deleteLabel: 'Eliminar',
+      undo: 'Deshacer',
+      temporary: 'Temporal',
+      pinned: 'Fijado',
+      pinToVibeSpace: 'Fijar en Vibe Space',
+      pinnedToVibeSpace: 'Fijado en Vibe Space',
+      madeByAgent: 'Hecho por el agente para esta respuesta',
+      retry: 'Reintentar',
+      previewSample: 'Ver muestra',
+      returnToLive: 'Volver a en vivo',
+      sourceOffline: 'Fuente desconectada',
+      sourceRevoked: 'Acceso desactivado',
+      sourceMissing: 'Fuente no disponible'
+    },
+    fr: {
+      locale: 'fr',
+      rtl: false,
+      panelTitle: 'Vibe Space',
+      whatOffers: 'Ce que propose {host}',
+      wishPlaceholder: 'Je voudrais que {host}\u2026',
+      send: 'Envoyer',
+      wishNote: 'L\u2019IA est script\u00e9e dans cette d\u00e9mo. Choisissez un souhait.',
+      installed: 'Install\u00e9s',
+      filterPlaceholder: 'Filtrer les vibes install\u00e9s\u2026',
+      emptyInstalled: 'Rien ici pour le moment. Faites un souhait.',
+      sealedLegend: 'Les valeurs verrouill\u00e9es sont scell\u00e9es. {host} les affiche sans les r\u00e9v\u00e9ler.',
+      portableVibes: 'Vibes portables',
+      portableSub: 'Aucun acc\u00e8s requis, ils fonctionnent partout.',
+      reads: 'Lit',
+      shows: 'Affiche',
+      cannot: 'Ne peut pas',
+      onlyInsideBox: 'Uniquement dans sa propre bo\u00eete',
+      changeNothing: 'Modifier quoi que ce soit dans {host}',
+      nothingFromHost: 'Rien depuis {host}',
+      allowAndAdd: 'Autoriser et ajouter',
+      update: 'Mettre \u00e0 jour',
+      cancel: 'Annuler',
+      noNewPermissions: 'Version {version}. Aucune nouvelle permission.',
+      inspect: 'Inspecter',
+      hideInspect: 'Masquer l\u2019inspection',
+      share: 'Partager',
+      edit: 'Modifier',
+      rename: 'Renommer',
+      pause: 'Mettre en pause',
+      resume: 'Reprendre',
+      pinToTop: '\u00c9pingler en haut',
+      unpin: 'D\u00e9s\u00e9pingler',
+      moveUp: 'Monter',
+      moveDown: 'Descendre',
+      revert: 'R\u00e9tablir',
+      deleteLabel: 'Supprimer',
+      undo: 'Annuler',
+      temporary: 'Temporaire',
+      pinned: '\u00c9pingl\u00e9',
+      pinToVibeSpace: '\u00c9pingler dans Vibe Space',
+      pinnedToVibeSpace: '\u00c9pingl\u00e9 dans Vibe Space',
+      madeByAgent: 'Cr\u00e9\u00e9 par l\u2019agent pour cette r\u00e9ponse',
+      retry: 'R\u00e9essayer',
+      previewSample: 'Aper\u00e7u exemple',
+      returnToLive: 'Revenir au direct',
+      sourceOffline: 'Source hors ligne',
+      sourceRevoked: 'Acc\u00e8s d\u00e9sactiv\u00e9',
+      sourceMissing: 'Source indisponible'
+    },
+    de: {
+      locale: 'de',
+      rtl: false,
+      panelTitle: 'Vibe Space',
+      whatOffers: 'Was {host} bietet',
+      wishPlaceholder: 'Ich w\u00fcnschte, {host} w\u00fcrde\u2026',
+      send: 'Senden',
+      wishNote: 'Die KI ist in dieser Demo geskriptet. W\u00e4hle einen Wunsch.',
+      installed: 'Installiert',
+      filterPlaceholder: 'Installierte Vibes filtern\u2026',
+      emptyInstalled: 'Noch nichts hier. \u00c4u\u00dfere einen Wunsch.',
+      sealedLegend: 'Werte mit Schloss sind versiegelt. {host} zeichnet sie; der Vibe sieht sie nie.',
+      portableVibes: 'Portable Vibes',
+      portableSub: 'Ben\u00f6tigen nichts von der App und laufen \u00fcberall.',
+      reads: 'Liest',
+      shows: 'Zeigt',
+      cannot: 'Kann nicht',
+      onlyInsideBox: 'Nur in seiner eigenen Box',
+      changeNothing: 'Etwas in {host} \u00e4ndern',
+      nothingFromHost: 'Nichts von {host}',
+      allowAndAdd: 'Erlauben & hinzuf\u00fcgen',
+      update: 'Aktualisieren',
+      cancel: 'Abbrechen',
+      noNewPermissions: 'Version {version}. Keine neuen Berechtigungen.',
+      inspect: 'Pr\u00fcfen',
+      hideInspect: 'Pr\u00fcfung ausblenden',
+      share: 'Teilen',
+      edit: 'Bearbeiten',
+      rename: 'Umbenennen',
+      pause: 'Pausieren',
+      resume: 'Fortsetzen',
+      pinToTop: 'Oben anheften',
+      unpin: 'L\u00f6sen',
+      moveUp: 'Nach oben',
+      moveDown: 'Nach unten',
+      revert: 'Zur\u00fccksetzen',
+      deleteLabel: 'L\u00f6schen',
+      undo: 'R\u00fcckg\u00e4ngig',
+      temporary: 'Tempor\u00e4r',
+      pinned: 'Angeheftet',
+      pinToVibeSpace: 'An Vibe Space anheften',
+      pinnedToVibeSpace: 'An Vibe Space angeheftet',
+      madeByAgent: 'Vom Agenten f\u00fcr diese Antwort erstellt',
+      retry: 'Erneut versuchen',
+      previewSample: 'Beispiel ansehen',
+      returnToLive: 'Zur\u00fcck zu Live',
+      sourceOffline: 'Quelle offline',
+      sourceRevoked: 'Zugriff deaktiviert',
+      sourceMissing: 'Quelle nicht verf\u00fcgbar'
+    },
+    ar: {
+      locale: 'ar',
+      rtl: true,
+      panelTitle: '\u0645\u0633\u0627\u062d\u0629 Vibe',
+      whatOffers: '\u0645\u0627 \u064a\u0642\u062f\u0645\u0647 {host}',
+      wishPlaceholder: '\u0623\u062a\u0645\u0646\u0649 \u0644\u0648 \u064a\u0642\u0648\u0645 {host} \u0628\u0640\u2026',
+      send: '\u0625\u0631\u0633\u0627\u0644',
+      wishNote: '\u0627\u0644\u0630\u0643\u0627\u0621 \u0627\u0644\u0627\u0635\u0637\u0646\u0627\u0639\u064a \u0641\u064a \u0647\u0630\u0627 \u0627\u0644\u0639\u0631\u0636 \u0645\u0628\u0631\u0645\u062c \u0645\u0633\u0628\u0642\u064b\u0627.',
+      installed: '\u0627\u0644\u0645\u062b\u0628\u062a\u0629',
+      filterPlaceholder: '\u062a\u0635\u0641\u064a\u0629 \u0627\u0644\u0639\u0646\u0627\u0635\u0631 \u0627\u0644\u0645\u062b\u0628\u062a\u0629\u2026',
+      emptyInstalled: '\u0644\u0627 \u064a\u0648\u062c\u062f \u0634\u064a\u0621 \u0628\u0639\u062f.',
+      sealedLegend: '\u0627\u0644\u0642\u064a\u0645 \u0630\u0627\u062a \u0627\u0644\u0642\u0641\u0644 \u0645\u062e\u062a\u0648\u0645\u0629. \u064a\u0639\u0631\u0636\u0647\u0627 {host} \u062f\u0648\u0646 \u0623\u0646 \u064a\u0631\u0627\u0647\u0627 \u0627\u0644\u0628\u0631\u0646\u0627\u0645\u062c.',
+      portableVibes: '\u0623\u062f\u0648\u0627\u062a \u0645\u062d\u0645\u0648\u0644\u0629',
+      portableSub: '\u0644\u0627 \u062a\u062d\u062a\u0627\u062c \u0625\u0644\u0649 \u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u062a\u0637\u0628\u064a\u0642.',
+      reads: '\u064a\u0642\u0631\u0623',
+      shows: '\u064a\u0639\u0631\u0636',
+      cannot: '\u0644\u0627 \u064a\u0645\u0643\u0646\u0647',
+      onlyInsideBox: '\u062f\u0627\u062e\u0644 \u0635\u0646\u062f\u0648\u0642\u0647 \u0641\u0642\u0637',
+      changeNothing: '\u062a\u063a\u064a\u064a\u0631 \u0623\u064a \u0634\u064a\u0621 \u0641\u064a {host}',
+      nothingFromHost: '\u0644\u0627 \u0634\u064a\u0621 \u0645\u0646 {host}',
+      allowAndAdd: '\u0633\u0645\u0627\u062d \u0648\u0625\u0636\u0627\u0641\u0629',
+      update: '\u062a\u062d\u062f\u064a\u062b',
+      cancel: '\u0625\u0644\u063a\u0627\u0621',
+      noNewPermissions: '\u0627\u0644\u0625\u0635\u062f\u0627\u0631 {version}. \u0644\u0627 \u062a\u0648\u062c\u062f \u0623\u0630\u0648\u0646\u0627\u062a \u062c\u062f\u064a\u062f\u0629.',
+      inspect: '\u0641\u062d\u0635',
+      hideInspect: '\u0625\u062e\u0641\u0627\u0621 \u0627\u0644\u0641\u062d\u0635',
+      share: '\u0645\u0634\u0627\u0631\u0643\u0629',
+      edit: '\u062a\u0639\u062f\u064a\u0644',
+      rename: '\u0625\u0639\u0627\u062f\u0629 \u062a\u0633\u0645\u064a\u0629',
+      pause: '\u0625\u064a\u0642\u0627\u0641 \u0645\u0624\u0642\u062a',
+      resume: '\u0627\u0633\u062a\u0626\u0646\u0627\u0641',
+      pinToTop: '\u062a\u062b\u0628\u064a\u062a \u0641\u064a \u0627\u0644\u0623\u0639\u0644\u0649',
+      unpin: '\u0625\u0644\u063a\u0627\u0621 \u0627\u0644\u062a\u062b\u0628\u064a\u062a',
+      moveUp: '\u062a\u062d\u0631\u064a\u0643 \u0644\u0644\u0623\u0639\u0644\u0649',
+      moveDown: '\u062a\u062d\u0631\u064a\u0643 \u0644\u0644\u0623\u0633\u0641\u0644',
+      revert: '\u0627\u0633\u062a\u0639\u0627\u062f\u0629',
+      deleteLabel: '\u062d\u0630\u0641',
+      undo: '\u062a\u0631\u0627\u062c\u0639',
+      temporary: '\u0645\u0624\u0642\u062a',
+      pinned: '\u0645\u062b\u0628\u062a',
+      pinToVibeSpace: '\u062a\u062b\u0628\u064a\u062a \u0641\u064a \u0645\u0633\u0627\u062d\u0629 Vibe',
+      pinnedToVibeSpace: '\u062a\u0645 \u0627\u0644\u062a\u062b\u0628\u064a\u062a \u0641\u064a \u0645\u0633\u0627\u062d\u0629 Vibe',
+      madeByAgent: '\u0623\u0646\u0634\u0623\u0647 \u0627\u0644\u0648\u0643\u064a\u0644 \u0644\u0647\u0630\u0647 \u0627\u0644\u0625\u062c\u0627\u0628\u0629',
+      retry: '\u0625\u0639\u0627\u062f\u0629 \u0627\u0644\u0645\u062d\u0627\u0648\u0644\u0629',
+      previewSample: '\u0645\u0639\u0627\u064a\u0646\u0629 \u0639\u064a\u0646\u0629',
+      returnToLive: '\u0627\u0644\u0639\u0648\u062f\u0629 \u0644\u0644\u0628\u064a\u0627\u0646\u0627\u062a \u0627\u0644\u062d\u064a\u0629',
+      sourceOffline: '\u0627\u0644\u0645\u0635\u062f\u0631 \u063a\u064a\u0631 \u0645\u062a\u0635\u0644',
+      sourceRevoked: '\u062a\u0645 \u0625\u064a\u0642\u0627\u0641 \u0627\u0644\u0648\u0635\u0648\u0644 \u0644\u0644\u0645\u0635\u062f\u0631',
+      sourceMissing: '\u0627\u0644\u0645\u0635\u062f\u0631 \u063a\u064a\u0631 \u0645\u062a\u0627\u062d'
+    }
+  };
+
+  function isRtlLocale(locale) {
+    if (typeof locale !== 'string' || !locale.trim()) return false;
+    var base = locale.trim().toLowerCase().split(/[-_]/)[0];
+    return base === 'ar' || base === 'he' || base === 'fa' || base === 'ur';
+  }
+
+  function getVibeStrings(locale, overrides) {
+    var base = typeof locale === 'string' && locale.trim()
+      ? locale.trim().toLowerCase().split(/[-_]/)[0]
+      : 'en';
+    var pack = DEMO_LOCALE_PACKS[base] || DEMO_LOCALE_PACKS.en;
+    var merged = {};
+    var keys = Object.keys(pack);
+    for (var i = 0; i < keys.length; i++) merged[keys[i]] = pack[keys[i]];
+    if (isPlainObject(overrides)) {
+      var oKeys = Object.keys(overrides);
+      for (var j = 0; j < oKeys.length; j++) {
+        var ok = oKeys[j];
+        if (typeof overrides[ok] === 'string') merged[ok] = overrides[ok];
+        else if (ok === 'rtl' && typeof overrides[ok] === 'boolean') merged.rtl = overrides[ok];
+      }
+    }
+    return merged;
+  }
+
+  var A2UI_TYPES = new Set([
+    'Text', 'Heading', 'Badge', 'Button', 'Card', 'Row', 'Column',
+    'TextField', 'CheckBox', 'MultipleChoice', 'ProgressBar', 'LinearProgress',
+    'Metric', 'Stat', 'Table', 'Divider', 'Bar', 'Sparkline'
+  ]);
+
+  function isExternalUiDialect(raw) {
+    if (typeof raw === 'string') return true;
+    if (!isPlainObject(raw)) return false;
+    if (raw.format === 'markdown' || typeof raw.markdown === 'string') return true;
+    if (raw.type === 'AdaptiveCard') return true;
+    if (isPlainObject(raw.surfaceUpdate) && Array.isArray(raw.surfaceUpdate.components)) return true;
+    if (Array.isArray(raw.components)) return true;
+    if (isPlainObject(raw.component)) return true;
+    return typeof raw.type === 'string' && A2UI_TYPES.has(raw.type);
+  }
+
+  function sanitizeAdapterSlot(val) {
+    if (isSealedHandle(val)) return { sealed: val.sealed };
+    if (typeof val === 'number' && Number.isFinite(val)) return val;
+    if (typeof val === 'string') return val.length > 4096 ? val.slice(0, 4096) : val;
+    if (typeof val === 'boolean') return String(val);
+    if (isPlainObject(val)) {
+      if (typeof val.sealed === 'string' && val.sealed.length > 0) return { sealed: val.sealed };
+      if (typeof val.literalString === 'string') return sanitizeAdapterSlot(val.literalString);
+      if (typeof val.literalNumber === 'number') return sanitizeAdapterSlot(val.literalNumber);
+      if (val.text !== undefined) return sanitizeAdapterSlot(val.text);
+    }
+    return '';
+  }
+
+  function mapAdapterTone(color) {
+    var c = typeof color === 'string' ? color.toLowerCase() : '';
+    if (c === 'good' || c === 'ok') return 'ok';
+    if (c === 'warning' || c === 'warn') return 'warn';
+    if (c === 'attention' || c === 'danger') return 'danger';
+    return 'default';
+  }
+
+  function adaptMarkdownView(md) {
+    var lines = String(md || '').slice(0, 65536).split(/\r?\n/);
+    var children = [];
+    for (var i = 0; i < lines.length && children.length < 200; i++) {
+      var line = lines[i].trim();
+      if (!line) continue;
+      if (/^---+$/.test(line) || /^\*\*\*+$/.test(line)) {
+        children.push({ type: 'divider' });
+        continue;
+      }
+      var hm = line.match(/^#{1,6}\s+(.+)$/);
+      if (hm) {
+        children.push({ type: 'heading', text: hm[1].trim() });
+        continue;
+      }
+      if (line.indexOf('|') === 0 && i + 1 < lines.length && /^\|[\s:-]+\|/.test(lines[i + 1].trim())) {
+        var splitRow = function (r) {
+          return r.replace(/^\|/, '').replace(/\|$/, '').split('|').map(function (c) { return c.trim(); });
+        };
+        var headers = splitRow(line);
+        i += 2;
+        var rows = [];
+        while (i < lines.length && lines[i].trim().indexOf('|') === 0 && rows.length < 100) {
+          rows.push(splitRow(lines[i].trim()));
+          i += 1;
+        }
+        i -= 1;
+        children.push({ type: 'table', headers: headers, rows: rows });
+        continue;
+      }
+      var lm = line.match(/^[-*+]\s+(.+)$/);
+      children.push({ type: 'text', text: lm ? ('\u2022 ' + lm[1].trim()) : line });
+    }
+    return { type: 'column', children: children };
+  }
+
+  function adaptAdaptiveNode(node, budget) {
+    if (!isPlainObject(node) || budget.count >= MAX_VIEW_NODES) return null;
+    budget.count += 1;
+    var t = node.type;
+    if (t === 'TextBlock') {
+      var tone = mapAdapterTone(node.color);
+      if (node.style === 'heading' || node.size === 'Large' || node.size === 'ExtraLarge' || node.size === 'Medium') {
+        return { type: 'heading', text: sanitizeAdapterSlot(node.text), tone: tone };
+      }
+      return { type: 'text', text: sanitizeAdapterSlot(node.text), tone: tone, strong: node.weight === 'Bolder' };
+    }
+    if (t === 'Container' || t === 'Column') {
+      var items = Array.isArray(node.items) ? node.items : [];
+      var kids = [];
+      for (var i = 0; i < items.length; i++) {
+        var child = adaptAdaptiveNode(items[i], budget);
+        if (child) kids.push(child);
+      }
+      return {
+        type: t === 'Container' && node.style ? 'card' : 'column',
+        children: kids,
+        tone: mapAdapterTone(node.style)
+      };
+    }
+    if (t === 'ColumnSet') {
+      var cols = Array.isArray(node.columns) ? node.columns : [];
+      var rowKids = [];
+      for (var c = 0; c < cols.length; c++) {
+        var cNode = adaptAdaptiveNode(cols[c], budget);
+        if (cNode) rowKids.push(cNode);
+      }
+      return { type: 'row', children: rowKids };
+    }
+    if (t === 'FactSet') {
+      var facts = Array.isArray(node.facts) ? node.facts : [];
+      return {
+        type: 'table',
+        headers: ['Key', 'Value'],
+        rows: facts.slice(0, 100).map(function (f) {
+          return [sanitizeAdapterSlot(f && f.title), sanitizeAdapterSlot(f && f.value)];
+        })
+      };
+    }
+    if (t === 'ActionSet') {
+      var acts = Array.isArray(node.actions) ? node.actions : [];
+      var aKids = [];
+      for (var a = 0; a < acts.length; a++) {
+        var aNode = adaptAdaptiveNode(acts[a], budget);
+        if (aNode) aKids.push(aNode);
+      }
+      return { type: 'row', children: aKids };
+    }
+    if (t === 'Action.Submit' || t === 'Action.Execute') {
+      var cmd = typeof node.verb === 'string' && node.verb ? node.verb : (node.data && typeof node.data.command === 'string' ? node.data.command : 'submit');
+      return {
+        type: 'button',
+        text: sanitizeAdapterSlot(node.title || 'Run'),
+        command: cmd,
+        args: isPlainObject(node.data) ? jsonClone(node.data) : undefined,
+        tone: node.style === 'destructive' ? 'danger' : (node.style === 'positive' ? 'ok' : 'default')
+      };
+    }
+    if (t === 'ProgressBar') {
+      var pv = typeof node.value === 'number' && Number.isFinite(node.value) ? Math.max(0, Math.min(1, node.value)) : 0;
+      return { type: 'bar', label: sanitizeAdapterSlot(node.title || 'Progress'), value: pv, max: 1 };
+    }
+    return null;
+  }
+
+  function adaptA2uiTree(nodeOrId, byId, visiting, depth, budget) {
+    if (depth >= MAX_VIEW_DEPTH || budget.count >= MAX_VIEW_NODES) return null;
+    var comp = nodeOrId;
+    var idKey = null;
+    if (typeof nodeOrId === 'string') {
+      if (visiting.has(nodeOrId)) return null;
+      comp = byId.get(nodeOrId);
+      if (!comp) return null;
+      idKey = nodeOrId;
+      visiting.add(nodeOrId);
+    }
+    var out = null;
+    try {
+      if (!isPlainObject(comp)) return null;
+      budget.count += 1;
+      var typeName = comp.type;
+      var props = comp;
+      if (isPlainObject(comp.component)) {
+        var keys = Object.keys(comp.component);
+        if (keys.length > 0) {
+          typeName = keys[0];
+          props = isPlainObject(comp.component[typeName]) ? comp.component[typeName] : {};
+        }
+      }
+      var collectChildren = function (rawKids) {
+        var refs = [];
+        if (Array.isArray(rawKids)) refs = rawKids;
+        else if (isPlainObject(rawKids) && Array.isArray(rawKids.explicitList)) refs = rawKids.explicitList;
+        else if (typeof props.child === 'string') refs = [props.child];
+        var res = [];
+        for (var i = 0; i < refs.length; i++) {
+          var child = adaptA2uiTree(refs[i], byId, visiting, depth + 1, budget);
+          if (child) res.push(child);
+        }
+        return res;
+      };
+      var tone = VALID_TONES.has(props.tone) ? props.tone : 'default';
+      if (typeName === 'Heading') out = { type: 'heading', text: sanitizeAdapterSlot(props.text), tone: tone };
+      else if (typeName === 'Text') {
+        var hint = typeof props.usageHint === 'string' ? props.usageHint.toLowerCase() : '';
+        out = (hint === 'h1' || hint === 'h2' || hint === 'h3' || hint === 'heading')
+          ? { type: 'heading', text: sanitizeAdapterSlot(props.text), tone: tone }
+          : { type: 'text', text: sanitizeAdapterSlot(props.text), tone: tone, strong: Boolean(props.strong || props.bold), mono: Boolean(props.mono || props.code) };
+      } else if (typeName === 'Badge') out = { type: 'badge', text: sanitizeAdapterSlot(props.text), tone: tone };
+      else if (typeName === 'Metric' || typeName === 'Stat') out = { type: 'stat', label: sanitizeAdapterSlot(props.label), value: sanitizeAdapterSlot(props.value), tone: tone };
+      else if (typeName === 'Bar') out = {
+        type: 'bar',
+        label: sanitizeAdapterSlot(props.label),
+        value: Number.isFinite(Number(props.value)) ? Number(props.value) : 0,
+        max: Number.isFinite(Number(props.max)) && Number(props.max) > 0 ? Number(props.max) : 1,
+        caption: props.caption !== undefined ? sanitizeAdapterSlot(props.caption) : undefined,
+        swatch: typeof props.swatch === 'string' && HEX_COLOR_RE.test(props.swatch) ? props.swatch : undefined,
+        tone: tone
+      };
+      else if (typeName === 'Sparkline') out = {
+        type: 'sparkline',
+        values: Array.isArray(props.values) ? props.values.filter(function (n) { return typeof n === 'number' && Number.isFinite(n); }).slice(0, 240) : [],
+        tone: tone
+      };
+      else if (typeName === 'Button') {
+        var bText = props.text;
+        if (bText === undefined && typeof props.child === 'string') {
+          var childBtn = adaptA2uiTree(props.child, byId, visiting, depth + 1, budget);
+          if (childBtn && childBtn.text !== undefined) bText = childBtn.text;
+        }
+        var cmdName = isPlainObject(props.action) && typeof props.action.name === 'string' ? props.action.name : (typeof props.command === 'string' ? props.command : 'action');
+        var cmdArgs = isPlainObject(props.action) && isPlainObject(props.action.context) ? props.action.context : (isPlainObject(props.args) ? props.args : undefined);
+        out = { type: 'button', text: sanitizeAdapterSlot(bText !== undefined ? bText : 'Action'), command: cmdName, args: cmdArgs ? jsonClone(cmdArgs) : undefined, tone: tone };
+      } else if (typeName === 'Card') out = { type: 'card', children: collectChildren(props.children), tone: tone };
+      else if (typeName === 'Row') out = { type: 'row', children: collectChildren(props.children), tone: tone };
+      else if (typeName === 'Column') out = { type: 'column', children: collectChildren(props.children), tone: tone };
+      else if (typeName === 'ProgressBar' || typeName === 'LinearProgress') out = {
+        type: 'bar',
+        label: sanitizeAdapterSlot(props.label || 'Progress'),
+        value: typeof props.value === 'number' && Number.isFinite(props.value) ? Math.max(0, Math.min(1, props.value)) : 0,
+        max: 1,
+        tone: tone
+      };
+      else if (typeName === 'Table') out = {
+        type: 'table',
+        headers: (Array.isArray(props.headers) ? props.headers : []).slice(0, 30).map(sanitizeAdapterSlot),
+        rows: (Array.isArray(props.rows) ? props.rows : []).slice(0, 200).map(function (r) {
+          return (Array.isArray(r) ? r : []).slice(0, 30).map(sanitizeAdapterSlot);
+        })
+      };
+      else if (typeName === 'Divider') out = { type: 'divider' };
+    } finally {
+      if (idKey !== null) visiting.delete(idKey);
+    }
+    return out;
+  }
+
+  function adaptExternalUi(raw) {
+    if (typeof raw === 'string') return adaptMarkdownView(raw);
+    if (!isPlainObject(raw)) throw new Error('External UI payload must be an object or markdown string');
+    if (raw.format === 'markdown' || typeof raw.markdown === 'string') return adaptMarkdownView(raw.markdown || '');
+    if (raw.type === 'AdaptiveCard') {
+      var budget = { count: 0 };
+      var body = Array.isArray(raw.body) ? raw.body : [];
+      var actions = Array.isArray(raw.actions) ? raw.actions : [];
+      var children = [];
+      for (var i = 0; i < body.length; i++) {
+        var bNode = adaptAdaptiveNode(body[i], budget);
+        if (bNode) children.push(bNode);
+      }
+      if (actions.length > 0) {
+        var actRow = [];
+        for (var j = 0; j < actions.length; j++) {
+          var aNode = adaptAdaptiveNode(actions[j], budget);
+          if (aNode) actRow.push(aNode);
+        }
+        if (actRow.length > 0) children.push({ type: 'row', children: actRow });
+      }
+      return { type: 'column', children: children };
+    }
+    if (isExternalUiDialect(raw)) {
+      var surface = isPlainObject(raw.surfaceUpdate) ? raw.surfaceUpdate : raw;
+      if (Array.isArray(surface.components)) {
+        var byId = new Map();
+        for (var k = 0; k < surface.components.length; k++) {
+          var entry = surface.components[k];
+          if (isPlainObject(entry) && typeof entry.id === 'string') byId.set(entry.id, entry);
+        }
+        var rootId = typeof surface.root === 'string'
+          ? surface.root
+          : (byId.has('root') ? 'root' : (surface.components[0] && surface.components[0].id));
+        if (!rootId) return { type: 'column', children: [] };
+        return adaptA2uiTree(rootId, byId, new Set(), 0, { count: 0 }) || { type: 'column', children: [] };
+      }
+      return adaptA2uiTree(raw, new Map(), new Set(), 0, { count: 0 }) || { type: 'column', children: [] };
+    }
+    return raw;
+  }
+
+  function maybeAdaptExternalUi(view) {
+    if (!isExternalUiDialect(view)) return view;
+    try {
+      return adaptExternalUi(view);
+    } catch (_) {
+      return view;
+    }
+  }
+
+  function resolveAdapterSlot(val, resolveSealed) {
+    if (isSealedHandle(val)) {
+      if (typeof resolveSealed !== 'function') return { text: '', sealed: true, sealedResolved: false };
+      var res = resolveSealed(val);
+      if (res === undefined || res === null || String(res) === '') return { text: '', sealed: true, sealedResolved: false };
+      return { text: String(res), sealed: true, sealedResolved: true };
+    }
+    return { text: val === undefined || val === null ? '' : String(val), sealed: false, sealedResolved: false };
+  }
+
+  function resolveViewTree(view, options) {
+    var resolveSealed = options && typeof options.resolveSealed === 'function' ? options.resolveSealed : null;
+    var normalized = maybeAdaptExternalUi(view);
+    function walk(node) {
+      if (!isPlainObject(node)) return null;
+      var t = node.type;
+      var tone = VALID_TONES.has(node.tone) ? node.tone : 'default';
+      if (t === 'column' || t === 'row' || t === 'card') {
+        return {
+          type: t,
+          tone: tone,
+          children: (Array.isArray(node.children) ? node.children : []).map(walk).filter(Boolean)
+        };
+      }
+      if (t === 'heading' || t === 'text' || t === 'badge') {
+        var s = resolveAdapterSlot(node.text, resolveSealed);
+        return { type: t, tone: tone, text: s.text, sealed: s.sealed, sealedResolved: s.sealedResolved, strong: Boolean(node.strong), mono: Boolean(node.mono) };
+      }
+      if (t === 'stat') {
+        var sl = resolveAdapterSlot(node.label, resolveSealed);
+        var sv = resolveAdapterSlot(node.value, resolveSealed);
+        return { type: 'stat', tone: tone, label: sl.text, labelSealed: sl.sealed, labelSealedResolved: sl.sealedResolved, value: sv.text, valueSealed: sv.sealed, valueSealedResolved: sv.sealedResolved };
+      }
+      if (t === 'bar') {
+        var bl = resolveAdapterSlot(node.label, resolveSealed);
+        var bc = hasBarCaption(node) ? resolveAdapterSlot(node.caption, resolveSealed) : null;
+        var max = typeof node.max === 'number' && node.max > 0 ? node.max : 1;
+        var val = typeof node.value === 'number' && Number.isFinite(node.value) ? node.value : 0;
+        return {
+          type: 'bar',
+          tone: tone,
+          label: bl.text,
+          labelSealed: bl.sealed,
+          labelSealedResolved: bl.sealedResolved,
+          caption: bc ? bc.text : '',
+          captionSealed: bc ? bc.sealed : false,
+          captionSealedResolved: bc ? bc.sealedResolved : false,
+          value: val,
+          max: max,
+          ratio: Math.max(0, Math.min(1, val / max)),
+          swatch: isValidSwatch(node.swatch) ? node.swatch : undefined
+        };
+      }
+      if (t === 'sparkline') {
+        return { type: 'sparkline', tone: tone, values: Array.isArray(node.values) ? node.values.slice() : [] };
+      }
+      if (t === 'button' || t === 'action') {
+        var bt = resolveAdapterSlot(t === 'button' ? node.text : node.title, resolveSealed);
+        return { type: 'button', tone: tone, text: bt.text, sealed: bt.sealed, sealedResolved: bt.sealedResolved, command: node.command, args: node.args || node.arguments || {} };
+      }
+      if (t === 'table') {
+        return {
+          type: 'table',
+          headers: (Array.isArray(node.headers) ? node.headers : []).map(function (h) { return resolveAdapterSlot(h, resolveSealed); }),
+          rows: (Array.isArray(node.rows) ? node.rows : []).map(function (r) {
+            return (Array.isArray(r) ? r : []).map(function (c) { return resolveAdapterSlot(c, resolveSealed); });
+          })
+        };
+      }
+      if (t === 'divider') return { type: 'divider' };
+      return null;
+    }
+    return walk(normalized);
+  }
+
+  function renderWithH(h, view, options) {
+    if (typeof h !== 'function') throw new Error('renderWithH requires a hyperscript function');
+    var opts = options || {};
+    var prefix = typeof opts.classPrefix === 'string' && opts.classPrefix ? opts.classPrefix : 'vk';
+    var tree = resolveViewTree(view, opts);
+    function slotChild(s) {
+      if (s.sealed) return s.sealedResolved ? h('span', { className: prefix + '-sealed' }, s.text) : '';
+      return s.text;
+    }
+    function walk(node, key) {
+      if (!node) return null;
+      var tCls = node.tone && node.tone !== 'default' ? ' ' + prefix + '-tone-' + node.tone : '';
+      var t = node.type;
+      if (t === 'column' || t === 'row' || t === 'card') {
+        return h.apply(null, ['div', { key: key, className: prefix + '-' + t + tCls }].concat((node.children || []).map(walk)));
+      }
+      if (t === 'heading') return h('div', { key: key, className: prefix + '-heading' + tCls }, slotChild(node));
+      if (t === 'text') return h('div', { key: key, className: prefix + '-text' + tCls + (node.strong ? ' ' + prefix + '-strong' : '') + (node.mono ? ' ' + prefix + '-mono' : '') }, slotChild(node));
+      if (t === 'badge') return h('span', { key: key, className: prefix + '-badge' + tCls }, slotChild(node));
+      if (t === 'stat') return h('div', { key: key, className: prefix + '-stat' + tCls },
+        h('div', { className: prefix + '-stat-value' }, slotChild({ text: node.value, sealed: node.valueSealed, sealedResolved: node.valueSealedResolved })),
+        h('div', { className: prefix + '-stat-label' }, slotChild({ text: node.label, sealed: node.labelSealed, sealedResolved: node.labelSealedResolved }))
+      );
+      if (t === 'bar') {
+        var head = [];
+        if (node.swatch) head.push(h('span', { className: prefix + '-bar-swatch', style: { backgroundColor: node.swatch } }));
+        head.push(h('span', { className: prefix + '-bar-label' }, slotChild({ text: node.label, sealed: node.labelSealed, sealedResolved: node.labelSealedResolved })));
+        if (node.caption || node.captionSealed) head.push(h('span', { className: prefix + '-bar-caption' }, slotChild({ text: node.caption, sealed: node.captionSealed, sealedResolved: node.captionSealedResolved })));
+        return h('div', { key: key, className: prefix + '-bar' + tCls },
+          h.apply(null, ['div', { className: prefix + '-bar-head' }].concat(head)),
+          h('div', { className: prefix + '-bar-track' }, h('div', { className: prefix + '-bar-fill', style: { width: (Math.round(node.ratio * 1000) / 10) + '%' } }))
+        );
+      }
+      if (t === 'sparkline') return h('svg', { key: key, className: prefix + '-sparkline' + tCls, viewBox: '0 0 100 28', preserveAspectRatio: 'none' }, h('polyline', { points: sparklinePoints(node.values), fill: 'none' }));
+      if (t === 'button') return h('button', { key: key, type: 'button', className: prefix + '-button' + tCls, onClick: function () { if (typeof opts.onCommand === 'function') opts.onCommand(node.command, node.args || {}); } }, slotChild(node));
+      if (t === 'table') return h('table', { key: key, className: prefix + '-table' },
+        h('thead', null, h.apply(null, ['tr', null].concat(node.headers.map(function (hdr, idx) { return h('th', { key: idx }, slotChild(hdr)); })))),
+        h.apply(null, ['tbody', null].concat(node.rows.map(function (r, rIdx) {
+          return h.apply(null, ['tr', { key: rIdx }].concat(r.map(function (c, cIdx) { return h('td', { key: cIdx }, slotChild(c)); })));
+        })))
+      );
+      if (t === 'divider') return h('hr', { key: key, className: prefix + '-divider' });
+      return null;
+    }
+    return walk(tree, 0);
+  }
+
+  function formatPlainSlot(s) {
+    if (!s.sealed) return s.text;
+    return s.sealedResolved ? '\ud83d\udd12 ' + s.text : '';
+  }
+
+  function renderToTerminal(view, options) {
+    var opts = options || {};
+    var width = typeof opts.width === 'number' ? opts.width : 72;
+    var ansi = Boolean(opts.ansi);
+    var tree = resolveViewTree(view, opts);
+    var lines = [];
+    var barWidth = Math.max(10, Math.min(28, Math.floor(width / 3)));
+    var sparks = '\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588';
+    function colorize(str, tone) {
+      if (!ansi) return str;
+      if (tone === 'ok') return '\x1b[32m' + str + '\x1b[0m';
+      if (tone === 'warn') return '\x1b[33m' + str + '\x1b[0m';
+      if (tone === 'danger') return '\x1b[31m' + str + '\x1b[0m';
+      return str;
+    }
+    function walk(node) {
+      if (!node) return;
+      var t = node.type;
+      if (t === 'column' || t === 'row' || t === 'card') {
+        for (var i = 0; i < (node.children || []).length; i++) walk(node.children[i]);
+        return;
+      }
+      if (t === 'heading') lines.push(colorize(formatPlainSlot(node).toUpperCase(), node.tone));
+      else if (t === 'text') lines.push(colorize(formatPlainSlot(node), node.tone));
+      else if (t === 'badge') lines.push(colorize('[' + formatPlainSlot(node) + ']', node.tone));
+      else if (t === 'stat') lines.push(formatPlainSlot({ text: node.label, sealed: node.labelSealed, sealedResolved: node.labelSealedResolved }) + ': ' + colorize(formatPlainSlot({ text: node.value, sealed: node.valueSealed, sealedResolved: node.valueSealedResolved }), node.tone));
+      else if (t === 'bar') {
+        var filled = Math.round(node.ratio * barWidth);
+        var track = '\u2588'.repeat(filled) + '\u2591'.repeat(Math.max(0, barWidth - filled));
+        var lbl = formatPlainSlot({ text: node.label, sealed: node.labelSealed, sealedResolved: node.labelSealedResolved });
+        var cap = formatPlainSlot({ text: node.caption, sealed: node.captionSealed, sealedResolved: node.captionSealedResolved });
+        lines.push(lbl + ' ' + colorize(track, node.tone) + (cap ? ' ' + cap : ''));
+      } else if (t === 'sparkline' && node.values && node.values.length) {
+        var min = Math.min.apply(null, node.values);
+        var max = Math.max.apply(null, node.values);
+        var span = max - min || 1;
+        lines.push(colorize(node.values.map(function (v) { return sparks[Math.max(0, Math.min(7, Math.round(((v - min) / span) * 7)))]; }).join(''), node.tone));
+      } else if (t === 'table') {
+        if (node.headers.length) {
+          lines.push(node.headers.map(formatPlainSlot).join(' | '));
+          lines.push(node.headers.map(function () { return '---'; }).join('-|-'));
+        }
+        for (var r = 0; r < node.rows.length; r++) lines.push(node.rows[r].map(formatPlainSlot).join(' | '));
+      } else if (t === 'divider') lines.push('\u2500'.repeat(Math.min(width, 40)));
+      else if (t === 'button') lines.push('[ ' + formatPlainSlot(node) + ' ]');
+    }
+    walk(tree);
+    return lines.join('\n');
+  }
+
+  function renderToMarkdown(view, options) {
+    var tree = resolveViewTree(view, options);
+    var lines = [];
+    function walk(node) {
+      if (!node) return;
+      var t = node.type;
+      if (t === 'column' || t === 'row' || t === 'card') {
+        for (var i = 0; i < (node.children || []).length; i++) walk(node.children[i]);
+      } else if (t === 'heading') lines.push('## ' + formatPlainSlot(node));
+      else if (t === 'text') lines.push(formatPlainSlot(node));
+      else if (t === 'badge') lines.push('`' + formatPlainSlot(node) + '`');
+      else if (t === 'stat') lines.push('- **' + formatPlainSlot({ text: node.label, sealed: node.labelSealed, sealedResolved: node.labelSealedResolved }) + ':** ' + formatPlainSlot({ text: node.value, sealed: node.valueSealed, sealedResolved: node.valueSealedResolved }));
+      else if (t === 'bar') {
+        var lbl = formatPlainSlot({ text: node.label, sealed: node.labelSealed, sealedResolved: node.labelSealedResolved });
+        var cap = formatPlainSlot({ text: node.caption, sealed: node.captionSealed, sealedResolved: node.captionSealedResolved });
+        lines.push('- **' + lbl + '**: ' + (cap || Math.round(node.ratio * 100) + '%'));
+      } else if (t === 'table') {
+        var hdrs = node.headers.map(formatPlainSlot);
+        if (hdrs.length) {
+          lines.push('| ' + hdrs.join(' | ') + ' |');
+          lines.push('| ' + hdrs.map(function () { return '---'; }).join(' | ') + ' |');
+        }
+        for (var r = 0; r < node.rows.length; r++) lines.push('| ' + node.rows[r].map(formatPlainSlot).join(' | ') + ' |');
+      } else if (t === 'divider') lines.push('---');
+      else if (t === 'button') lines.push('[' + formatPlainSlot(node) + ']');
+    }
+    walk(tree);
+    return lines.join('\n');
+  }
+
+  function escapeXml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function renderToHtmlString(view, options) {
+    var tree = resolveViewTree(view, options);
+    function slotXml(s) {
+      if (s.sealed) return s.sealedResolved ? '<span class="vk-sealed">' + escapeXml(s.text) + '</span>' : '';
+      return escapeXml(s.text);
+    }
+    function walk(node) {
+      if (!node) return '';
+      var tCls = node.tone && node.tone !== 'default' ? ' vk-tone-' + escapeXml(node.tone) : '';
+      var t = node.type;
+      if (t === 'column' || t === 'row' || t === 'card') return '<div class="vk-' + t + tCls + '">' + (node.children || []).map(walk).join('') + '</div>';
+      if (t === 'heading') return '<div class="vk-heading' + tCls + '">' + slotXml(node) + '</div>';
+      if (t === 'text') return '<div class="vk-text' + tCls + (node.strong ? ' vk-strong' : '') + (node.mono ? ' vk-mono' : '') + '">' + slotXml(node) + '</div>';
+      if (t === 'badge') return '<span class="vk-badge' + tCls + '">' + slotXml(node) + '</span>';
+      if (t === 'stat') return '<div class="vk-stat' + tCls + '"><div class="vk-stat-value">' + slotXml({ text: node.value, sealed: node.valueSealed, sealedResolved: node.valueSealedResolved }) + '</div><div class="vk-stat-label">' + slotXml({ text: node.label, sealed: node.labelSealed, sealedResolved: node.labelSealedResolved }) + '</div></div>';
+      if (t === 'bar') {
+        var sw = node.swatch && HEX_COLOR_RE.test(node.swatch) ? '<span class="vk-bar-swatch" style="background-color:' + node.swatch + '"></span>' : '';
+        var cp = node.caption || node.captionSealed ? '<span class="vk-bar-caption">' + slotXml({ text: node.caption, sealed: node.captionSealed, sealedResolved: node.captionSealedResolved }) + '</span>' : '';
+        return '<div class="vk-bar' + tCls + '"><div class="vk-bar-head">' + sw + '<span class="vk-bar-label">' + slotXml({ text: node.label, sealed: node.labelSealed, sealedResolved: node.labelSealedResolved }) + '</span>' + cp + '</div><div class="vk-bar-track"><div class="vk-bar-fill" style="width:' + (Math.round(node.ratio * 1000) / 10) + '%"></div></div></div>';
+      }
+      if (t === 'sparkline') return '<svg class="vk-sparkline' + tCls + '" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="' + sparklinePoints(node.values) + '"></polyline></svg>';
+      if (t === 'table') return '<table class="vk-table"><thead><tr>' + node.headers.map(function (h) { return '<th>' + slotXml(h) + '</th>'; }).join('') + '</tr></thead><tbody>' + node.rows.map(function (r) { return '<tr>' + r.map(function (c) { return '<td>' + slotXml(c) + '</td>'; }).join('') + '</tr>'; }).join('') + '</tbody></table>';
+      if (t === 'button') return '<button type="button" class="vk-button' + tCls + '">' + slotXml(node) + '</button>';
+      if (t === 'divider') return '<hr class="vk-divider">';
+      return '';
+    }
+    return walk(tree);
+  }
+
+  function defineVibeWebComponents(env) {
+    var hostEnv = env || global;
+    if (!hostEnv || !hostEnv.customElements || typeof hostEnv.HTMLElement !== 'function') {
+      return false;
+    }
+    var Base = hostEnv.HTMLElement;
+    var registry = hostEnv.customElements;
+
+    function VibeViewElement() {
+      return Reflect.construct(Base, [], VibeViewElement);
+    }
+    Object.setPrototypeOf(VibeViewElement.prototype, Base.prototype);
+    Object.setPrototypeOf(VibeViewElement, Base);
+    Object.defineProperty(VibeViewElement.prototype, 'view', {
+      get: function () { return this._view; },
+      set: function (v) { this._view = v; this.render(); }
+    });
+    Object.defineProperty(VibeViewElement.prototype, 'resolveSealed', {
+      get: function () { return this._resolveSealed; },
+      set: function (fn) { this._resolveSealed = fn; this.render(); }
+    });
+    VibeViewElement.prototype.connectedCallback = function () { this.render(); };
+    VibeViewElement.prototype.render = function () {
+      var raw = this._view;
+      if (!raw && typeof this.getAttribute === 'function') {
+        var attr = this.getAttribute('view');
+        if (attr) {
+          try { raw = JSON.parse(attr); } catch (_) { raw = attr; }
+        }
+      }
+      if (!raw) return;
+      renderView(raw, this, { resolve: this._resolveSealed });
+    };
+
+    function VibeEmbedElement() {
+      return Reflect.construct(Base, [], VibeEmbedElement);
+    }
+    Object.setPrototypeOf(VibeEmbedElement.prototype, Base.prototype);
+    Object.setPrototypeOf(VibeEmbedElement, Base);
+    VibeEmbedElement.prototype.mount = function (host, vibe, opts) {
+      this._host = host;
+      this._vibe = vibe;
+      this._opts = opts || {};
+      this.render();
+    };
+    VibeEmbedElement.prototype.disconnectedCallback = function () {
+      if (this._run && typeof this._run.stop === 'function') this._run.stop();
+    };
+    VibeEmbedElement.prototype.render = function () {
+      if (!this._host || !this._vibe || !hostEnv.VibeSpace || typeof hostEnv.VibeSpace.embed !== 'function') return;
+      if (this._run && typeof this._run.stop === 'function') this._run.stop();
+      this._run = hostEnv.VibeSpace.embed(this._host, this, this._vibe, this._opts);
+    };
+
+    function VibeSpaceElement() {
+      return Reflect.construct(Base, [], VibeSpaceElement);
+    }
+    Object.setPrototypeOf(VibeSpaceElement.prototype, Base.prototype);
+    Object.setPrototypeOf(VibeSpaceElement, Base);
+    VibeSpaceElement.prototype.mount = function (host, opts) {
+      this._host = host;
+      this._opts = opts || {};
+      this.render();
+    };
+    VibeSpaceElement.prototype.disconnectedCallback = function () {
+      if (this._panel && typeof this._panel.stop === 'function') this._panel.stop();
+    };
+    VibeSpaceElement.prototype.render = function () {
+      if (!this._host || !hostEnv.VibeSpace || typeof hostEnv.VibeSpace.mountPanel !== 'function') return;
+      if (this._panel && typeof this._panel.stop === 'function') this._panel.stop();
+      this._panel = hostEnv.VibeSpace.mountPanel(this._host, this, this._opts);
+    };
+
+    var entries = [
+      ['vibe-view', VibeViewElement],
+      ['vibe-embed', VibeEmbedElement],
+      ['vibe-space', VibeSpaceElement]
+    ];
+    for (var i = 0; i < entries.length; i++) {
+      if (typeof registry.get !== 'function' || !registry.get(entries[i][0])) {
+        registry.define(entries[i][0], entries[i][1]);
+      }
+    }
+    return { VibeViewElement: VibeViewElement, VibeEmbedElement: VibeEmbedElement, VibeSpaceElement: VibeSpaceElement };
+  }
+
+  try {
+    defineVibeWebComponents(global);
+  } catch (_) {
+    // Ignore custom element registration errors in restricted contexts.
+  }
+
   global.VibeKit = {
     createHost: createHost,
     validate: validateVibe,
     share: share,
-    renderView: renderView
+    renderView: renderView,
+    adaptUi: adaptExternalUi,
+    adapters: {
+      adaptExternalUi: adaptExternalUi,
+      resolveViewTree: resolveViewTree,
+      renderWithH: renderWithH,
+      renderToTerminal: renderToTerminal,
+      renderToMarkdown: renderToMarkdown,
+      renderToHtmlString: renderToHtmlString,
+      defineVibeWebComponents: defineVibeWebComponents,
+      getVibeStrings: getVibeStrings,
+      isRtlLocale: isRtlLocale
+    }
   };
 })(typeof window !== 'undefined' ? window : globalThis);

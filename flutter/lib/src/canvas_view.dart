@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vibe_space/vibe_space.dart';
 
+import 'vibe_widget_adapter.dart';
 import 'view.dart';
 
 /// Builder hook allowing a host app to render rich Markdown & Mermaid diagrams.
@@ -32,6 +33,7 @@ class VibeCanvasView extends StatefulWidget {
     this.webViewportBuilder,
     this.autoSubmitTimeoutSeconds,
     this.formatBadgeLabel,
+    this.adapter,
   });
 
   final VibeCanvasPayload payload;
@@ -45,6 +47,7 @@ class VibeCanvasView extends StatefulWidget {
   /// Overrides the header format pill label. `null` keeps the default format
   /// label behavior; `''` hides the format badge.
   final String? formatBadgeLabel;
+  final VibeWidgetAdapter? adapter;
 
   @override
   State<VibeCanvasView> createState() => _VibeCanvasViewState();
@@ -296,8 +299,10 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
         message: 'Canvas content is not a valid JSON object.',
       );
     }
+    final Map<String, dynamic> normalized;
     try {
-      validateVibeView(decoded);
+      normalized = normalizeVibeViewInput(decoded);
+      validateVibeView(normalized);
     } on FormatException catch (error) {
       return _buildErrorCard(
         context,
@@ -309,7 +314,7 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
       builder: (context, constraints) {
         final compactTables = constraints.maxWidth < 600;
         final adapted = _adaptVibeUiNode(
-          decoded,
+          normalized,
           compactTables: compactTables,
         );
         return SingleChildScrollView(
@@ -317,6 +322,7 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
           padding: const EdgeInsets.all(16),
           child: VibeView(
             value: adapted,
+            adapter: widget.adapter,
             autoSubmitTimeoutSeconds: widget.autoSubmitTimeoutSeconds,
             onCommand: (command, args) {
               widget.onAction?.call(

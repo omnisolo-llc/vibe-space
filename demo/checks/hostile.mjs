@@ -1,8 +1,4 @@
-import path from 'node:path';
-import { pathToFileURL } from 'node:url';
-import { startDemoServer } from './server.mjs';
-
-const PLAYWRIGHT_PATH = '/home/kevin/leapterm/cloud/web/node_modules/playwright/index.mjs';
+import { launchChromium, loadPlaywright, startDemoServer } from './server.mjs';
 
 function assert(cond, msg) {
   if (!cond) {
@@ -11,7 +7,7 @@ function assert(cond, msg) {
 }
 
 async function main() {
-  const { chromium } = await import(pathToFileURL(PLAYWRIGHT_PATH).href);
+  const { chromium } = await loadPlaywright();
 
   const blankHtml = `<!doctype html>
 <html>
@@ -65,7 +61,7 @@ async function main() {
     },
   });
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchChromium(chromium);
   const results = [];
 
   function record(id, name, pass, detail = '') {

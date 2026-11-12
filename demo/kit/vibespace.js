@@ -38,6 +38,66 @@
     return global.VibeKit;
   }
 
+  function resolveSpaceStrings(host, opts) {
+    var locale = (opts && opts.locale) || (host && host.locale) || 'en';
+    var overrides = (opts && opts.strings) || (host && host.strings) || undefined;
+    var kit = global.VibeKit;
+    if (kit && kit.adapters && typeof kit.adapters.getVibeStrings === 'function') {
+      return kit.adapters.getVibeStrings(locale, overrides);
+    }
+    return {
+      locale: locale,
+      rtl: false,
+      panelTitle: 'Vibe Space',
+      whatOffers: 'What {host} offers',
+      wishPlaceholder: 'I wish {host} would\u2026',
+      send: 'Send',
+      wishNote: 'The AI is scripted in this demo. Pick a wish.',
+      installed: 'Installed',
+      filterPlaceholder: 'Filter installed vibes\u2026',
+      emptyInstalled: 'Nothing here yet. Make a wish.',
+      sealedLegend: 'Values with a lock are sealed. {host} draws them. The vibe never sees them.',
+      portableVibes: 'Portable vibes',
+      portableSub: 'These need nothing from the app, so they run anywhere.',
+      reads: 'Reads',
+      shows: 'Shows',
+      cannot: 'Cannot',
+      allowAndAdd: 'Allow and add',
+      update: 'Update',
+      cancel: 'Cancel',
+      noNewPermissions: 'Version {version}. No new permissions.',
+      inspect: 'Inspect',
+      hideInspect: 'Hide inspect',
+      share: 'Share',
+      edit: 'Edit',
+      rename: 'Rename',
+      pause: 'Pause',
+      resume: 'Resume',
+      pinToTop: 'Pin to top',
+      unpin: 'Unpin',
+      moveUp: 'Move up',
+      moveDown: 'Move down',
+      revert: 'Revert',
+      deleteLabel: 'Delete',
+      undo: 'Undo',
+      temporary: 'Temporary',
+      pinned: 'Pinned',
+      pinToVibeSpace: 'Pin to Vibe Space',
+      pinnedToVibeSpace: 'Pinned to Vibe Space',
+      madeByAgent: 'Made by the agent for this answer'
+    };
+  }
+
+  function formatStr(template, vars) {
+    var out = String(template || '');
+    if (!vars) return out;
+    var keys = Object.keys(vars);
+    for (var i = 0; i < keys.length; i++) {
+      out = out.split('{' + keys[i] + '}').join(String(vars[keys[i]]));
+    }
+    return out;
+  }
+
   function sameNeeds(a, b) {
     var listA = Array.isArray(a) ? a.slice().sort() : [];
     var listB = Array.isArray(b) ? b.slice().sort() : [];
@@ -101,6 +161,9 @@
     dialog.tabIndex = -1;
     if (opts.dataVs) {
       dialog.setAttribute('data-vs', opts.dataVs);
+    }
+    if (opts.dir) {
+      dialog.setAttribute('dir', opts.dir);
     }
 
     var header = el('div', 'vs-dialog-header');
@@ -567,7 +630,8 @@
     });
   }
 
-  function showOffer(host) {
+  function showOffer(host, options) {
+    var strings = resolveSpaceStrings(host, options);
     var manifest = host.manifest();
     var body = el('div', 'vs-offer-body');
 
@@ -618,8 +682,9 @@
     body.appendChild(details);
 
     openDialog({
-      title: 'What ' + host.name + ' offers',
+      title: formatStr(strings.whatOffers, { host: host.name }),
       dataVs: 'offer-dialog',
+      dir: strings.rtl ? 'rtl' : null,
       body: body
     });
   }
@@ -1350,6 +1415,7 @@
     }
 
     var opts = options || {};
+    var strings = resolveSpaceStrings(host, opts);
     var wishes = Array.isArray(opts.wishes) ? opts.wishes : [];
     var gallery = Array.isArray(opts.gallery) ? opts.gallery : [];
     var shareTargets = Array.isArray(opts.shareTargets) ? opts.shareTargets : [];
@@ -1357,15 +1423,18 @@
     clearNode(element);
 
     var panel = el('div', 'vs-panel');
+    if (strings.rtl) {
+      panel.setAttribute('dir', 'rtl');
+    }
 
     // Header
     var header = el('div', 'vs-panel-header');
-    header.appendChild(el('h2', 'vs-panel-title', 'Vibe Space'));
-    var offerBtn = el('button', 'vs-link-btn', 'What ' + host.name + ' offers');
+    header.appendChild(el('h2', 'vs-panel-title', strings.panelTitle));
+    var offerBtn = el('button', 'vs-link-btn', formatStr(strings.whatOffers, { host: host.name }));
     offerBtn.type = 'button';
     offerBtn.setAttribute('data-vs', 'offer-open');
     offerBtn.addEventListener('click', function () {
-      showOffer(host);
+      showOffer(host, opts);
     });
     header.appendChild(offerBtn);
     panel.appendChild(header);
@@ -1375,11 +1444,12 @@
     var wishForm = el('form', 'vs-wish-form');
     var wishInput = el('input', 'vs-input vs-wish-input');
     wishInput.type = 'text';
-    wishInput.placeholder = 'I wish ' + host.name + ' would\u2026';
+    wishInput.setAttribute('dir', 'auto');
+    wishInput.placeholder = formatStr(strings.wishPlaceholder, { host: host.name });
     wishInput.setAttribute('aria-label', 'Wish for ' + host.name);
     wishInput.setAttribute('data-vs', 'wish-input');
 
-    var wishSendBtn = el('button', 'vs-btn vs-btn-primary vs-wish-send', 'Send');
+    var wishSendBtn = el('button', 'vs-btn vs-btn-primary vs-wish-send', strings.send);
     wishSendBtn.type = 'submit';
     wishSendBtn.setAttribute('data-vs', 'wish-send');
 
@@ -1390,7 +1460,7 @@
     var chipsWrap = el('div', 'vs-wish-chips');
     wishSection.appendChild(chipsWrap);
 
-    var wishNote = el('p', 'vs-wish-note', 'The AI is scripted in this demo. Pick a wish.');
+    var wishNote = el('p', 'vs-wish-note', strings.wishNote);
     wishNote.setAttribute('aria-live', 'polite');
     wishSection.appendChild(wishNote);
 
@@ -1403,7 +1473,7 @@
     // Installed vibes section
     var installedSection = el('section', 'vs-section vs-installed-section');
     var installedHead = el('div', 'vs-installed-head');
-    var installedTitle = el('h3', 'vs-section-title', 'Installed \u00b7 0');
+    var installedTitle = el('h3', 'vs-section-title', strings.installed + ' \u00b7 0');
     installedHead.appendChild(installedTitle);
     installedSection.appendChild(installedHead);
 
@@ -1411,7 +1481,8 @@
     filterWrap.hidden = true;
     var filterInput = el('input', 'vs-input vs-vibe-filter');
     filterInput.type = 'search';
-    filterInput.placeholder = 'Filter installed vibes\u2026';
+    filterInput.setAttribute('dir', 'auto');
+    filterInput.placeholder = strings.filterPlaceholder;
     filterInput.setAttribute('aria-label', 'Filter installed vibes');
     filterInput.setAttribute('data-vs', 'vibe-filter');
     filterWrap.appendChild(filterInput);
@@ -1420,7 +1491,7 @@
     var sealedLegend = el(
       'p',
       'vs-installed-legend',
-      'Values with a lock are sealed. ' + host.name + ' draws them. The vibe never sees them.'
+      formatStr(strings.sealedLegend, { host: host.name })
     );
     sealedLegend.hidden = true;
     installedSection.appendChild(sealedLegend);
@@ -1434,9 +1505,9 @@
 
     // Gallery section
     var gallerySection = el('section', 'vs-section vs-gallery-section');
-    gallerySection.appendChild(el('h3', 'vs-section-title', 'Portable vibes'));
+    gallerySection.appendChild(el('h3', 'vs-section-title', strings.portableVibes));
     gallerySection.appendChild(
-      el('p', 'vs-section-sub', 'These need nothing from the app, so they run anywhere.')
+      el('p', 'vs-section-sub', strings.portableSub)
     );
     var galleryList = el('div', 'vs-gallery-list');
     gallerySection.appendChild(galleryList);
@@ -1796,6 +1867,7 @@
       var titleWrap = el('div', 'vs-vibe-title-wrap');
       var titleEl = el('h4', 'vs-vibe-card-name', record.title || record.vibe.name);
       titleEl.setAttribute('data-vs', 'vibe-title');
+      titleEl.setAttribute('dir', 'auto');
       titleWrap.appendChild(titleEl);
 
       var moreWrap = el('div', 'vs-more-wrap');
@@ -1909,6 +1981,7 @@
 
       var noteEl = el('p', 'vs-vibe-card-note', record.note || '');
       noteEl.setAttribute('data-vs', 'vibe-note');
+      noteEl.setAttribute('dir', 'auto');
       noteEl.hidden = !record.note;
 
       var metaGroup = el('div', 'vs-vibe-card-meta');
@@ -2448,7 +2521,7 @@
         });
       }
 
-      installedTitle.textContent = 'Installed \u00b7 ' + records.length;
+      installedTitle.textContent = strings.installed + ' \u00b7 ' + records.length;
       if (records.length < 2 && filterQuery) {
         filterQuery = '';
         filterInput.value = '';
@@ -2484,7 +2557,7 @@
       clearNode(installedList);
 
       if (records.length === 0) {
-        installedList.appendChild(el('div', 'vs-empty-state', 'Nothing here yet. Make a wish.'));
+        installedList.appendChild(el('div', 'vs-empty-state', strings.emptyInstalled));
         return;
       }
 
@@ -2703,18 +2776,24 @@
     }
 
     var opts = options || {};
+    var strings = resolveSpaceStrings(host, opts);
     clearNode(element);
 
     var box = el('div', 'vs-embed');
     box.setAttribute('data-vs', 'embed');
+    if (strings.rtl) {
+      box.setAttribute('dir', 'rtl');
+    }
 
     var header = el('div', 'vs-embed-header');
     var titleGroup = el('div', 'vs-embed-title-group');
-    titleGroup.appendChild(el('span', 'vs-embed-title', 'Made by the agent for this answer'));
+    titleGroup.appendChild(el('span', 'vs-embed-title', strings.madeByAgent));
     if (opts.caption) {
-      titleGroup.appendChild(el('span', 'vs-embed-caption', opts.caption));
+      var capEl = el('span', 'vs-embed-caption', opts.caption);
+      capEl.setAttribute('dir', 'auto');
+      titleGroup.appendChild(capEl);
     }
-    var tempBadge = el('span', 'vs-embed-badge', 'Temporary');
+    var tempBadge = el('span', 'vs-embed-badge', strings.temporary);
     header.appendChild(titleGroup);
     header.appendChild(tempBadge);
     box.appendChild(header);
@@ -2724,14 +2803,14 @@
 
     var footer = el('div', 'vs-embed-footer');
     var lbl = host.label(vibe);
-    var readsLine = el('div', 'vs-embed-reads', 'Reads: ' + (lbl && lbl.reads ? lbl.reads.join(', ') : ''));
+    var readsLine = el('div', 'vs-embed-reads', strings.reads + ': ' + (lbl && lbl.reads ? lbl.reads.join(', ') : ''));
     var footerActions = el('div', 'vs-embed-actions');
 
-    var inspectBtn = el('button', 'vs-btn vs-btn-ghost', 'Inspect');
+    var inspectBtn = el('button', 'vs-btn vs-btn-ghost', strings.inspect);
     inspectBtn.type = 'button';
     inspectBtn.setAttribute('aria-expanded', 'false');
 
-    var pinBtn = el('button', 'vs-btn vs-btn-primary', 'Pin to Vibe Space');
+    var pinBtn = el('button', 'vs-btn vs-btn-primary', strings.pinToVibeSpace);
     pinBtn.type = 'button';
     pinBtn.setAttribute('data-vs', 'embed-pin');
 
