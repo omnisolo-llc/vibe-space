@@ -38,7 +38,21 @@ Vibe Space panel (⋯ management) & inline Temporary agent embeds
 | `tools` | `vibe.mjs` CLI (`init`, `build`, `keygen`, `pack`, `inspect`) and `sync-worker.mjs` |
 | `skills/vibe-space` | Instructions for AI-assisted vibe and mini-app authoring |
 
-See [VibeProtocol Contract](docs/vibeprotocol.md), [Protocol v1 (Wasm ABI)](docs/protocol.md), [Host Integration](docs/hosts.md), and [Security Boundary](docs/security.md).
+See [VibeProtocol Contract](docs/vibeprotocol.md), [Compatibility Adapters](docs/compatibility-adapters.md), [Protocol v1 (Wasm ABI)](docs/protocol.md), [Host Integration](docs/hosts.md), and [Security Boundary](docs/security.md).
+
+## Multi-Language & Universal UI Compatibility Adapters
+
+Vibe Space supports every major guest language, UI toolkit, and human language behind the same capability and sealed-handle trust boundary:
+
+- **All guest & host languages**: Primary `vibe_alloc` / `vibe_invoke` Wasm exports (alongside `omni_` / `leap_` / `leapterm_` aliases) work from Rust, C/C++, TinyGo, Zig, AssemblyScript, and other import-free `wasm32` toolchains; host kits and adapters ship in **Rust** (`runtime`), **TypeScript / JavaScript** (`sdk/typescript/adapters.mjs`, `demo/kit`), and **Dart / Flutter** (`dart`, `flutter`).
+- **Inbound UI dialect adapters**: `adaptExternalUi` / `VibeUiCompatibilityAdapter.adapt` / `adapt_external_ui` convert **A2UI** (`surfaceUpdate` adjacency lists & nested components), **Adaptive Cards**, and **Markdown** into validated canonical `VibeView` trees while preserving `{ "sealed": "h_..." }` handles.
+- **Outbound UI toolkit adapters**:
+  - **React, Preact, Vue 3, Solid, SSR**: `renderWithH(h, view, opts)` (zero `document` dependency).
+  - **Angular, Svelte, Lit, HTMX, Plain HTML**: Web Components `<vibe-view>`, `<vibe-embed>`, and `<vibe-space>` via `defineVibeWebComponents`.
+  - **Flutter**: `VibeWidgetAdapter.material()`, `.cupertino()`, and `.custom(...)` per-node builders.
+  - **SwiftUI, Jetpack Compose, Qt, GTK, WinUI, React Native**: `resolveViewTree` / `resolveVibeViewTree` / `resolve_view_tree` headless handle-resolved IR (forged handles render empty).
+  - **Terminal / TUI, Markdown & Escaped HTML**: `renderToTerminal`, `renderToMarkdown`, and `renderToHtmlString`.
+- **All human languages (i18n, UTF-8 & RTL)**: Built-in locale packs (`en`, `zh`, `ja`, `ko`, `es`, `fr`, `de`, `ar` with `rtl: true`), automatic RTL layout direction, and full UTF-8 CJK/Arabic/emoji safety in share tokens and host metadata.
 
 ## Quickstart
 

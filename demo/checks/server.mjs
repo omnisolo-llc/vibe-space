@@ -1,10 +1,65 @@
 import http from 'node:http';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 export const DEMO_ROOT = path.resolve(__dirname, '..');
+
+/**
+ * Loads Playwright without hardcoding a single checkout layout path.
+ */
+export async function loadPlaywright() {
+  const candidates = [
+    process.env.PLAYWRIGHT_PATH,
+    path.resolve(DEMO_ROOT, '../../../cloud/web/node_modules/playwright/index.mjs'),
+    path.resolve(DEMO_ROOT, '../../../website/node_modules/playwright/index.mjs'),
+    path.resolve(DEMO_ROOT, '../node_modules/playwright/index.mjs'),
+  ].filter(Boolean);
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return import(pathToFileURL(candidate).href);
+    }
+  }
+  return import('playwright');
+}
+
+function findCachedChromiumExecutable() {
+  if (process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH && fs.existsSync(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH)) {
+    return process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH;
+  }
+  const cacheDir = path.join(os.homedir(), '.cache', 'ms-playwright');
+  if (!fs.existsSync(cacheDir)) return null;
+  const entries = fs.readdirSync(cacheDir).sort().reverse();
+  for (const entry of entries) {
+    if (entry.startsWith('chromium_headless_shell-')) {
+      const bin = path.join(cacheDir, entry, 'chrome-headless-shell-linux64', 'chrome-headless-shell');
+      if (fs.existsSync(bin)) return bin;
+    }
+    if (entry.startsWith('chromium-')) {
+      const bin = path.join(cacheDir, entry, 'chrome-linux64', 'chrome');
+      if (fs.existsSync(bin)) return bin;
+    }
+  }
+  return null;
+}
+
+/**
+ * Launches headless Chromium, falling back to any cached ms-playwright binary
+ * if the active Playwright package targets a slightly newer revision.
+ */
+export async function launchChromium(chromium) {
+  try {
+    return await chromium.launch({ headless: true });
+  } catch (err) {
+    const executablePath = findCachedChromiumExecutable();
+    if (executablePath) {
+      return chromium.launch({ headless: true, executablePath });
+    }
+    throw err;
+  }
+}
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',

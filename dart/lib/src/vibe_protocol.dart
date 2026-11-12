@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
+import 'compatibility_adapter.dart';
+
 /// Maximum UTF-8 byte length for a share token (`#vibe=...`).
 const int kMaxVibeShareBytes = 32 * 1024;
 
@@ -112,20 +114,22 @@ void _assertJsonSafe(Object? value, [Set<Object>? seen]) {
   throw FormatException('Value is not JSON-safe (${value.runtimeType})');
 }
 
+String _truncateRunes(String value, int maxRunes) {
+  final runes = value.runes;
+  if (runes.length <= maxRunes) return value;
+  return String.fromCharCodes(runes.take(maxRunes));
+}
+
 String _normalizeTitle(String? raw, String fallback) {
   if (raw == null) return fallback;
   final trimmed = raw.trim();
   if (trimmed.isEmpty) return fallback;
-  return trimmed.length <= kMaxVibeTitleLength
-      ? trimmed
-      : trimmed.substring(0, kMaxVibeTitleLength);
+  return _truncateRunes(trimmed, kMaxVibeTitleLength);
 }
 
 String _normalizeNote(String? raw) {
   if (raw == null) return '';
-  return raw.length <= kMaxVibeNoteLength
-      ? raw
-      : raw.substring(0, kMaxVibeNoteLength);
+  return _truncateRunes(raw, kMaxVibeNoteLength);
 }
 
 /// Opaque handle representing a sealed host value inside a sandboxed vibe.
@@ -892,13 +896,10 @@ class VibeSandboxEvaluator {
         raw.length != 2) {
       throw const FormatException('Vibe output must have exact keys { state, view }');
     }
-    final view = raw['view'];
-    if (view is! Map) {
-      throw const FormatException('Vibe output.view must be an object');
-    }
+    final adaptedView = VibeUiCompatibilityAdapter.adapt(raw['view']);
     final normalized = <String, Object?>{
       'state': _deepCloneJson(raw['state']),
-      'view': _deepCloneJson(view),
+      'view': _deepCloneJson(adaptedView),
     };
     _assertJsonSafe(normalized);
     final encoded = jsonEncode(normalized);
@@ -1041,8 +1042,8 @@ class VibeSandboxEvaluator {
         );
       case 'static_view':
         final view = spec['view'];
-        if (view is! Map) {
-          throw const FormatException('static_view requires a view object');
+        if (view is! Map && view is! List && view is! String) {
+          throw const FormatException('static_view requires a view payload');
         }
         return <String, Object?>{
           'state': input['state'],
@@ -1791,7 +1792,7 @@ class VibeWishRemixer {
     var changed = false;
 
     final pctMatch = RegExp(
-      r'(?:red|warn|alert|above|over|threshold)?\s*(\d{1,3})\s*%',
+      r'(?:red|warn|alert|above|over|threshold|阈值|超过|红色|警告|임계값|umbral|seuil|schwellenwert|حد)?\s*(\d{1,3})\s*[%％]',
     ).firstMatch(lower);
     if (pctMatch != null) {
       final pct = int.parse(pctMatch.group(1)!).clamp(1, 99);
@@ -1840,7 +1841,7 @@ class VibeWishRemixer {
     }
 
     final countMatch = RegExp(
-      r'(?:top|worst|best|first|only(?:\s+the)?(?:\s+worst|\s+top)?)\s+(\d+|two|three|four|five|six|eight|ten)\b',
+      r'(?:(?:top|worst|best|first|only(?:\s+the)?(?:\s+worst|\s+top)?|peores|primeros|mejores|pires|premiers|meilleurs|schlechtesten|ersten)\s+|(?:最差|前|最多|最悪|上位|상위|أسوأ|أول)\s*)(\d+|two|three|four|five|six|eight|ten|两|三|四|五|六|八|十)(?=\s|$|个|台|件|項目|개)',
     ).firstMatch(lower);
     if (countMatch != null) {
       final count = _parseWordOrInt(countMatch.group(1)!);
@@ -1878,7 +1879,9 @@ class VibeWishRemixer {
       }
     }
 
-    final daysMatch = RegExp(r'\b(\d{1,3})\s*days?\b').firstMatch(lower);
+    final daysMatch = RegExp(
+      r'(?:^|[^\d])(\d{1,3})\s*(?:days?|d[ií]as?|jours?|tage?|天|日|일|أيام|يوم)(?=$|\s|[.,!?，。])',
+    ).firstMatch(lower);
     if (daysMatch != null) {
       final days = int.parse(daysMatch.group(1)!).clamp(1, 365);
       if (RegExp(r'\bWINDOW_DAYS\s*=\s*\d+').hasMatch(nextSource)) {
@@ -1896,7 +1899,9 @@ class VibeWishRemixer {
       }
     }
 
-    final minMatch = RegExp(r'\b(\d{1,3})[\s-]+(?:min|minute|minutes)\b').firstMatch(lower);
+    final minMatch = RegExp(
+      r'(?:^|[^\d])(\d{1,3})[\s-]*(?:minutes?|mins?|minutos?|minuten?|分钟|分|분|دقائق|دقيقة)(?=$|\s|[.,!?，。])',
+    ).firstMatch(lower);
     if (minMatch != null) {
       final mins = int.parse(minMatch.group(1)!).clamp(1, 240);
       if (nextSource.trimLeft().startsWith('{')) {
@@ -1948,13 +1953,13 @@ class VibeWishRemixer {
     final parsed = int.tryParse(raw);
     if (parsed != null) return parsed;
     return switch (raw) {
-      'two' => 2,
-      'three' => 3,
-      'four' => 4,
-      'five' => 5,
-      'six' => 6,
-      'eight' => 8,
-      'ten' => 10,
+      'two' || '两' => 2,
+      'three' || '三' => 3,
+      'four' || '四' => 4,
+      'five' || '五' => 5,
+      'six' || '六' => 6,
+      'eight' || '八' => 8,
+      'ten' || '十' => 10,
       _ => null,
     };
   }
@@ -1964,6 +1969,13 @@ class VibeWishRemixer {
 /// [VibeProtocolHost]'s offered capabilities.
 class VibeWishCompiler {
   const VibeWishCompiler._();
+
+  static bool _containsAny(String haystack, List<String> needles) {
+    for (final needle in needles) {
+      if (haystack.contains(needle)) return true;
+    }
+    return false;
+  }
 
   static VibeSpec? compile(
     String wishText,
@@ -1980,10 +1992,20 @@ class VibeWishCompiler {
       }
     }
 
-    if (lower.contains('timer') ||
-        lower.contains('focus') ||
-        lower.contains('pomodoro') ||
-        lower.contains('countdown')) {
+    if (_containsAny(lower, const <String>[
+      'timer',
+      'focus',
+      'pomodoro',
+      'countdown',
+      '专注',
+      '计时',
+      '倒计时',
+      'タイマー',
+      '타이머',
+      'temporizador',
+      'minuteur',
+      'مؤقت',
+    ])) {
       final remixed = VibeWishRemixer.apply(kPortableFocusTimerVibe, trimmed);
       return remixed.ok && remixed.vibe != null
           ? remixed.vibe!.copyWith(version: 1, wish: trimmed)
@@ -1992,9 +2014,20 @@ class VibeWishCompiler {
 
     final offered = <String>{for (final c in host.capabilities) c.name};
 
-    if ((lower.contains('disk') ||
-            lower.contains('volume') ||
-            lower.contains('storage')) &&
+    if (_containsAny(lower, const <String>[
+          'disk',
+          'volume',
+          'storage',
+          '磁盘',
+          '硬盘',
+          '存储',
+          'ディスク',
+          '디스크',
+          'disco',
+          'disque',
+          'festplatte',
+          'قرص',
+        ]) &&
         offered.contains('telemetry.disk')) {
       final base = VibeSpec(
         id: 'disk-watch',
@@ -2016,11 +2049,22 @@ class VibeWishCompiler {
           : base;
     }
 
-    if ((lower.contains('cpu') ||
-            lower.contains('memory') ||
-            lower.contains('mem') ||
-            lower.contains('load') ||
-            lower.contains('slow')) &&
+    if (_containsAny(lower, const <String>[
+          'cpu',
+          'memory',
+          'mem',
+          'load',
+          'slow',
+          '内存',
+          '负载',
+          '处理器',
+          'メモリ',
+          '메모리',
+          'memoria',
+          'mémoire',
+          'speicher',
+          'ذاكرة',
+        ]) &&
         offered.contains('telemetry.load')) {
       return VibeSpec(
         id: 'server-load',
@@ -2041,11 +2085,22 @@ class VibeWishCompiler {
         (c) => lower.contains(c.name.split('.').first),
         orElse: () => host.capabilities.first,
       );
-      if (lower.contains('session') ||
-          lower.contains('server') ||
-          lower.contains('active') ||
-          lower.contains('show') ||
-          lower.contains('top')) {
+      if (_containsAny(lower, const <String>[
+        'session',
+        'server',
+        'active',
+        'show',
+        'top',
+        '会话',
+        '服务器',
+        '显示',
+        'セッション',
+        '세션',
+        'sesión',
+        'servidor',
+        'sitzung',
+        'جلسة',
+      ])) {
         return VibeSpec(
           id: 'custom-view',
           name: cap.title,

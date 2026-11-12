@@ -1,8 +1,7 @@
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { DEMO_ROOT, startDemoServer } from './server.mjs';
+import { DEMO_ROOT, launchChromium, loadPlaywright, startDemoServer } from './server.mjs';
 
-const PLAYWRIGHT_PATH = '/home/kevin/leapterm/cloud/web/node_modules/playwright/index.mjs';
 const SHOTS_DIR = '/home/kevin/leapterm/target/vibeprotocol-demo/shots';
 
 function assert(cond, msg) {
@@ -884,9 +883,9 @@ async function checkFileUrls(browser, errorLog) {
 }
 
 async function main() {
-  const { chromium } = await import(pathToFileURL(PLAYWRIGHT_PATH).href);
+  const { chromium } = await loadPlaywright();
   const server = await startDemoServer();
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchChromium(chromium);
   const errorLog = [];
   const shots = [];
 

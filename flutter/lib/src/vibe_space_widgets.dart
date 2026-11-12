@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:vibe_space/vibe_space.dart';
 
+import 'vibe_widget_adapter.dart';
 import 'view.dart';
 
 /// Theme palette for [VibeSpacePanel] and [VibeEmbedCard].
@@ -370,6 +371,7 @@ class _PermissionLabelCard extends StatefulWidget {
     required this.vibe,
     required this.origin,
     required this.theme,
+    this.strings = const VibeStrings.en(),
     this.args,
     this.defaultTitle,
     required this.onAllow,
@@ -380,6 +382,7 @@ class _PermissionLabelCard extends StatefulWidget {
   final VibeSpec vibe;
   final String origin;
   final VibeSpaceThemeData theme;
+  final VibeStrings strings;
   final Map<String, Object?>? args;
   final String? defaultTitle;
   final void Function(String title, String note) onAllow;
@@ -489,11 +492,11 @@ class _PermissionLabelCardState extends State<_PermissionLabelCard> {
           ],
           const SizedBox(height: 10),
           Divider(height: 1, color: t.border),
-          _LabelRow(title: 'Reads', items: label.reads, accentColor: t.accent, theme: t),
+          _LabelRow(title: widget.strings.readsLabel, items: label.reads, accentColor: t.accent, theme: t),
           Divider(height: 1, color: t.border),
-          _LabelRow(title: 'Shows', items: label.shows, accentColor: t.mutedText, theme: t),
+          _LabelRow(title: widget.strings.showsLabel, items: label.shows, accentColor: t.mutedText, theme: t),
           Divider(height: 1, color: t.border),
-          _LabelRow(title: 'Cannot', items: label.cannot, accentColor: t.mutedText, theme: t),
+          _LabelRow(title: widget.strings.cannotLabel, items: label.cannot, accentColor: t.mutedText, theme: t),
           Divider(height: 1, color: t.border),
           const SizedBox(height: 10),
           TextField(
@@ -530,11 +533,15 @@ class _PermissionLabelCardState extends State<_PermissionLabelCard> {
                     _noteCtrl.text.trim(),
                   );
                 },
-                child: Text(isSamePermUpdate ? 'Update' : 'Allow and add'),
+                child: Text(
+                  isSamePermUpdate
+                      ? widget.strings.updateLabel
+                      : widget.strings.allowAndAdd,
+                ),
               ),
               OutlinedButton(
                 onPressed: widget.onCancel,
-                child: const Text('Cancel'),
+                child: Text(widget.strings.cancelLabel),
               ),
             ],
           ),
@@ -831,6 +838,9 @@ class VibeSpacePanel extends StatefulWidget {
     this.theme,
     this.headerTrailing,
     this.onShare,
+    this.locale = 'en',
+    this.strings,
+    this.adapter,
   });
 
   final VibeProtocolHost host;
@@ -839,6 +849,9 @@ class VibeSpacePanel extends StatefulWidget {
   final VibeSpaceThemeData? theme;
   final Widget? headerTrailing;
   final void Function(String encodedShareToken, VibeSpec vibe)? onShare;
+  final String locale;
+  final VibeStrings? strings;
+  final VibeWidgetAdapter? adapter;
 
   @override
   State<VibeSpacePanel> createState() => _VibeSpacePanelState();
@@ -1165,8 +1178,11 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
     ];
 
     final visibleWishes = _visibleWishes();
+    final s = widget.strings ?? VibeStrings.forLocale(widget.locale);
 
-    return _wrapToneScope(
+    return Directionality(
+      textDirection: s.isRtl ? TextDirection.rtl : TextDirection.ltr,
+      child: _wrapToneScope(
       t,
       Container(
         decoration: BoxDecoration(
@@ -1188,7 +1204,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                 runSpacing: 6,
                 children: <Widget>[
                   Text(
-                    'Vibe Space',
+                    s.panelTitle,
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.w700,
@@ -1203,7 +1219,9 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                         onPressed: () =>
                             showVibeOfferDialog(context, widget.host, theme: t),
                         child: Text(
-                          'What ${widget.host.name} offers',
+                          s.format(s.whatHostOffers, <String, String>{
+                            'host': widget.host.name,
+                          }),
                           style: TextStyle(color: t.accent, fontSize: 12.5),
                         ),
                       ),
@@ -1233,7 +1251,9 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                       },
                       onSubmitted: _submitWish,
                       decoration: InputDecoration(
-                        hintText: 'I wish ${widget.host.name} would\u2026',
+                        hintText: s.format(s.wishPlaceholder, <String, String>{
+                          'host': widget.host.name,
+                        }),
                         isDense: true,
                         border: const OutlineInputBorder(),
                       ),
@@ -1244,7 +1264,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                     key: const Key('vs-wish-send'),
                     style: FilledButton.styleFrom(backgroundColor: t.accent),
                     onPressed: () => _submitWish(_wishCtrl.text),
-                    child: const Text('Send'),
+                    child: Text(s.sendLabel),
                   ),
                 ],
               ),
@@ -1346,7 +1366,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: <Widget>[
                         Text(
-                          'PREVIEW ON SAMPLE DATA',
+                          s.previewTitle.toUpperCase(),
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight: FontWeight.w700,
@@ -1359,6 +1379,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                           VibeView(
                             value: _draftPreviewRun!.view!,
                             resolveSealed: widget.host.resolveSealed,
+                            adapter: widget.adapter,
                             onCommand: (cmd, args) =>
                                 _draftPreviewRun!.dispatch(cmd, args),
                           )
@@ -1375,7 +1396,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                     alignment: Alignment.centerLeft,
                     child: TextButton(
                       onPressed: () => setState(() => _showCode = !_showCode),
-                      child: Text(_showCode ? 'Hide code' : 'Show code'),
+                      child: Text(_showCode ? s.hideCode : s.showCode),
                     ),
                   ),
                   if (_showCode) ...<Widget>[
@@ -1408,6 +1429,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                   vibe: _draftVibe!,
                   origin: _draftOrigin,
                   theme: t,
+                  strings: s,
                   onAllow: (title, note) {
                     widget.host.install(
                       _draftVibe!,
@@ -1426,7 +1448,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
 
               // Installed header
               Text(
-                'INSTALLED \u00b7 ${records.length}',
+                '${s.installedHeading.toUpperCase()} \u00b7 ${records.length}',
                 style: TextStyle(
                   fontSize: 11.5,
                   fontWeight: FontWeight.w700,
@@ -1440,11 +1462,11 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                   key: const Key('vs-filter-input'),
                   controller: _filterCtrl,
                   onChanged: (v) => setState(() => _filterQuery = v),
-                  decoration: const InputDecoration(
-                    hintText: 'Filter installed vibes\u2026',
+                  decoration: InputDecoration(
+                    hintText: s.filterPlaceholder,
                     isDense: true,
-                    prefixIcon: Icon(Icons.search, size: 18),
-                    border: OutlineInputBorder(),
+                    prefixIcon: const Icon(Icons.search, size: 18),
+                    border: const OutlineInputBorder(),
                   ),
                 ),
               ],
@@ -1460,7 +1482,9 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                     const SizedBox(width: 6),
                     Expanded(
                       child: Text(
-                        'Values with a lock are sealed. ${widget.host.name} draws them. The vibe never sees them.',
+                        s.format(s.sealedLegend, <String, String>{
+                          'host': widget.host.name,
+                        }),
                         style: TextStyle(fontSize: 12, color: t.mutedText),
                       ),
                     ),
@@ -1498,7 +1522,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                             widget.host.restoreRecord(snap, idx);
                           }
                         },
-                        child: const Text('Undo'),
+                        child: Text(s.undoLabel),
                       ),
                     ],
                   ),
@@ -1516,7 +1540,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                     border: Border.all(color: t.border),
                   ),
                   child: Text(
-                    'Nothing here yet. Make a wish.',
+                    s.emptyInstalled,
                     textAlign: TextAlign.center,
                     style: TextStyle(fontSize: 13, color: t.mutedText),
                   ),
@@ -1553,6 +1577,8 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                           host: widget.host,
                           record: rec,
                           theme: t,
+                          strings: s,
+                          adapter: widget.adapter,
                           canMoveUp: grpIdx > 0,
                           canMoveDown: grpIdx >= 0 && grpIdx < grp.length - 1,
                           onEdit: () => _openEditDialog(rec, t),
@@ -1571,7 +1597,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
               if (widget.gallery.isNotEmpty) ...<Widget>[
                 const SizedBox(height: 10),
                 Text(
-                  'PORTABLE VIBES',
+                  s.portableGalleryTitle.toUpperCase(),
                   style: TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,
@@ -1581,7 +1607,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  'These need nothing from the app, so they run anywhere.',
+                  s.portableGallerySubtitle,
                   style: TextStyle(fontSize: 12, color: t.mutedText),
                 ),
                 const SizedBox(height: 8),
@@ -1625,7 +1651,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                         OutlinedButton(
                           onPressed: () =>
                               _startPreviewDraft(gv, origin: 'gallery'),
-                          child: const Text('Add'),
+                          child: Text(s.addLabel),
                         ),
                       ],
                     ),
@@ -1635,6 +1661,7 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
           ),
         ),
       ),
+    ),
     );
   }
 }
@@ -1645,6 +1672,8 @@ class _InstalledVibeCard extends StatefulWidget {
     required this.host,
     required this.record,
     required this.theme,
+    this.strings = const VibeStrings.en(),
+    this.adapter,
     required this.canMoveUp,
     required this.canMoveDown,
     required this.onEdit,
@@ -1657,6 +1686,8 @@ class _InstalledVibeCard extends StatefulWidget {
   final VibeProtocolHost host;
   final VibeInstalledRecord record;
   final VibeSpaceThemeData theme;
+  final VibeStrings strings;
+  final VibeWidgetAdapter? adapter;
   final bool canMoveUp;
   final bool canMoveDown;
   final VoidCallback onEdit;
@@ -1770,23 +1801,24 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
   @override
   Widget build(BuildContext context) {
     final t = widget.theme;
+    final s = widget.strings;
     final rec = widget.record;
     final health = _run?.health();
 
     String? stateBadgeText;
     Color stateBadgeColor = t.mutedText;
     if (rec.paused) {
-      stateBadgeText = 'Paused';
+      stateBadgeText = s.pausedBadge;
     } else if (health != null && health.usingSampleFallback) {
-      stateBadgeText = 'Sample data';
+      stateBadgeText = s.sampleDataBadge;
       stateBadgeColor = t.accent;
     } else if (health != null && health.state == VibeSourceMode.offline) {
-      stateBadgeText = 'Source offline';
+      stateBadgeText = s.sourceOfflineBadge;
       stateBadgeColor = t.warn;
     } else if (health != null &&
         (health.state == VibeSourceMode.revoked ||
             health.state == VibeSourceMode.missing)) {
-      stateBadgeText = 'Source unavailable';
+      stateBadgeText = s.sourceUnavailableBadge;
       stateBadgeColor = t.warn;
     }
 
@@ -1899,51 +1931,55 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
                   }
                 },
                 itemBuilder: (ctx) => <PopupMenuEntry<String>>[
-                  const PopupMenuItem<String>(
+                  PopupMenuItem<String>(
                     value: 'edit',
-                    child: Text('Edit\u2026'),
+                    child: Text(s.editLabel),
                   ),
-                  const PopupMenuItem<String>(
+                  PopupMenuItem<String>(
                     value: 'rename',
-                    child: Text('Rename'),
+                    child: Text(s.renameLabel),
                   ),
                   PopupMenuItem<String>(
                     value: 'inspect',
-                    child: Text(_inspectOpen ? 'Hide inspect' : 'Inspect'),
+                    child: Text(_inspectOpen ? s.hideInspectLabel : s.inspectLabel),
                   ),
-                  const PopupMenuItem<String>(
+                  PopupMenuItem<String>(
                     value: 'share',
-                    child: Text('Share\u2026'),
+                    child: Text(s.shareLabel),
                   ),
                   const PopupMenuDivider(),
                   PopupMenuItem<String>(
                     value: 'pause',
-                    child: Text(rec.paused ? 'Resume' : 'Pause'),
+                    child: Text(rec.paused ? s.resumeLabel : s.pauseLabel),
                   ),
                   PopupMenuItem<String>(
                     value: 'pin',
-                    child: Text(rec.pinned ? 'Unpin' : 'Pin to top'),
+                    child: Text(rec.pinned ? s.unpinLabel : s.pinToTopLabel),
                   ),
                   PopupMenuItem<String>(
                     value: 'up',
                     enabled: widget.canMoveUp,
-                    child: const Text('Move up'),
+                    child: Text(s.moveUpLabel),
                   ),
                   PopupMenuItem<String>(
                     value: 'down',
                     enabled: widget.canMoveDown,
-                    child: const Text('Move down'),
+                    child: Text(s.moveDownLabel),
                   ),
                   if (rec.history.isNotEmpty)
                     PopupMenuItem<String>(
                       value: 'revert',
-                      child: Text('Revert to v${rec.history.first.vibe.version}'),
+                      child: Text(
+                        s.format(s.revertLabel, <String, String>{
+                          'v': '${rec.history.first.vibe.version}',
+                        }),
+                      ),
                     ),
                   const PopupMenuDivider(),
                   PopupMenuItem<String>(
                     value: 'delete',
                     child: Text(
-                      'Delete',
+                      s.deleteLabel,
                       style: TextStyle(color: t.danger, fontWeight: FontWeight.w600),
                     ),
                   ),
@@ -1965,7 +2001,7 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
             spacing: 6,
             runSpacing: 4,
             children: <Widget>[
-              if (rec.pinned) _SmallPill(label: 'Pinned', color: t.accent, theme: t),
+              if (rec.pinned) _SmallPill(label: s.pinnedBadge, color: t.accent, theme: t),
               _SmallPill(
                 label: _originBadgeLabel(rec.origin),
                 color: t.mutedText,
@@ -2011,7 +2047,7 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
                       style: FilledButton.styleFrom(backgroundColor: t.accent),
                       onPressed: () =>
                           widget.host.updateRecord(rec.instanceId, paused: false),
-                      child: const Text('Resume'),
+                      child: Text(s.resumeLabel),
                     ),
                   ],
                 ),
@@ -2024,6 +2060,7 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
                   bannerKey: Key('vs-source-banner-${rec.instanceId}'),
                   health: health,
                   theme: t,
+                  strings: s,
                   onRetry: () => _run?.retry(),
                   onUseSample: () => _run?.setDataMode('sample'),
                   onUseLive: () => _run?.setDataMode('live'),
@@ -2035,6 +2072,7 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
                 host: widget.host,
                 run: _run,
                 theme: t,
+                adapter: widget.adapter,
               ),
             ],
             if (_inspectOpen) ...<Widget>[
@@ -2091,6 +2129,7 @@ class _SourceHealthBanner extends StatelessWidget {
     this.bannerKey,
     required this.health,
     required this.theme,
+    this.strings = const VibeStrings.en(),
     required this.onRetry,
     required this.onUseSample,
     required this.onUseLive,
@@ -2100,6 +2139,7 @@ class _SourceHealthBanner extends StatelessWidget {
   final Key? bannerKey;
   final VibeRunHealth health;
   final VibeSpaceThemeData theme;
+  final VibeStrings strings;
   final VoidCallback onRetry;
   final VoidCallback onUseSample;
   final VoidCallback onUseLive;
@@ -2108,6 +2148,7 @@ class _SourceHealthBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final t = theme;
+    final s = strings;
     if (health.usingSampleFallback || health.state == VibeSourceMode.sample) {
       return Container(
         key: bannerKey,
@@ -2131,7 +2172,7 @@ class _SourceHealthBanner extends StatelessWidget {
             const SizedBox(height: 6),
             OutlinedButton(
               onPressed: onUseLive,
-              child: const Text('Return to live'),
+              child: Text(s.returnToLiveLabel),
             ),
           ],
         ),
@@ -2139,10 +2180,10 @@ class _SourceHealthBanner extends StatelessWidget {
     }
 
     var headline = health.state == VibeSourceMode.offline
-        ? 'Source offline'
+        ? s.sourceOfflineBadge
         : (health.state == VibeSourceMode.revoked
             ? 'Source access turned off'
-            : 'Source unavailable');
+            : s.sourceUnavailableBadge);
     if (health.isStale) {
       headline += ' \u00b7 Showing last reading';
     }
@@ -2181,12 +2222,12 @@ class _SourceHealthBanner extends StatelessWidget {
             children: <Widget>[
               OutlinedButton(
                 onPressed: onRetry,
-                child: const Text('Retry'),
+                child: Text(s.retryLabel),
               ),
               if (hasSample)
                 OutlinedButton(
                   onPressed: onUseSample,
-                  child: const Text('Preview sample'),
+                  child: Text(s.previewSampleLabel),
                 ),
               if (onEdit != null &&
                   (health.state == VibeSourceMode.revoked ||
@@ -2208,11 +2249,13 @@ class _RunViewBody extends StatelessWidget {
     required this.host,
     required this.run,
     required this.theme,
+    this.adapter,
   });
 
   final VibeProtocolHost host;
   final VibeRunController? run;
   final VibeSpaceThemeData theme;
+  final VibeWidgetAdapter? adapter;
 
   @override
   Widget build(BuildContext context) {
@@ -2223,6 +2266,7 @@ class _RunViewBody extends StatelessWidget {
       final viewWidget = VibeView(
         value: Map<String, dynamic>.from(r.view!),
         resolveSealed: host.resolveSealed,
+        adapter: adapter,
         onCommand: (cmd, args) => r.dispatch(cmd, args),
       );
       if (health.isStale) {
@@ -2687,6 +2731,9 @@ class VibeEmbedCard extends StatefulWidget {
     this.defaultTitle,
     this.theme,
     this.onPinned,
+    this.locale = 'en',
+    this.strings,
+    this.adapter,
   });
 
   final VibeProtocolHost host;
@@ -2696,6 +2743,9 @@ class VibeEmbedCard extends StatefulWidget {
   final String? defaultTitle;
   final VibeSpaceThemeData? theme;
   final VoidCallback? onPinned;
+  final String locale;
+  final VibeStrings? strings;
+  final VibeWidgetAdapter? adapter;
 
   @override
   State<VibeEmbedCard> createState() => _VibeEmbedCardState();
@@ -2751,12 +2801,12 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
     super.dispose();
   }
 
-  Future<void> _openPinDialog(VibeSpaceThemeData t) async {
+  Future<void> _openPinDialog(VibeSpaceThemeData t, VibeStrings s) async {
     await showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         backgroundColor: t.surface,
-        title: Text('Pin to Vibe Space', style: TextStyle(color: t.text)),
+        title: Text(s.pinToVibeSpace, style: TextStyle(color: t.text)),
         content: SizedBox(
           width: 440,
           child: SingleChildScrollView(
@@ -2765,6 +2815,7 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
               vibe: widget.vibe,
               origin: 'agent',
               theme: t,
+              strings: s,
               args: widget.args,
               defaultTitle: widget.defaultTitle ?? widget.vibe.name,
               onAllow: (title, note) {
@@ -2790,10 +2841,13 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
   @override
   Widget build(BuildContext context) {
     final t = _resolveVibeTheme(context, widget.theme);
+    final s = widget.strings ?? VibeStrings.forLocale(widget.locale);
     final label = widget.host.label(widget.vibe);
     final health = _run?.health();
 
-    return _wrapToneScope(
+    return Directionality(
+      textDirection: s.isRtl ? TextDirection.rtl : TextDirection.ltr,
+      child: _wrapToneScope(
       t,
       Container(
         padding: const EdgeInsets.all(12),
@@ -2816,7 +2870,7 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      'Made by the agent for this answer',
+                      s.madeByAgent,
                       style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w700,
@@ -2831,7 +2885,7 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
                   ],
                 ),
                 _SmallPill(
-                  label: _pinned ? 'Pinned' : 'Temporary',
+                  label: _pinned ? s.pinnedBadge : s.temporaryBadge,
                   color: _pinned ? t.ok : t.warn,
                   theme: t,
                 ),
@@ -2844,13 +2898,19 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
               _SourceHealthBanner(
                 health: health,
                 theme: t,
+                strings: s,
                 onRetry: () => _run?.retry(),
                 onUseSample: () => _run?.setDataMode('sample'),
                 onUseLive: () => _run?.setDataMode('live'),
               ),
               const SizedBox(height: 8),
             ],
-            _RunViewBody(host: widget.host, run: _run, theme: t),
+            _RunViewBody(
+              host: widget.host,
+              run: _run,
+              theme: t,
+              adapter: widget.adapter,
+            ),
             Divider(height: 16, color: t.border),
             Wrap(
               alignment: WrapAlignment.spaceBetween,
@@ -2859,7 +2919,7 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
               runSpacing: 6,
               children: <Widget>[
                 Text(
-                  'Reads: ${label.reads.join(', ')}',
+                  '${s.readsLabel}: ${label.reads.join(', ')}',
                   style: TextStyle(fontSize: 12, color: t.mutedText),
                 ),
                 Wrap(
@@ -2870,11 +2930,13 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
                     TextButton(
                       onPressed: () =>
                           setState(() => _inspectOpen = !_inspectOpen),
-                      child: Text(_inspectOpen ? 'Hide inspect' : 'Inspect'),
+                      child: Text(
+                        _inspectOpen ? s.hideInspectLabel : s.inspectLabel,
+                      ),
                     ),
                     if (_pinned)
                       Text(
-                        'Pinned to Vibe Space',
+                        s.pinnedToVibeSpace,
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w600,
@@ -2884,8 +2946,8 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
                     else
                       FilledButton(
                         style: FilledButton.styleFrom(backgroundColor: t.accent),
-                        onPressed: () => _openPinDialog(t),
-                        child: const Text('Pin to Vibe Space'),
+                        onPressed: () => _openPinDialog(t, s),
+                        child: Text(s.pinToVibeSpace),
                       ),
                   ],
                 ),
@@ -2904,6 +2966,7 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
           ],
         ),
       ),
+    ),
     );
   }
 }

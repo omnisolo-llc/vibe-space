@@ -64,3 +64,16 @@ export async function verifyPackage(pkg, publisher) {
       base64(new Uint8Array(await crypto.subtle.digest('SHA-256', module))) !== manifest.module_sha256) throw Error('Invalid module digest');
   return {manifest, module};
 }
+
+export {
+  isSealedHandle,
+  adaptExternalUi,
+  resolveViewTree,
+  renderWithH,
+  renderToTerminal,
+  renderToMarkdown,
+  renderToHtmlString,
+  defineVibeWebComponents,
+  getVibeStrings,
+  isRtlLocale
+} from './adapters.mjs';

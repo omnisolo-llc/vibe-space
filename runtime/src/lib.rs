@@ -1,4 +1,6 @@
 //! Optional signed Wasm packages. No WASI, ambient imports, JIT or bundled plugins.
+pub mod adapter;
+
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
@@ -1182,12 +1184,14 @@ fn execute_compiled_module(
         .get_memory(&store, "memory")
         .ok_or(Error::Package)?;
     let alloc = instance
-        .get_typed_func::<i32, i32>(&store, "omni_alloc")
+        .get_typed_func::<i32, i32>(&store, "vibe_alloc")
+        .or_else(|_| instance.get_typed_func::<i32, i32>(&store, "omni_alloc"))
         .or_else(|_| instance.get_typed_func::<i32, i32>(&store, "leap_alloc"))
         .or_else(|_| instance.get_typed_func::<i32, i32>(&store, "leapterm_alloc"))
         .map_err(runtime_error)?;
     let invoke = instance
-        .get_typed_func::<(i32, i32), i64>(&store, "omni_invoke")
+        .get_typed_func::<(i32, i32), i64>(&store, "vibe_invoke")
+        .or_else(|_| instance.get_typed_func::<(i32, i32), i64>(&store, "omni_invoke"))
         .or_else(|_| instance.get_typed_func::<(i32, i32), i64>(&store, "leap_invoke"))
         .or_else(|_| instance.get_typed_func::<(i32, i32), i64>(&store, "leapterm_invoke"))
         .map_err(runtime_error)?;
