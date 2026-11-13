@@ -409,7 +409,13 @@ pub fn render_terminal(
     let normalized = adapt_external_ui(view)?;
     let clamped_width = width.clamp(24, 160);
     let mut lines = Vec::new();
-    render_terminal_node(&normalized, &resolve_sealed, ansi, clamped_width, &mut lines);
+    render_terminal_node(
+        &normalized,
+        &resolve_sealed,
+        ansi,
+        clamped_width,
+        &mut lines,
+    );
     Ok(lines.join("\n"))
 }
 
@@ -585,15 +591,17 @@ fn adapt_a2ui_node(
     }
 
     let obj = raw.as_object().ok_or(Error::Package)?;
-    let comp = obj.get("component").and_then(Value::as_object).unwrap_or(obj);
+    let comp = obj
+        .get("component")
+        .and_then(Value::as_object)
+        .unwrap_or(obj);
 
     let (kind, props): (&str, &Map<String, Value>) =
         if let Some(t) = comp.get("type").and_then(Value::as_str) {
             (t, comp)
-        } else if let Some((k, v)) = comp
-            .iter()
-            .find(|(k, v)| v.is_object() && k.chars().next().is_some_and(|c| c.is_ascii_uppercase()))
-        {
+        } else if let Some((k, v)) = comp.iter().find(|(k, v)| {
+            v.is_object() && k.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+        }) {
             (k.as_str(), v.as_object().ok_or(Error::Package)?)
         } else {
             return normalize_canonical_node(raw, depth);
@@ -628,10 +636,7 @@ fn adapt_a2ui_node(
             "text": normalize_text_value(props.get("text").or_else(|| props.get("title")))
         })),
         "Text" => {
-            let hint = props
-                .get("usageHint")
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let hint = props.get("usageHint").and_then(Value::as_str).unwrap_or("");
             if hint.starts_with('h') {
                 Ok(json!({
                     "type": "heading",
@@ -761,7 +766,11 @@ fn adapt_adaptive_action(act: &Value) -> Option<Value> {
         .get("verb")
         .or_else(|| obj.get("id"))
         .and_then(Value::as_str)
-        .unwrap_or(if act_type.is_empty() { "submit" } else { act_type });
+        .unwrap_or(if act_type.is_empty() {
+            "submit"
+        } else {
+            act_type
+        });
     let mut node = json!({
         "type": "button",
         "text": title,
@@ -783,7 +792,10 @@ fn adapt_adaptive_element(elem: &Value, depth: usize) -> Result<Value, Error> {
         return Err(Error::Package);
     }
     let obj = elem.as_object().ok_or(Error::Package)?;
-    let kind = obj.get("type").and_then(Value::as_str).ok_or(Error::Package)?;
+    let kind = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or(Error::Package)?;
     match kind {
         "TextBlock" => {
             let style = obj.get("style").and_then(Value::as_str).unwrap_or("");
@@ -958,7 +970,10 @@ fn adapt_markdown(markdown: &str) -> Value {
             children.push(json!({ "type": "table", "headers": headers, "rows": rows }));
             continue;
         }
-        let text = line.strip_prefix("- ").or_else(|| line.strip_prefix("* ")).unwrap_or(line);
+        let text = line
+            .strip_prefix("- ")
+            .or_else(|| line.strip_prefix("* "))
+            .unwrap_or(line);
         children.push(json!({ "type": "text", "text": text }));
         i += 1;
     }
@@ -970,7 +985,10 @@ fn normalize_canonical_node(raw: &Value, depth: usize) -> Result<Value, Error> {
         return Err(Error::Package);
     }
     let obj = raw.as_object().ok_or(Error::Package)?;
-    let kind = obj.get("type").and_then(Value::as_str).ok_or(Error::Package)?;
+    let kind = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or(Error::Package)?;
     let mut out = obj.clone();
     if kind == "action" {
         out.insert("type".into(), Value::String("button".into()));
@@ -1002,7 +1020,10 @@ fn validate_canonical_node(node: &Value, depth: usize, budget: &mut usize) -> Re
     }
     *budget -= 1;
     let obj = node.as_object().ok_or(Error::Package)?;
-    let kind = obj.get("type").and_then(Value::as_str).ok_or(Error::Package)?;
+    let kind = obj
+        .get("type")
+        .and_then(Value::as_str)
+        .ok_or(Error::Package)?;
     const KNOWN: &[&str] = &[
         "column",
         "row",
@@ -1066,7 +1087,10 @@ fn resolve_node_recursive(
 
     for key in ["text", "label", "caption", "value", "title"] {
         if let Some(v) = obj.get(key) {
-            if key == "value" && ((kind == "bar" || kind == "progress") && v.is_number() || kind == "checkbox" && v.is_boolean()) {
+            if key == "value"
+                && ((kind == "bar" || kind == "progress") && v.is_number()
+                    || kind == "checkbox" && v.is_boolean())
+            {
                 continue;
             }
             let (resolved, is_sealed, ok) = resolve_text_value(Some(v), resolve_sealed);
@@ -1157,7 +1181,11 @@ fn ansi_wrap(ansi: bool, tone: &str, text: &str) -> String {
 }
 
 fn render_sparkline(values: &[Value]) -> String {
-    let nums: Vec<f64> = values.iter().filter_map(Value::as_f64).filter(|v| v.is_finite()).collect();
+    let nums: Vec<f64> = values
+        .iter()
+        .filter_map(Value::as_f64)
+        .filter(|v| v.is_finite())
+        .collect();
     if nums.is_empty() {
         return String::new();
     }
@@ -1231,7 +1259,11 @@ fn render_terminal_node(
             let label = format_terminal_text(obj.get("label"), resolve_sealed);
             let caption = format_terminal_text(obj.get("caption"), resolve_sealed);
             let val = obj.get("value").and_then(Value::as_f64).unwrap_or(0.0);
-            let max = obj.get("max").and_then(Value::as_f64).filter(|m| *m > 0.0).unwrap_or(1.0);
+            let max = obj
+                .get("max")
+                .and_then(Value::as_f64)
+                .filter(|m| *m > 0.0)
+                .unwrap_or(1.0);
             let frac = (val / max).clamp(0.0, 1.0);
             let bar_w = (width / 3).clamp(10, 28);
             let filled = (frac * (bar_w as f64)).round() as usize;
@@ -1313,7 +1345,11 @@ fn render_markdown_node(
             let caption = format_terminal_text(obj.get("caption"), resolve_sealed);
             if caption.is_empty() {
                 let val = obj.get("value").and_then(Value::as_f64).unwrap_or(0.0);
-                let max = obj.get("max").and_then(Value::as_f64).filter(|m| *m > 0.0).unwrap_or(1.0);
+                let max = obj
+                    .get("max")
+                    .and_then(Value::as_f64)
+                    .filter(|m| *m > 0.0)
+                    .unwrap_or(1.0);
                 out.push(format!("- **{label}**: {}%", ((val / max) * 100.0).round()));
             } else {
                 out.push(format!("- **{label}**: {caption}"));
@@ -1404,7 +1440,13 @@ mod tests {
         let adapted_card = adapt_external_ui(&card).unwrap();
         assert_eq!(adapted_card["children"][0]["type"], "heading");
         assert_eq!(adapted_card["children"][1]["type"], "table");
-        assert_eq!(adapted_card["children"][2]["children"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            adapted_card["children"][2]["children"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
     }
 
     #[test]
