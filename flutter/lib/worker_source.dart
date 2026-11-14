@@ -87,8 +87,17 @@ self.onmessage = async event => {
     phase = 'instantiate';
     const {exports:e} = await WebAssembly.instantiate(module, {});
     phase = 'abi';
-    const alloc = e.vibe_alloc ?? e.omni_alloc ?? e.leap_alloc ?? e.leapterm_alloc;
-    const invoke = e.vibe_invoke ?? e.omni_invoke ?? e.leap_invoke ?? e.leapterm_invoke;
+    const prefixes = Array.isArray(payload.entrypointPrefixes) && payload.entrypointPrefixes.length
+      ? payload.entrypointPrefixes.filter(p => typeof p === 'string' && /^[a-zA-Z_][a-zA-Z0-9_]{0,31}$/.test(p))
+      : ['vibe_'];
+    const resolveExport = suffix => {
+      for (const prefix of prefixes) {
+        if (typeof e[prefix + suffix] === 'function') return e[prefix + suffix];
+      }
+      return undefined;
+    };
+    const alloc = e.vibe_alloc ?? resolveExport('alloc');
+    const invoke = e.vibe_invoke ?? resolveExport('invoke');
     if (!(e.memory instanceof WebAssembly.Memory) || typeof alloc !== 'function' || typeof invoke !== 'function') throw Error('ABI');
     phase = 'allocate';
     const ptr = alloc(request.length);

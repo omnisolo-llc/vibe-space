@@ -7,5 +7,5 @@
 *.pem
 *.key
 *.wasm
-*.omnipkg
+*.vibepkg
 .DS_Store

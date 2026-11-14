@@ -8,14 +8,14 @@ void main() {
     test('seals deterministically per host, persists, and rejects forged handles', () {
       final storage = InMemoryVibeStorage();
       final hostA1 = VibeProtocolHost(
-        id: 'leapterm',
-        name: 'LeapTerm',
+        id: 'example-host',
+        name: 'Example Host',
         capabilities: const <VibeCapability>[],
         storage: storage,
       );
       final hostA2 = VibeProtocolHost(
-        id: 'leapterm',
-        name: 'LeapTerm',
+        id: 'example-host',
+        name: 'Example Host',
         capabilities: const <VibeCapability>[],
         storage: storage,
       );
@@ -49,8 +49,8 @@ void main() {
   group('VibeSpec, labels, and VibeShareCodec', () {
     test('generates deduplicated Reads / Shows / Cannot labels', () {
       final host = VibeProtocolHost(
-        id: 'leapterm',
-        name: 'LeapTerm',
+        id: 'example-host',
+        name: 'Example Host',
         capabilities: <VibeCapability>[
           VibeCapability(
             name: 'telemetry.disk',
@@ -89,16 +89,16 @@ void main() {
         'See server names or addresses',
         'Run commands',
         'Use the internet',
-        'Change anything in LeapTerm',
+        'Change anything in Example Host',
       ]);
 
       final portableLbl = host.label(kPortableFocusTimerVibe);
-      expect(portableLbl.reads, <String>['Nothing from LeapTerm']);
+      expect(portableLbl.reads, <String>['Nothing from Example Host']);
       expect(portableLbl.shows, <String>['Only inside its own box']);
       expect(portableLbl.cannot, <String>[
         'Run commands',
         'Use the internet',
-        'Change anything in LeapTerm',
+        'Change anything in Example Host',
       ]);
     });
 
@@ -118,7 +118,7 @@ void main() {
       expect(VibeShareCodec.decode(token), equals(spec));
       expect(VibeShareCodec.decode('#vibe=$token'), equals(spec));
       expect(
-        VibeShareCodec.decode('https://leapterm.com/demo/index.html#vibe=$token&extra=1'),
+        VibeShareCodec.decode('https://example.com/demo/index.html#vibe=$token&extra=1'),
         equals(spec),
       );
 
@@ -149,8 +149,8 @@ void main() {
   group('VibeProtocolHost lifecycle store', () {
     VibeProtocolHost makeHost(VibeStorageAdapter storage, {bool includeDisk = true}) {
       return VibeProtocolHost(
-        id: 'leapterm',
-        name: 'LeapTerm',
+        id: 'example-host',
+        name: 'Example Host',
         storage: storage,
         capabilities: <VibeCapability>[
           if (includeDisk)
@@ -292,7 +292,7 @@ void main() {
 
       final host = VibeProtocolHost(
         id: 'ops',
-        name: 'LeapTerm',
+        name: 'Example Host',
         capabilities: <VibeCapability>[
           VibeCapability(
             name: 'telemetry.disk',
@@ -305,7 +305,7 @@ void main() {
             },
             status: () => diskStatus,
             read: () {
-              if (throwOnRead) throw StateError('SSH pipe broken');
+              if (throwOnRead) throw StateError('Host pipe broken');
               return diskRows;
             },
             sample: const <Map<String, Object?>>[
@@ -339,7 +339,7 @@ void main() {
       expect(insp.ledger.reads['telemetry.disk'], 1);
 
       // Go offline -> stale view preserved, lastError stays null
-      diskStatus = const VibeSourceStatus.offline('SSH telemetry feed disconnected');
+      diskStatus = const VibeSourceStatus.offline('Host telemetry feed disconnected');
       host.notifySourceChange();
       expect(run.health().state, VibeSourceMode.offline);
       expect(run.health().isStale, isTrue);
@@ -357,7 +357,7 @@ void main() {
       await run.setDataMode('live');
       expect(run.health().state, VibeSourceMode.offline);
       expect(run.view, isNull);
-      expect(run.unavailableReason, contains('SSH telemetry feed disconnected'));
+      expect(run.unavailableReason, contains('Host telemetry feed disconnected'));
       expect(run.lastError, isNull);
 
       // Source returns -> auto-recovers via notifySourceChange
@@ -427,7 +427,7 @@ void main() {
       var serversOnline = true;
       final host = VibeProtocolHost(
         id: 'ops2',
-        name: 'LeapTerm',
+        name: 'Example Host',
         capabilities: <VibeCapability>[
           VibeCapability(
             name: 'telemetry.disk',

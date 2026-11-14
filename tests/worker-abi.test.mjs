@@ -32,14 +32,29 @@ function guest(prefix) {
   ]);
 }
 
-for (const [label, prefix] of [['legacy', 'omni'], ['LeapTerm', 'leap'], ['LeapTerm long', 'leapterm']]) {
-  test(`worker executes a real guest using ${label} ABI exports`, async () => {
-    let reply;
-    const self = {postMessage: value => { reply = JSON.parse(value); }};
-    runInNewContext(worker, {self, WebAssembly, Uint8Array, TextDecoder, atob});
-    await self.onmessage({data: JSON.stringify({
-      module: guest(prefix).toString('base64'), request: Buffer.from('{}').toString('base64'),
-    })});
-    assert.deepEqual(reply, {result: {view: 'hello'}});
-  });
-}
+test('worker executes a real guest using standard vibe ABI exports', async () => {
+  let reply;
+  const self = {postMessage: value => { reply = JSON.parse(value); }};
+  runInNewContext(worker, {self, WebAssembly, Uint8Array, TextDecoder, atob});
+  await self.onmessage({data: JSON.stringify({
+    module: guest('vibe').toString('base64'), request: Buffer.from('{}').toString('base64'),
+  })});
+  assert.deepEqual(reply, {result: {view: 'hello'}});
+});
+
+test('worker requires host-configured entrypointPrefixes for non-standard exports', async () => {
+  let reply;
+  const self = {postMessage: value => { reply = JSON.parse(value); }};
+  runInNewContext(worker, {self, WebAssembly, Uint8Array, TextDecoder, atob});
+  await self.onmessage({data: JSON.stringify({
+    module: guest('custom').toString('base64'), request: Buffer.from('{}').toString('base64'),
+  })});
+  assert.deepEqual(reply, {error: true, phase: 'abi'});
+
+  await self.onmessage({data: JSON.stringify({
+    module: guest('custom').toString('base64'),
+    request: Buffer.from('{}').toString('base64'),
+    entrypointPrefixes: ['custom_'],
+  })});
+  assert.deepEqual(reply, {result: {view: 'hello'}});
+});

@@ -2,133 +2,222 @@ import 'dart:convert';
 
 import 'host.dart';
 
-/// Canonical MCP tool categories aligned with `deploy/mcp-worker/src/discovery-profile.js`
-/// and `crates/service-contracts/src/project_tool_catalog.json`.
-enum VibeMcpToolCategory {
-  runtime('runtime', 'Runtime & Host Diagnostics'),
-  project('project', 'Project & Filesystem Inspection'),
-  git('git', 'Git & Diff Review'),
-  job('job', 'Process & Job Observation'),
-  provider('provider', 'Host Providers (SSH, LSP, Browser, Docs)'),
-  edit('edit', 'Workspace File Editing'),
-  validation('validation', 'Build & Test Validation'),
-  session('session', 'Session & Context Continuity'),
-  agent('agent', 'AI Agent & Goal Orchestration'),
-  artifact('artifact', 'Project & Conversation Artifacts'),
-  checkpoint('checkpoint', 'Workspace Checkpoints'),
-  memory('memory', 'Scoped Agent Memory'),
-  skill('skill', 'Reusable MCP Skills'),
-  telemetry('telemetry', 'Live Host & Network Telemetry'),
-  clientUi('client_ui', 'Client UI & Vibe Canvas Surface');
-
-  const VibeMcpToolCategory(this.id, this.label);
+/// Extensible category identifier for an MCP tool descriptor.
+class VibeMcpToolCategory {
+  const VibeMcpToolCategory(this.id, [this.label = '']);
 
   final String id;
   final String label;
 
-  static VibeMcpToolCategory fromId(String? raw) {
-    final normalized = raw?.trim().toLowerCase();
-    for (final value in VibeMcpToolCategory.values) {
+  static const VibeMcpToolCategory runtime =
+      VibeMcpToolCategory('runtime', 'Runtime & Host Diagnostics');
+  static const VibeMcpToolCategory project =
+      VibeMcpToolCategory('project', 'Project & Filesystem Inspection');
+  static const VibeMcpToolCategory git =
+      VibeMcpToolCategory('git', 'Git & Diff Review');
+  static const VibeMcpToolCategory job =
+      VibeMcpToolCategory('job', 'Process & Job Observation');
+  static const VibeMcpToolCategory provider =
+      VibeMcpToolCategory('provider', 'Host Providers');
+  static const VibeMcpToolCategory edit =
+      VibeMcpToolCategory('edit', 'Workspace File Editing');
+  static const VibeMcpToolCategory validation =
+      VibeMcpToolCategory('validation', 'Build & Test Validation');
+  static const VibeMcpToolCategory session =
+      VibeMcpToolCategory('session', 'Session & Context Continuity');
+  static const VibeMcpToolCategory agent =
+      VibeMcpToolCategory('agent', 'AI Agent & Goal Orchestration');
+  static const VibeMcpToolCategory artifact =
+      VibeMcpToolCategory('artifact', 'Project & Conversation Artifacts');
+  static const VibeMcpToolCategory checkpoint =
+      VibeMcpToolCategory('checkpoint', 'Workspace Checkpoints');
+  static const VibeMcpToolCategory memory =
+      VibeMcpToolCategory('memory', 'Scoped Agent Memory');
+  static const VibeMcpToolCategory skill =
+      VibeMcpToolCategory('skill', 'Reusable MCP Skills');
+  static const VibeMcpToolCategory telemetry =
+      VibeMcpToolCategory('telemetry', 'Live Host & Network Telemetry');
+  static const VibeMcpToolCategory clientUi =
+      VibeMcpToolCategory('client_ui', 'Client UI & Vibe Canvas Surface');
+
+  static const List<VibeMcpToolCategory> builtInValues = <VibeMcpToolCategory>[
+    runtime,
+    project,
+    git,
+    job,
+    provider,
+    edit,
+    validation,
+    session,
+    agent,
+    artifact,
+    checkpoint,
+    memory,
+    skill,
+    telemetry,
+    clientUi,
+  ];
+
+  static VibeMcpToolCategory fromId(
+    String? raw, {
+    VibeMcpToolCategory fallback = runtime,
+  }) {
+    final normalized = raw?.trim().toLowerCase() ?? '';
+    if (normalized.isEmpty) return fallback;
+    for (final value in builtInValues) {
       if (value.id == normalized) return value;
     }
-    return VibeMcpToolCategory.runtime;
+    return VibeMcpToolCategory(normalized, normalized);
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is VibeMcpToolCategory && other.id == id);
+
+  @override
+  int get hashCode => id.hashCode;
+
+  @override
+  String toString() => 'VibeMcpToolCategory($id)';
 }
 
-/// Execution location of an MCP tool, aligned with `scripts/generate-mcp-catalog.mjs`.
-enum VibeMcpExecutionLocation {
-  gateway('gateway'),
-  runner('runner'),
-  provider('provider'),
-  client('client'),
-  hybrid('hybrid');
-
+/// Extensible execution location identifier for an MCP tool.
+class VibeMcpExecutionLocation {
   const VibeMcpExecutionLocation(this.id);
 
   final String id;
 
-  static VibeMcpExecutionLocation fromId(String? raw) {
-    final normalized = raw?.trim().toLowerCase();
-    for (final value in VibeMcpExecutionLocation.values) {
-      if (value.id == normalized) return value;
-    }
-    return VibeMcpExecutionLocation.runner;
+  static const VibeMcpExecutionLocation host =
+      VibeMcpExecutionLocation('host');
+  static const VibeMcpExecutionLocation gateway =
+      VibeMcpExecutionLocation('gateway');
+  static const VibeMcpExecutionLocation runner =
+      VibeMcpExecutionLocation('runner');
+  static const VibeMcpExecutionLocation provider =
+      VibeMcpExecutionLocation('provider');
+  static const VibeMcpExecutionLocation client =
+      VibeMcpExecutionLocation('client');
+  static const VibeMcpExecutionLocation hybrid =
+      VibeMcpExecutionLocation('hybrid');
+
+  static VibeMcpExecutionLocation fromId(
+    String? raw, {
+    VibeMcpExecutionLocation fallback = host,
+  }) {
+    final normalized = raw?.trim().toLowerCase() ?? '';
+    if (normalized.isEmpty) return fallback;
+    return VibeMcpExecutionLocation(normalized);
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is VibeMcpExecutionLocation && other.id == id);
+
+  @override
+  int get hashCode => id.hashCode;
+
+  @override
+  String toString() => 'VibeMcpExecutionLocation($id)';
 }
 
-/// Frontend or runtime surface where an MCP tool may be exposed under conditions.
-enum VibeMcpExposureSurface {
-  /// External AI assistants (ChatGPT, Claude, Cursor) via `mcp-worker` / local stdio MCP.
-  externalAssistant('external_assistant'),
-
-  /// Sandboxed Vibe Canvas components polling/streaming live data (`window.vibeCanvas.callMcp`).
-  /// Strictly restricted to non-mutating (`mutates == false`) read-only tools.
-  canvasReadOnly('canvas_readonly'),
-
-  /// Interactive Vibe Canvas action dispatch (`window.vibeCanvas.sendAction` / `VibeView` actions)
-  /// mediated by user confirmation or controlling-task UI lease.
-  canvasInteractive('canvas_interactive'),
-
-  /// Unified Omnibox & AI Tasks planner inside the client app.
-  omnibox('omnibox'),
-
-  /// Unattended / background agent task execution.
-  agentBackground('agent_background');
-
+/// Extensible surface identifier where an MCP tool may be exposed under policy.
+class VibeMcpExposureSurface {
   const VibeMcpExposureSurface(this.id);
 
   final String id;
+
+  /// External AI assistants (e.g. MCP clients over stdio or HTTP).
+  static const VibeMcpExposureSurface externalAssistant =
+      VibeMcpExposureSurface('external_assistant');
+
+  /// Sandboxed Vibe Canvas components polling/streaming live data (`window.vibeCanvas.callMcp`).
+  /// Strictly restricted to non-mutating (`mutates == false`) read-only tools.
+  static const VibeMcpExposureSurface canvasReadOnly =
+      VibeMcpExposureSurface('canvas_readonly');
+
+  /// Interactive Vibe Canvas action dispatch mediated by user confirmation or lease.
+  static const VibeMcpExposureSurface canvasInteractive =
+      VibeMcpExposureSurface('canvas_interactive');
+
+  /// Host-native planner / command palette surface.
+  static const VibeMcpExposureSurface hostPlanner =
+      VibeMcpExposureSurface('host_planner');
+
+  /// Unattended / background agent task execution.
+  static const VibeMcpExposureSurface agentBackground =
+      VibeMcpExposureSurface('agent_background');
+
+  static VibeMcpExposureSurface fromId(String raw) =>
+      VibeMcpExposureSurface(raw.trim().toLowerCase());
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      (other is VibeMcpExposureSurface && other.id == id);
+
+  @override
+  int get hashCode => id.hashCode;
+
+  @override
+  String toString() => 'VibeMcpExposureSurface($id)';
 }
 
-/// Semantic tags attached to MCP tools for fine-grained conditional selection.
-enum VibeMcpToolTag {
-  readOnly('read_only'),
-  mutating('mutating'),
-  telemetry('telemetry'),
-  processInspect('process_inspect'),
-  networkInspect('network_inspect'),
-  sshReadOnly('ssh_readonly'),
-  filesystemRead('filesystem_read'),
-  gitRead('git_read'),
-  jobObserve('job_observe'),
-  uiWidget('ui_widget'),
-  compactDiscovery('compact_discovery');
-
+/// Extensible semantic tag attached to MCP tools for conditional selection.
+class VibeMcpToolTag {
   const VibeMcpToolTag(this.id);
 
   final String id;
+
+  static const VibeMcpToolTag readOnly = VibeMcpToolTag('read_only');
+  static const VibeMcpToolTag mutating = VibeMcpToolTag('mutating');
+  static const VibeMcpToolTag telemetry = VibeMcpToolTag('telemetry');
+  static const VibeMcpToolTag processInspect =
+      VibeMcpToolTag('process_inspect');
+  static const VibeMcpToolTag networkInspect =
+      VibeMcpToolTag('network_inspect');
+  static const VibeMcpToolTag filesystemRead =
+      VibeMcpToolTag('filesystem_read');
+  static const VibeMcpToolTag gitRead = VibeMcpToolTag('git_read');
+  static const VibeMcpToolTag jobObserve = VibeMcpToolTag('job_observe');
+  static const VibeMcpToolTag runtimeDiscovery =
+      VibeMcpToolTag('runtime_discovery');
+  static const VibeMcpToolTag uiWidget = VibeMcpToolTag('ui_widget');
+  static const VibeMcpToolTag compactDiscovery =
+      VibeMcpToolTag('compact_discovery');
+
+  static VibeMcpToolTag fromId(String raw) =>
+      VibeMcpToolTag(raw.trim().toLowerCase());
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) || (other is VibeMcpToolTag && other.id == id);
+
+  @override
+  int get hashCode => id.hashCode;
+
+  @override
+  String toString() => 'VibeMcpToolTag($id)';
 }
 
-/// Canonical compact discovery tool names aligned with
-/// `deploy/mcp-worker/src/discovery-profile.js`.
-const Set<String> kVibeCompactDiscoveryToolNames = <String>{
-  'list_devices',
-  'list_projects',
-  'list_tools',
-  'tool_manifest',
-  'call_runtime_tool',
-  'mcp_tool',
-  'read_operation',
-  'work_on_project',
-  'read_files',
-  'search_project_texts',
-  'apply_text_edits',
-  'git_status',
-  'git_diff_hunks',
-  'observe_jobs',
-  'wait_for_job_terminal',
-  'job_tail',
-  'stop_job',
-  'project_artifact',
-  'runtime_status',
-  'run_process',
-  'run_shell',
-  'provider_catalog',
-  'restart_provider',
-};
+typedef VibeMcpCategoryClassifier = VibeMcpToolCategory Function(
+  String toolName,
+);
+typedef VibeMcpTagDeriver = Set<VibeMcpToolTag> Function({
+  required String name,
+  required String scope,
+  required bool mutates,
+});
+typedef VibeMcpSurfaceDeriver = Set<VibeMcpExposureSurface> Function({
+  required String name,
+  required bool mutates,
+  required VibeMcpToolCategory category,
+  required Set<VibeMcpToolTag> tags,
+});
 
-/// Canonical discovery intents aligned with `deploy/mcp-worker/src/discovery-profile.js`,
-/// extended with `telemetry` and `canvas` for frontend Vibe Space surfaces.
+/// Default generic discovery intent -> category groups (can be overridden per
+/// [VibeMcpSelectionCondition] or [VibeMcpToolCatalog]).
 const Map<String, List<VibeMcpToolCategory>> kVibeDiscoveryIntentCategories =
     <String, List<VibeMcpToolCategory>>{
   'coding': <VibeMcpToolCategory>[
@@ -173,149 +262,47 @@ const Map<String, List<VibeMcpToolCategory>> kVibeDiscoveryIntentCategories =
   ],
 };
 
-/// Classifies any canonical MCP tool name into a [VibeMcpToolCategory] using the
-/// exact regex rules from `deploy/mcp-worker/src/discovery-profile.js` plus
-/// client/telemetry namespaces.
+/// Generic default category classifier based solely on neutral namespace
+/// prefixes. Hosts with domain-specific tool naming should pass a custom
+/// [VibeMcpCategoryClassifier] to [VibeMcpToolCatalog].
 VibeMcpToolCategory classifyVibeMcpToolCategory(String toolName) {
-  final name = toolName.trim();
-  if (name.startsWith('client.')) {
+  final name = toolName.trim().toLowerCase();
+  if (name.startsWith('client.') || name.startsWith('vibe.')) {
     return VibeMcpToolCategory.clientUi;
   }
-  if (name.startsWith('server.telemetry.') ||
-      name.startsWith('server.network.') ||
-      name.startsWith('server.process.') ||
-      name.startsWith('mcp.server.') ||
-      name == 'host_process_list' ||
-      name == 'runner_info' ||
-      name == 'runner_ping' ||
-      name == 'runner_usage') {
+  if (name.startsWith('telemetry.')) {
     return VibeMcpToolCategory.telemetry;
   }
-  if (RegExp(r'^(git_|workspace_changes|review_changes)').hasMatch(name)) {
+  if (name.startsWith('git_') || name.startsWith('git.')) {
     return VibeMcpToolCategory.git;
-  }
-  if (RegExp(r'checkpoint').hasMatch(name)) {
-    return VibeMcpToolCategory.checkpoint;
-  }
-  if (RegExp(r'artifact|conversation_files').hasMatch(name)) {
-    return VibeMcpToolCategory.artifact;
-  }
-  if (RegExp(
-          r'^(write_|apply_|replace_|create_directory|delete_project|move_project)')
-      .hasMatch(name)) {
-    return VibeMcpToolCategory.edit;
-  }
-  if (RegExp(r'^(cargo_|go_|run_project_tests)').hasMatch(name)) {
-    return VibeMcpToolCategory.validation;
-  }
-  if (RegExp(
-          r'job|coding_run|coding_agent_|shell|run_program|run_script|^run_(detached_)?process$')
-      .hasMatch(name)) {
-    return VibeMcpToolCategory.job;
-  }
-  if (RegExp(r'session|context|handoff').hasMatch(name)) {
-    return VibeMcpToolCategory.session;
-  }
-  if (RegExp(r'^(agent_|.*agent_task|.*agent_goal)').hasMatch(name)) {
-    return VibeMcpToolCategory.agent;
-  }
-  if (RegExp(r'^memory_').hasMatch(name)) {
-    return VibeMcpToolCategory.memory;
-  }
-  if (RegExp(r'skill').hasMatch(name)) {
-    return VibeMcpToolCategory.skill;
-  }
-  if (RegExp(
-          r'^(browser_|computer_|document_|write_pdf$|lsp_|ssh_|mcp_|provider_|plugin_|restart_provider$)')
-      .hasMatch(name)) {
-    return VibeMcpToolCategory.provider;
-  }
-  if (RegExp(r'project|^read_files$|^search_and_read$').hasMatch(name)) {
-    return VibeMcpToolCategory.project;
   }
   return VibeMcpToolCategory.runtime;
 }
 
-/// Derives canonical [VibeMcpToolTag]s from a tool's name, scope, and mutation flag.
+/// Generic default [VibeMcpToolTag] derivation from a tool's name and mutation
+/// flag. Hosts can supply custom [VibeMcpTagDeriver] hooks to attach domain tags.
 Set<VibeMcpToolTag> deriveVibeMcpToolTags({
   required String name,
   required String scope,
   required bool mutates,
+  Set<String> compactDiscoveryNames = const <String>{},
 }) {
+  final normalized = name.trim().toLowerCase();
   final tags = <VibeMcpToolTag>{
     if (mutates) VibeMcpToolTag.mutating else VibeMcpToolTag.readOnly,
-    if (kVibeCompactDiscoveryToolNames.contains(name))
-      VibeMcpToolTag.compactDiscovery,
+    if (compactDiscoveryNames.contains(name)) VibeMcpToolTag.compactDiscovery,
   };
-
   if (!mutates) {
-    if (name == 'host_process_list' ||
-        name == 'server.process.inspect' ||
-        name == 'mcp.server.processes') {
-      tags.add(VibeMcpToolTag.processInspect);
+    if (normalized.startsWith('telemetry.')) {
       tags.add(VibeMcpToolTag.telemetry);
     }
-    if (name == 'server.network.sockets' ||
-        name == 'mcp.server.network_bandwidth') {
-      tags.add(VibeMcpToolTag.networkInspect);
-      tags.add(VibeMcpToolTag.telemetry);
-    }
-    if (name == 'runner_info' ||
-        name == 'runner_ping' ||
-        name == 'runner_usage' ||
-        name == 'runtime_status' ||
-        name == 'get_usage_stats' ||
-        name == 'server.telemetry.snapshot' ||
-        name == 'mcp.server.metrics' ||
-        name == 'client.canvas.read_metrics') {
-      tags.add(VibeMcpToolTag.telemetry);
-    }
-    if (name == 'ssh_resource' ||
-        name == 'session_shell_status' ||
-        name == 'mcp.ssh.exec_readonly') {
-      tags.add(VibeMcpToolTag.sshReadOnly);
-    }
-    if (name == 'read_files' ||
-        name == 'read_file' ||
-        name == 'read_file_tail' ||
-        name == 'read_multiple_files' ||
-        name == 'list_project_files' ||
-        name == 'list_project_tracked_files' ||
-        name == 'project_overview' ||
-        name == 'search_project_texts' ||
-        name == 'search_and_read' ||
-        name == 'get_file_info' ||
-        name == 'project_file_info' ||
-        name == 'inspect_project_path') {
-      tags.add(VibeMcpToolTag.filesystemRead);
-    }
-    if (name == 'git_status' ||
-        name == 'git_diff_hunks' ||
-        name == 'git_log' ||
-        name == 'git_review_summary' ||
-        name == 'show_changes' ||
-        name == 'changes_file_diff') {
+    if (normalized.startsWith('git_') || normalized.startsWith('git.')) {
       tags.add(VibeMcpToolTag.gitRead);
     }
-    if (name == 'list_jobs' ||
-        name == 'observe_jobs' ||
-        name == 'job_tail' ||
-        name == 'list_process_sessions' ||
-        name == 'read_process_output' ||
-        name == 'session_shell_status' ||
-        name == 'coding_agent_observe') {
-      tags.add(VibeMcpToolTag.jobObserve);
-    }
   }
-
-  if (name.startsWith('present_') ||
-      name == 'goal_plan_state' ||
-      name == 'goal_plan_set' ||
-      name == 'read_operation' ||
-      name.startsWith('client.canvas.')) {
+  if (normalized.startsWith('client.canvas.') || normalized == 'vibe.canvas') {
     tags.add(VibeMcpToolTag.uiWidget);
   }
-
   return Set<VibeMcpToolTag>.unmodifiable(tags);
 }
 
@@ -330,26 +317,24 @@ Set<VibeMcpExposureSurface> deriveVibeMcpExposureSurfaces({
 }) {
   final surfaces = <VibeMcpExposureSurface>{
     VibeMcpExposureSurface.externalAssistant,
-    VibeMcpExposureSurface.omnibox,
+    VibeMcpExposureSurface.hostPlanner,
     VibeMcpExposureSurface.agentBackground,
   };
 
   if (!mutates) {
-    // Non-mutating tools tagged with telemetry, process/network inspection,
-    // ssh read-only, filesystem read, git read, job observe, or runtime discovery
-    // can be exposed to read-only frontend surfaces like Vibe Canvas under policy.
     if (tags.contains(VibeMcpToolTag.telemetry) ||
         tags.contains(VibeMcpToolTag.processInspect) ||
         tags.contains(VibeMcpToolTag.networkInspect) ||
-        tags.contains(VibeMcpToolTag.sshReadOnly) ||
         tags.contains(VibeMcpToolTag.filesystemRead) ||
         tags.contains(VibeMcpToolTag.gitRead) ||
         tags.contains(VibeMcpToolTag.jobObserve) ||
-        category == VibeMcpToolCategory.runtime ||
-        category == VibeMcpToolCategory.project ||
-        category == VibeMcpToolCategory.git ||
-        category == VibeMcpToolCategory.job ||
-        category == VibeMcpToolCategory.telemetry) {
+        tags.contains(VibeMcpToolTag.runtimeDiscovery) ||
+        tags.contains(VibeMcpToolTag.readOnly) &&
+            (category == VibeMcpToolCategory.runtime ||
+                category == VibeMcpToolCategory.project ||
+                category == VibeMcpToolCategory.git ||
+                category == VibeMcpToolCategory.job ||
+                category == VibeMcpToolCategory.telemetry)) {
       surfaces.add(VibeMcpExposureSurface.canvasReadOnly);
     }
   } else if (category == VibeMcpToolCategory.clientUi ||
@@ -360,8 +345,7 @@ Set<VibeMcpExposureSurface> deriveVibeMcpExposureSurfaces({
   return Set<VibeMcpExposureSurface>.unmodifiable(surfaces);
 }
 
-/// Unified descriptor for an MCP tool in Vibe Space, compatible with
-/// `crates/service-contracts/src/project_tool_catalog.json` and `deploy/mcp-worker`.
+/// Extensible descriptor for a host-registered MCP tool in Vibe Space.
 class VibeMcpToolDescriptor {
   VibeMcpToolDescriptor({
     required this.name,
@@ -369,14 +353,18 @@ class VibeMcpToolDescriptor {
     required this.mutates,
     required this.description,
     this.inputSchema = const <String, dynamic>{'type': 'object'},
-    this.location = VibeMcpExecutionLocation.runner,
+    this.location = VibeMcpExecutionLocation.host,
     VibeMcpToolCategory? category,
     Set<VibeMcpToolTag>? tags,
     Set<VibeMcpExposureSurface>? surfaces,
-    this.requiresActiveSshSession = false,
-    this.requiresProjectContext = false,
+    Set<String> requiredContext = const <String>{},
+    bool requiresProjectContext = false,
     this.aliases = const <String>{},
-  })  : category = category ?? classifyVibeMcpToolCategory(name),
+  })  : requiredContext = Set<String>.unmodifiable(<String>{
+          ...requiredContext,
+          if (requiresProjectContext) 'project',
+        }),
+        category = category ?? classifyVibeMcpToolCategory(name),
         tags = tags ??
             deriveVibeMcpToolTags(
               name: name,
@@ -396,11 +384,18 @@ class VibeMcpToolDescriptor {
                   ),
             );
 
-  /// Constructs a [VibeMcpToolDescriptor] directly from an entry in
-  /// `crates/service-contracts/src/project_tool_catalog.json`.
-  factory VibeMcpToolDescriptor.fromCatalogJson(Map<String, dynamic> json) {
+  /// Constructs a [VibeMcpToolDescriptor] from a JSON catalog entry, with
+  /// optional host-supplied classification and tag/surface hooks.
+  factory VibeMcpToolDescriptor.fromCatalogJson(
+    Map<String, dynamic> json, {
+    VibeMcpCategoryClassifier? classifyCategory,
+    VibeMcpTagDeriver? deriveTags,
+    VibeMcpSurfaceDeriver? deriveSurfaces,
+    Set<String>? requiredContext,
+    Set<String>? aliases,
+  }) {
     final name = (json['name'] ?? '').toString().trim();
-    final scope = (json['scope'] ?? 'project:read').toString().trim();
+    final scope = (json['scope'] ?? 'read').toString().trim();
     final mutates = json['mutates'] == true;
     final description = (json['description'] ?? '').toString().trim();
     final rawSchema = json['input_schema'];
@@ -409,9 +404,40 @@ class VibeMcpToolDescriptor {
         : (rawSchema is Map
             ? rawSchema.map<String, dynamic>((k, v) => MapEntry('$k', v))
             : const <String, dynamic>{'type': 'object'});
-    final props = schema['properties'];
-    final requiresProject =
-        props is Map && props.containsKey('project_id') && name != 'list_projects';
+
+    final rawRequiredContext = <String>{
+      ...?requiredContext,
+      if (json['required_context'] is List)
+        for (final item in json['required_context'] as List)
+          if (item != null && item.toString().trim().isNotEmpty)
+            item.toString().trim(),
+    };
+
+    final resolvedCategory = (classifyCategory ?? classifyVibeMcpToolCategory)(
+      name,
+    );
+    final resolvedTags = (deriveTags ??
+        ({required String name, required String scope, required bool mutates}) =>
+            deriveVibeMcpToolTags(name: name, scope: scope, mutates: mutates))(
+      name: name,
+      scope: scope,
+      mutates: mutates,
+    );
+    final resolvedSurfaces = (deriveSurfaces ?? deriveVibeMcpExposureSurfaces)(
+      name: name,
+      mutates: mutates,
+      category: resolvedCategory,
+      tags: resolvedTags,
+    );
+
+    final jsonAliases = <String>{
+      ...?aliases,
+      if (json['aliases'] is List)
+        for (final alias in json['aliases'] as List)
+          if (alias != null && alias.toString().trim().isNotEmpty)
+            alias.toString().trim(),
+    };
+
     return VibeMcpToolDescriptor(
       name: name,
       scope: scope,
@@ -419,7 +445,11 @@ class VibeMcpToolDescriptor {
       description: description,
       inputSchema: schema,
       location: VibeMcpExecutionLocation.fromId(json['location']?.toString()),
-      requiresProjectContext: requiresProject,
+      category: resolvedCategory,
+      tags: resolvedTags,
+      surfaces: resolvedSurfaces,
+      requiredContext: rawRequiredContext,
+      aliases: Set<String>.unmodifiable(jsonAliases),
     );
   }
 
@@ -432,12 +462,14 @@ class VibeMcpToolDescriptor {
   final VibeMcpToolCategory category;
   final Set<VibeMcpToolTag> tags;
   final Set<VibeMcpExposureSurface> surfaces;
-  final bool requiresActiveSshSession;
-  final bool requiresProjectContext;
+  final Set<String> requiredContext;
   final Set<String> aliases;
 
   /// True when this tool is strictly read-only (`mutates == false`).
   bool get isReadOnly => !mutates;
+
+  /// Convenience getter for tools gated on `'project'` in [requiredContext].
+  bool get requiresProjectContext => requiredContext.contains('project');
 
   /// Matches [candidateName] against [name] or any registered [aliases] (case-insensitive).
   bool matchesName(String candidateName) {
@@ -458,30 +490,30 @@ class VibeMcpToolDescriptor {
         'category': category.id,
         'tags': tags.map((t) => t.id).toList(growable: false),
         'surfaces': surfaces.map((s) => s.id).toList(growable: false),
+        if (requiredContext.isNotEmpty)
+          'required_context': requiredContext.toList(growable: false),
         if (aliases.isNotEmpty) 'aliases': aliases.toList(growable: false),
       };
 }
 
-/// Runtime condition used to select which MCP tools are exposed to a frontend
-/// surface (such as Vibe Canvas, Omnibox, or external ChatGPT/Claude MCP).
+/// Runtime condition used to select which MCP tools are exposed to a surface.
 class VibeMcpSelectionCondition {
   const VibeMcpSelectionCondition({
     required this.surface,
     this.allowMutating = false,
-    this.hasActiveSshSession = true,
-    this.hasProjectContext = true,
+    this.activeContext = const <String>{},
     this.grantedScopes,
     this.categories,
     this.anyTags,
     this.requiredTags,
     this.intent,
+    this.intentCategories,
   });
 
   /// Convenience condition for live Vibe Canvas components (`window.vibeCanvas.callMcp`).
   /// Enforces `allowMutating: false` and `surface: VibeMcpExposureSurface.canvasReadOnly`.
   factory VibeMcpSelectionCondition.canvasReadOnly({
-    bool hasActiveSshSession = true,
-    bool hasProjectContext = true,
+    Set<String> activeContext = const <String>{},
     Set<String>? grantedScopes,
     Set<VibeMcpToolCategory>? categories,
     Set<VibeMcpToolTag>? anyTags,
@@ -489,8 +521,7 @@ class VibeMcpSelectionCondition {
     return VibeMcpSelectionCondition(
       surface: VibeMcpExposureSurface.canvasReadOnly,
       allowMutating: false,
-      hasActiveSshSession: hasActiveSshSession,
-      hasProjectContext: hasProjectContext,
+      activeContext: activeContext,
       grantedScopes: grantedScopes,
       categories: categories,
       anyTags: anyTags,
@@ -499,13 +530,13 @@ class VibeMcpSelectionCondition {
 
   final VibeMcpExposureSurface surface;
   final bool allowMutating;
-  final bool hasActiveSshSession;
-  final bool hasProjectContext;
+  final Set<String> activeContext;
   final Set<String>? grantedScopes;
   final Set<VibeMcpToolCategory>? categories;
   final Set<VibeMcpToolTag>? anyTags;
   final Set<VibeMcpToolTag>? requiredTags;
   final String? intent;
+  final Map<String, List<VibeMcpToolCategory>>? intentCategories;
 
   /// Evaluates whether [tool] satisfies this selection condition.
   bool allows(VibeMcpToolDescriptor tool) {
@@ -521,10 +552,8 @@ class VibeMcpSelectionCondition {
     }
 
     // 3. Contextual prerequisite checks
-    if (tool.requiresActiveSshSession && !hasActiveSshSession) {
-      return false;
-    }
-    if (tool.requiresProjectContext && !hasProjectContext) {
+    if (tool.requiredContext.isNotEmpty &&
+        !activeContext.containsAll(tool.requiredContext)) {
       return false;
     }
 
@@ -540,8 +569,8 @@ class VibeMcpSelectionCondition {
       return false;
     }
     if (intent != null && intent!.trim().isNotEmpty) {
-      final allowedForIntent =
-          kVibeDiscoveryIntentCategories[intent!.trim().toLowerCase()];
+      final intents = intentCategories ?? kVibeDiscoveryIntentCategories;
+      final allowedForIntent = intents[intent!.trim().toLowerCase()];
       if (allowedForIntent != null &&
           !allowedForIntent.contains(tool.category)) {
         return false;
@@ -564,34 +593,47 @@ class VibeMcpSelectionCondition {
   }
 }
 
-/// Canonical Vibe Space MCP Tool Catalog that aligns the ChatGPT/Claude MCP Server
-/// tool definitions (`deploy/mcp-worker/src/project-tools.js`) with frontend surfaces
-/// like Vibe Canvas and Unified Omnibox without duplicating schemas.
+/// Extensible MCP tool registry populated by the embedding host application.
+///
+/// Starts empty so Vibe Space remains completely independent of any specific
+/// host's tool names, schemas, or compatibility aliases.
 class VibeMcpToolCatalog {
-  VibeMcpToolCatalog({Iterable<VibeMcpToolDescriptor>? tools}) {
-    for (final tool in tools ?? defaultTools) {
-      register(tool);
-    }
+  VibeMcpToolCatalog({
+    Iterable<VibeMcpToolDescriptor> tools = const <VibeMcpToolDescriptor>[],
+  }) {
+    registerAll(tools);
   }
 
-  /// Creates a catalog populated from the JSON string of
-  /// `crates/service-contracts/src/project_tool_catalog.json` merged with the
-  /// standard Vibe Space telemetry/canvas descriptors.
-  factory VibeMcpToolCatalog.fromProjectToolCatalogJson(String jsonSource) {
+  /// Parses a host-supplied JSON catalog (`{ "tools": [ ... ] }`) using
+  /// optional classification, tagging, and surface hooks.
+  factory VibeMcpToolCatalog.fromCatalogJson(
+    String jsonSource, {
+    VibeMcpCategoryClassifier? classifyCategory,
+    VibeMcpTagDeriver? deriveTags,
+    VibeMcpSurfaceDeriver? deriveSurfaces,
+    Iterable<VibeMcpToolDescriptor> baseTools = const <VibeMcpToolDescriptor>[],
+  }) {
     final decoded = jsonDecode(jsonSource);
-    final descriptors = <VibeMcpToolDescriptor>[...defaultTools];
+    final descriptors = <VibeMcpToolDescriptor>[...baseTools];
     if (decoded is Map && decoded['tools'] is List) {
       for (final raw in decoded['tools'] as List) {
         if (raw is Map) {
           final map = raw.map<String, dynamic>((k, v) => MapEntry('$k', v));
-          descriptors.add(VibeMcpToolDescriptor.fromCatalogJson(map));
+          descriptors.add(
+            VibeMcpToolDescriptor.fromCatalogJson(
+              map,
+              classifyCategory: classifyCategory,
+              deriveTags: deriveTags,
+              deriveSurfaces: deriveSurfaces,
+            ),
+          );
         }
       }
     }
     return VibeMcpToolCatalog(tools: descriptors);
   }
 
-  /// Singleton default catalog aligned with the canonical ChatGPT/Claude MCP server.
+  /// Shared default catalog instance (starts empty until populated by the host).
   static final VibeMcpToolCatalog instance = VibeMcpToolCatalog();
 
   final Map<String, VibeMcpToolDescriptor> _byName =
@@ -605,6 +647,19 @@ class VibeMcpToolCatalog {
     for (final alias in descriptor.aliases) {
       _aliasToCanonical[alias.trim().toLowerCase()] = key;
     }
+  }
+
+  /// Registers all [descriptors] in the catalog.
+  void registerAll(Iterable<VibeMcpToolDescriptor> descriptors) {
+    for (final descriptor in descriptors) {
+      register(descriptor);
+    }
+  }
+
+  /// Removes all registered descriptors and aliases.
+  void clear() {
+    _byName.clear();
+    _aliasToCanonical.clear();
   }
 
   /// Resolves a canonical or aliased tool name to its [VibeMcpToolDescriptor].
@@ -647,17 +702,13 @@ class VibeMcpToolCatalog {
     return effectiveCondition.allows(descriptor);
   }
 
-  /// Formats a concise LLM prompt section describing the canonical MCP tools
-  /// exposed under [condition], so background LLM planners can generate live
-  /// Vibe Canvas components that call canonical MCP tools.
+  /// Formats a concise LLM prompt section describing the MCP tools exposed under
+  /// [condition].
   String buildLlmContextPrompt(VibeMcpSelectionCondition condition) {
     final selected = selectTools(condition);
     if (selected.isEmpty) return '';
     final buffer = StringBuffer()
-      ..writeln(
-        'Exposed MCP Tools for surface `${condition.surface.id}` '
-        '(aligned with canonical ChatGPT/Claude MCP catalog):',
-      );
+      ..writeln('Exposed MCP Tools for surface `${condition.surface.id}`:');
     for (final tool in selected) {
       final tagsLabel = tool.tags.map((t) => t.id).join(', ');
       final aliasNote = tool.aliases.isNotEmpty
@@ -669,304 +720,4 @@ class VibeMcpToolCatalog {
     }
     return buffer.toString().trimRight();
   }
-
-  /// Canonical MCP tools shared across the ChatGPT/Claude MCP Server
-  /// (`deploy/mcp-worker/src/project-tools.js`) and Vibe Space frontend surfaces.
-  static final List<VibeMcpToolDescriptor> defaultTools =
-      <VibeMcpToolDescriptor>[
-    // --- Host Admin & Live Telemetry Tools (Canonical in host-admin-tools.js & CUJ catalog) ---
-    VibeMcpToolDescriptor(
-      name: 'host_process_list',
-      scope: 'runner:admin',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.telemetry,
-      description:
-          'List an allowlisted host process snapshot sorted by CPU and memory usage.',
-      aliases: const <String>{
-        'server.process.inspect',
-        'mcp.server.processes',
-      },
-    ),
-    VibeMcpToolDescriptor(
-      name: 'runner_info',
-      scope: 'runner:admin',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.telemetry,
-      description:
-          'Read sanitized runner/host identity, execution mode, version, uptime, CPU/RAM/disk metrics, and capabilities.',
-      aliases: const <String>{
-        'server.telemetry.snapshot',
-        'mcp.server.metrics',
-        'client.canvas.read_metrics',
-      },
-    ),
-    VibeMcpToolDescriptor(
-      name: 'runner_ping',
-      scope: 'runner:admin',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.telemetry,
-      description: 'Return a live heartbeat response from the executing runner.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'runner_usage',
-      scope: 'runner:admin',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.telemetry,
-      description: 'Read connection-scoped journal counts and resource usage.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'server.network.sockets',
-      scope: 'host:tools',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.telemetry,
-      requiresActiveSshSession: true,
-      description:
-          'Read live network interface RX/TX byte counters (`/proc/net/dev`) and listening sockets.',
-      aliases: const <String>{
-        'mcp.server.network_bandwidth',
-      },
-    ),
-    VibeMcpToolDescriptor(
-      name: 'ssh_resource',
-      scope: 'host:tools',
-      mutates: false,
-      location: VibeMcpExecutionLocation.provider,
-      category: VibeMcpToolCategory.provider,
-      requiresActiveSshSession: true,
-      description:
-          'Execute a validated read-only inspection command over the active SSH resource (`isReadOnlyCanvasShellCommand`).',
-      tags: const <VibeMcpToolTag>{
-        VibeMcpToolTag.readOnly,
-        VibeMcpToolTag.sshReadOnly,
-        VibeMcpToolTag.telemetry,
-      },
-      surfaces: const <VibeMcpExposureSurface>{
-        VibeMcpExposureSurface.externalAssistant,
-        VibeMcpExposureSurface.canvasReadOnly,
-        VibeMcpExposureSurface.omnibox,
-        VibeMcpExposureSurface.agentBackground,
-      },
-      aliases: const <String>{
-        'mcp.ssh.exec_readonly',
-      },
-    ),
-
-    // --- Gateway & Device Discovery Tools (Canonical in project-tools.js) ---
-    VibeMcpToolDescriptor(
-      name: 'list_devices',
-      scope: 'devices:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.gateway,
-      category: VibeMcpToolCategory.runtime,
-      description:
-          'List all currently enrolled devices/servers owned by the connected account.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'list_runners',
-      scope: 'devices:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.gateway,
-      category: VibeMcpToolCategory.runtime,
-      description: 'Alias of list_devices: page account-owned enrolled devices.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'list_projects',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.gateway,
-      category: VibeMcpToolCategory.project,
-      description:
-          'List the registered projects explicitly authorized for this connection.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'runtime_status',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.gateway,
-      category: VibeMcpToolCategory.runtime,
-      description:
-          'Inspect available projects and their current registered capabilities.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'list_tools',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.gateway,
-      category: VibeMcpToolCategory.runtime,
-      description:
-          'List implemented MCP tool names, scopes, and execution locations.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'tool_manifest',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.gateway,
-      category: VibeMcpToolCategory.runtime,
-      description: 'Inspect the implemented MCP tool catalog by category or intent.',
-    ),
-
-    // --- Project & Filesystem Read-Only Tools (Canonical in project-tools.js) ---
-    VibeMcpToolDescriptor(
-      name: 'project_overview',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.project,
-      requiresProjectContext: true,
-      description:
-          'Inspect registered project metadata and a bounded recursive directory overview.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'list_project_files',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.project,
-      requiresProjectContext: true,
-      description: 'List a bounded page of project directory entries.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'read_files',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.project,
-      requiresProjectContext: true,
-      description: 'Read UTF-8 files with full-file SHA-256 revisions.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'search_project_texts',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.project,
-      requiresProjectContext: true,
-      description:
-          'Search bounded project text without following symbolic links.',
-    ),
-
-    // --- Git Read-Only Tools (Canonical in project-tools.js) ---
-    VibeMcpToolDescriptor(
-      name: 'git_status',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.git,
-      requiresProjectContext: true,
-      description: 'Read current Git status and bounded working-tree changes.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'git_diff_hunks',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.git,
-      requiresProjectContext: true,
-      description:
-          'Read bounded Git diffs with revision-fenced continuation pages.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'git_log',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.git,
-      requiresProjectContext: true,
-      description: 'Read recent commit metadata.',
-    ),
-
-    // --- Job & Session Shell Read-Only Tools (Canonical in job-tools.js) ---
-    VibeMcpToolDescriptor(
-      name: 'list_jobs',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.job,
-      requiresProjectContext: true,
-      description: 'List durable job records for this project.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'observe_jobs',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.job,
-      requiresProjectContext: true,
-      description: 'Read job state and captured output after UTF-8 offsets.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'job_tail',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.job,
-      requiresProjectContext: true,
-      description: 'Read a resumable output page bounded by total bytes.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'session_shell_status',
-      scope: 'project:read',
-      mutates: false,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.job,
-      requiresProjectContext: true,
-      description: 'Read a persistent shell state for the connection.',
-    ),
-
-    // --- Mutating Tools (Registered so selector explicitly filters them out of canvasReadOnly!) ---
-    VibeMcpToolDescriptor(
-      name: 'write_project_file',
-      scope: 'project:write',
-      mutates: true,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.edit,
-      requiresProjectContext: true,
-      description: 'Write a UTF-8 file only if its current revision matches.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'apply_text_edits',
-      scope: 'project:write',
-      mutates: true,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.edit,
-      requiresProjectContext: true,
-      description:
-          'Apply exact, unambiguous text replacements against an expected file revision.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'run_shell',
-      scope: 'job:run',
-      mutates: true,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.job,
-      requiresProjectContext: true,
-      description: 'Run a command in a fresh project sandbox shell.',
-    ),
-    VibeMcpToolDescriptor(
-      name: 'host_process_terminate',
-      scope: 'runner:admin',
-      mutates: true,
-      location: VibeMcpExecutionLocation.runner,
-      category: VibeMcpToolCategory.runtime,
-      description:
-          'Terminate only a freshly identified eligible process after explicit confirmation.',
-    ),
-
-    // --- Client UI / Vibe Canvas Interactive Tools ---
-    VibeMcpToolDescriptor(
-      name: 'client.canvas.render',
-      scope: 'project:read',
-      mutates: true,
-      location: VibeMcpExecutionLocation.client,
-      category: VibeMcpToolCategory.clientUi,
-      description:
-          'Render or update an interactive Vibe Canvas (`markdown`, `vibe_ui`, `html`, `wasm`).',
-      aliases: const <String>{'vibe.canvas'},
-    ),
-  ];
 }

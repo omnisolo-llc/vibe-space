@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -84,9 +84,180 @@ struct SealedDiskPackage {
     seal_tag: String,
 }
 
-/// API v1 effects implemented by the app host. Resource-scoped filesystem and
-/// vault access are not supported and must not be accepted as permissions.
-pub const SUPPORTED_CAPABILITIES: &[&str] = &["network", "terminal_read", "terminal_write"];
+/// Default built-in capability implemented by standalone Vibe Space hosts.
+/// Resource-scoped filesystem and vault access are not supported and must
+/// not be accepted as permissions. Embedding hosts may register additional
+/// capabilities and method mappings via [`HostPolicy`].
+pub const SUPPORTED_CAPABILITIES: &[&str] = &["network"];
+
+/// Default URI prefix accepted for `ui_resource.uri` descriptors.
+pub const DEFAULT_UI_URI_PREFIX: &str = "ui://vibe/";
+
+/// Default Wasm guest ABI export prefix (`vibe_alloc`, `vibe_invoke`).
+pub const DEFAULT_ENTRYPOINT_PREFIX: &str = "vibe_";
+
+/// Default SPDX license identifiers accepted by manifest verification.
+pub const DEFAULT_LICENSES: &[&str] = &["MIT", "Apache-2.0", "BSD-3-Clause", "MIT OR Apache-2.0"];
+
+/// Default manifest contribution slots accepted by standalone hosts.
+pub const DEFAULT_CONTRIBUTION_SLOTS: &[&str] = &[
+    "app_page",
+    "sidebar_inspector",
+    "mobile_bottom_sheet",
+    "quick_command",
+    "status_bar_item",
+    "terminal_action",
+];
+
+/// Host-configurable runtime policy controlling allowed capabilities,
+/// method-to-capability mappings, contribution slots, SPDX licenses,
+/// UI resource URI prefixes, and Wasm ABI entrypoint prefixes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HostPolicy {
+    /// Non-API capabilities permitted by the host (default: `{"network"}`).
+    pub capabilities: BTreeSet<String>,
+    /// Mapping from effect `method` name to `(required_capability, read_only)`
+    /// (default: `{"network.fetch" => ("network", false)}`).
+    /// `"host.call"` (`api:<name>`) is always supported by the protocol.
+    pub method_capabilities: BTreeMap<String, (String, bool)>,
+    /// Allowed manifest contribution slots.
+    pub contribution_slots: BTreeSet<String>,
+    /// Allowed SPDX license identifiers.
+    pub licenses: BTreeSet<String>,
+    /// Allowed `ui_resource.uri` prefixes (default: `["ui://vibe/"]`).
+    pub ui_uri_prefixes: Vec<String>,
+    /// Ordered Wasm entrypoint prefixes (`<prefix>alloc`, `<prefix>invoke`)
+    /// (default: `["vibe_"]`).
+    pub entrypoint_prefixes: Vec<String>,
+}
+
+impl Default for HostPolicy {
+    fn default() -> Self {
+        Self {
+            capabilities: SUPPORTED_CAPABILITIES
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+            method_capabilities: BTreeMap::from([(
+                "network.fetch".to_owned(),
+                ("network".to_owned(), false),
+            )]),
+            contribution_slots: DEFAULT_CONTRIBUTION_SLOTS
+                .iter()
+                .map(|s| (*s).to_owned())
+                .collect(),
+            licenses: DEFAULT_LICENSES.iter().map(|s| (*s).to_owned()).collect(),
+            ui_uri_prefixes: vec![DEFAULT_UI_URI_PREFIX.to_owned()],
+            entrypoint_prefixes: vec![DEFAULT_ENTRYPOINT_PREFIX.to_owned()],
+        }
+    }
+}
+
+impl HostPolicy {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Registers an additional non-API capability allowed by the host.
+    #[must_use]
+    pub fn with_capability(mut self, capability: impl Into<String>) -> Self {
+        self.capabilities.insert(capability.into());
+        self
+    }
+
+    /// Registers a host effect `method` -> `(capability, read_only)` mapping
+    /// and permits `capability` in manifests and grants.
+    #[must_use]
+    pub fn with_method(
+        mut self,
+        method: impl Into<String>,
+        capability: impl Into<String>,
+        read_only: bool,
+    ) -> Self {
+        let cap = capability.into();
+        self.capabilities.insert(cap.clone());
+        self.method_capabilities
+            .insert(method.into(), (cap, read_only));
+        self
+    }
+
+    /// Adds an allowed `ui_resource.uri` prefix (for example `"ui://example/"`).
+    #[must_use]
+    pub fn with_ui_uri_prefix(mut self, prefix: impl Into<String>) -> Self {
+        let prefix = prefix.into();
+        if !self.ui_uri_prefixes.contains(&prefix) {
+            self.ui_uri_prefixes.push(prefix);
+        }
+        self
+    }
+
+    /// Appends a fallback Wasm entrypoint prefix (`<prefix>alloc` / `<prefix>invoke`).
+    #[must_use]
+    pub fn with_entrypoint_prefix(mut self, prefix: impl Into<String>) -> Self {
+        let prefix = prefix.into();
+        if !self.entrypoint_prefixes.contains(&prefix) {
+            self.entrypoint_prefixes.push(prefix);
+        }
+        self
+    }
+
+    /// Adds an allowed manifest contribution slot.
+    #[must_use]
+    pub fn with_contribution_slot(mut self, slot: impl Into<String>) -> Self {
+        self.contribution_slots.insert(slot.into());
+        self
+    }
+
+    /// Adds an allowed SPDX license identifier.
+    #[must_use]
+    pub fn with_license(mut self, license: impl Into<String>) -> Self {
+        self.licenses.insert(license.into());
+        self
+    }
+
+    /// Returns `true` if `capability` is accepted under this policy.
+    #[must_use]
+    pub fn is_supported_capability(&self, capability: &str) -> bool {
+        if capability.strip_prefix("api:").is_some_and(valid_api_name) {
+            return true;
+        }
+        self.capabilities.contains(capability)
+    }
+
+    /// Returns `true` if `license` is accepted under this policy.
+    #[must_use]
+    pub fn is_supported_license(&self, license: &str) -> bool {
+        self.licenses.contains(license)
+    }
+
+    /// Derives authority `(capability, read_only)` from the effect's method
+    /// and API name under this policy, never trusting the supplied capability alone.
+    pub fn effect_capability(&self, effect: &serde_json::Value) -> Result<(String, bool), Error> {
+        let method = effect
+            .get("method")
+            .and_then(|v| v.as_str())
+            .ok_or(Error::Permission)?;
+        let (capability, read_only) = if method == "host.call" {
+            let api = effect
+                .pointer("/arguments/api")
+                .and_then(|v| v.as_str())
+                .ok_or(Error::Permission)?;
+            if !valid_api_name(api) {
+                return Err(Error::Permission);
+            }
+            (format!("api:{api}"), false)
+        } else if let Some((cap, ro)) = self.method_capabilities.get(method) {
+            (cap.clone(), *ro)
+        } else {
+            return Err(Error::Permission);
+        };
+        if effect.get("capability").and_then(|v| v.as_str()) != Some(capability.as_str()) {
+            return Err(Error::Permission);
+        }
+        Ok((capability, read_only))
+    }
+}
 
 /// Host APIs are namespaced and granted independently. No host handler is
 /// installed by accepting a manifest; the embedding app registers implementations.
@@ -127,326 +298,10 @@ impl Drop for ExecutionPermit {
     }
 }
 
-/// Derive authority from the method and API name, never the supplied capability.
+/// Derive authority from the method and API name under [`HostPolicy::default`],
+/// never the supplied capability.
 pub fn effect_capability(effect: &serde_json::Value) -> Result<(String, bool), Error> {
-    let method = effect
-        .get("method")
-        .and_then(|v| v.as_str())
-        .ok_or(Error::Permission)?;
-    let (capability, read_only) = match method {
-        "network.fetch" => ("network".to_owned(), false),
-        "terminal.read" => ("terminal_read".to_owned(), true),
-        "terminal.write" => ("terminal_write".to_owned(), false),
-        "host.call" => {
-            let api = effect
-                .pointer("/arguments/api")
-                .and_then(|v| v.as_str())
-                .ok_or(Error::Permission)?;
-            if !valid_api_name(api) {
-                return Err(Error::Permission);
-            }
-            (format!("api:{api}"), false)
-        }
-        _ => return Err(Error::Permission),
-    };
-    if effect.get("capability").and_then(|v| v.as_str()) != Some(capability.as_str()) {
-        return Err(Error::Permission);
-    }
-    Ok((capability, read_only))
-}
-
-const PLUGIN_POLICY_TABLE_RAW: &[u8; 159] = b"network|terminal_read|terminal_write|MIT|Apache-2.0|BSD-3-Clause|MIT OR Apache-2.0|network.fetch|terminal.read|terminal.write|leapterm.plugin-runtime.policy.v1";
-
-const PLUGIN_VM_INSN_BYTES: usize = 8;
-
-#[derive(Clone, Copy)]
-enum PluginVmOp {
-    MatchSegment { dst: u8, sep: u8 },
-    XorImm { dst: u8, imm: u32 },
-    RolImm { dst: u8, bits: u8 },
-    Halt { src: u8 },
-}
-
-struct SealedPluginPolicyVm<const CODE_N: usize, const DATA_N: usize> {
-    domain: &'static [u8],
-    key_share_a: [u8; 32],
-    key_share_b: [u8; 32],
-    code_ciphertext: [u8; CODE_N],
-    data_ciphertext: [u8; DATA_N],
-    integrity_tag: [u8; 32],
-}
-
-const fn plugin_vm_stream_byte(
-    share_a: &[u8; 32],
-    share_b: &[u8; 32],
-    domain: &[u8],
-    phase: u8,
-    idx: usize,
-) -> u8 {
-    let a = share_a[idx & 31];
-    let b = share_b[(idx.wrapping_mul(7).wrapping_add(phase as usize)) & 31];
-    let d = domain[idx % domain.len()];
-    let mix = (idx as u8)
-        .wrapping_mul(0x9E)
-        .wrapping_add(phase.rotate_left(3))
-        ^ d.rotate_left((idx & 7) as u32);
-    a ^ b ^ mix
-}
-
-const fn compute_plugin_vm_tag<const CODE_N: usize, const DATA_N: usize>(
-    share_a: &[u8; 32],
-    share_b: &[u8; 32],
-    domain: &[u8],
-    code_ct: &[u8; CODE_N],
-    data_ct: &[u8; DATA_N],
-) -> [u8; 32] {
-    let mut tag = [0_u8; 32];
-    let mut i = 0usize;
-    while i < 32 {
-        tag[i] = share_a[i] ^ share_b[31 - i] ^ domain[i % domain.len()];
-        i += 1;
-    }
-    let mut j = 0usize;
-    while j < CODE_N {
-        let lane = j & 31;
-        tag[lane] = tag[lane]
-            .wrapping_add(code_ct[j] ^ (j as u8))
-            .rotate_left(3);
-        j += 1;
-    }
-    let mut k = 0usize;
-    while k < DATA_N {
-        let lane = (k.wrapping_mul(5)) & 31;
-        tag[lane] = tag[lane]
-            .wrapping_add(data_ct[k] ^ (k as u8).wrapping_mul(13))
-            .rotate_left(5);
-        k += 1;
-    }
-    tag
-}
-
-const fn compile_plugin_policy_vm<
-    const PROG_LEN: usize,
-    const CODE_N: usize,
-    const DATA_N: usize,
->(
-    prog: &[PluginVmOp; PROG_LEN],
-    data: &[u8; DATA_N],
-    key_share_a: [u8; 32],
-    key_share_b: [u8; 32],
-    domain: &'static [u8],
-) -> SealedPluginPolicyVm<CODE_N, DATA_N> {
-    assert!(CODE_N == PROG_LEN * PLUGIN_VM_INSN_BYTES);
-    let mut code_ct = [0_u8; CODE_N];
-    let mut pc = 0usize;
-    while pc < PROG_LEN {
-        let raw: [u8; PLUGIN_VM_INSN_BYTES] = match prog[pc] {
-            PluginVmOp::MatchSegment { dst, sep } => [0xA1, dst, sep, 0, 0, 0, 0, 0],
-            PluginVmOp::XorImm { dst, imm } => {
-                let b = imm.to_le_bytes();
-                [0xB2, dst, 0, 0, b[0], b[1], b[2], b[3]]
-            }
-            PluginVmOp::RolImm { dst, bits } => [0xC3, dst, bits, 0, 0, 0, 0, 0],
-            PluginVmOp::Halt { src } => [0xD4, src, 0, 0, 0, 0, 0, 0],
-        };
-        let base = pc * PLUGIN_VM_INSN_BYTES;
-        let mut idx = 0usize;
-        while idx < PLUGIN_VM_INSN_BYTES {
-            let mask = plugin_vm_stream_byte(&key_share_a, &key_share_b, domain, 0x31, base + idx);
-            code_ct[base + idx] = raw[idx] ^ mask;
-            idx += 1;
-        }
-        pc += 1;
-    }
-    let mut data_ct = [0_u8; DATA_N];
-    let mut d_idx = 0usize;
-    while d_idx < DATA_N {
-        let mask = plugin_vm_stream_byte(&key_share_a, &key_share_b, domain, 0x7A, d_idx);
-        data_ct[d_idx] = data[d_idx] ^ mask;
-        d_idx += 1;
-    }
-    let integrity_tag =
-        compute_plugin_vm_tag(&key_share_a, &key_share_b, domain, &code_ct, &data_ct);
-    SealedPluginPolicyVm {
-        domain,
-        key_share_a,
-        key_share_b,
-        code_ciphertext: code_ct,
-        data_ciphertext: data_ct,
-        integrity_tag,
-    }
-}
-
-impl<const CODE_N: usize, const DATA_N: usize> SealedPluginPolicyVm<CODE_N, DATA_N> {
-    fn execute(&self, mode: u8, input: &[u8], seed: u64) -> Result<u64, Error> {
-        if mode > 3 {
-            return Err(Error::Package);
-        }
-        let expected = compute_plugin_vm_tag(
-            &self.key_share_a,
-            &self.key_share_b,
-            self.domain,
-            &self.code_ciphertext,
-            &self.data_ciphertext,
-        );
-        let mut diff = 0_u8;
-        for (a, b) in expected.iter().zip(self.integrity_tag.iter()) {
-            diff |= a ^ b;
-        }
-        if diff != 0 {
-            return Err(Error::Package);
-        }
-        let mut code_plain = WipingBuffer(vec![0_u8; CODE_N]);
-        for i in 0..CODE_N {
-            code_plain.0[i] = self.code_ciphertext[i]
-                ^ plugin_vm_stream_byte(&self.key_share_a, &self.key_share_b, self.domain, 0x31, i);
-        }
-        let mut data_plain = WipingBuffer(vec![0_u8; DATA_N]);
-        for i in 0..DATA_N {
-            data_plain.0[i] = self.data_ciphertext[i]
-                ^ plugin_vm_stream_byte(&self.key_share_a, &self.key_share_b, self.domain, 0x7A, i);
-        }
-        let mut regs = [0_u64; 4];
-        regs[0] = u64::from(mode);
-        regs[2] = seed;
-        let mut pc = 0usize;
-        let prog_len = CODE_N / PLUGIN_VM_INSN_BYTES;
-        while pc < prog_len {
-            let base = pc * PLUGIN_VM_INSN_BYTES;
-            let op = code_plain.0[base];
-            let reg = (code_plain.0[base + 1] as usize) & 3;
-            match op {
-                0xA1 => {
-                    let sep = code_plain.0[base + 2];
-                    let mut matched = 0_u64;
-                    for (seg_idx, candidate) in (1_u64..).zip(data_plain.0.split(|&b| b == sep)) {
-                        if mode == 3 {
-                            if seg_idx == 11 {
-                                let mut acc = regs[2] ^ 0x504C_4756_4D50_534C_u64;
-                                for (idx, &b) in candidate.iter().enumerate() {
-                                    acc ^= u64::from(b)
-                                        .wrapping_add((idx as u64).wrapping_mul(0x9E37_79B9));
-                                    acc = acc.rotate_left(13).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-                                }
-                                matched = acc ^ seg_idx;
-                            }
-                        } else {
-                            let in_domain = match mode {
-                                0 => (1..=3).contains(&seg_idx),
-                                1 => (4..=7).contains(&seg_idx),
-                                2 => (8..=10).contains(&seg_idx),
-                                _ => false,
-                            };
-                            let mut eq_diff = candidate.len() ^ input.len();
-                            let max_len = candidate.len().max(input.len());
-                            for idx in 0..max_len {
-                                let x = candidate.get(idx).copied().unwrap_or(0);
-                                let y = input.get(idx).copied().unwrap_or(0);
-                                eq_diff |= usize::from(x ^ y);
-                            }
-                            if in_domain && eq_diff == 0 && matched == 0 {
-                                matched = seg_idx;
-                            }
-                        }
-                    }
-                    regs[reg] = matched;
-                }
-                0xB2 => {
-                    let imm = u32::from_le_bytes([
-                        code_plain.0[base + 4],
-                        code_plain.0[base + 5],
-                        code_plain.0[base + 6],
-                        code_plain.0[base + 7],
-                    ]) as u64;
-                    regs[reg] ^= imm ^ regs[2] ^ (regs[0] << 32);
-                }
-                0xC3 => {
-                    let bits = u32::from(code_plain.0[base + 2] & 63);
-                    regs[reg] = regs[reg].rotate_left(bits);
-                }
-                0xD4 => {
-                    let out = regs[reg];
-                    for r in &mut regs {
-                        *r = std::hint::black_box(0);
-                    }
-                    return Ok(out);
-                }
-                _ => return Err(Error::Package),
-            }
-            pc += 1;
-        }
-        Err(Error::Package)
-    }
-}
-
-const PLUGIN_POLICY_VM_PROG: [PluginVmOp; 4] = [
-    PluginVmOp::MatchSegment { dst: 1, sep: b'|' },
-    PluginVmOp::XorImm {
-        dst: 1,
-        imm: 0x4C45_4150,
-    },
-    PluginVmOp::RolImm { dst: 1, bits: 11 },
-    PluginVmOp::Halt { src: 1 },
-];
-
-static PLUGIN_POLICY_VM: SealedPluginPolicyVm<{ 4 * PLUGIN_VM_INSN_BYTES }, 159> =
-    compile_plugin_policy_vm(
-        &PLUGIN_POLICY_VM_PROG,
-        PLUGIN_POLICY_TABLE_RAW,
-        [
-            0x6C, 0x15, 0xA9, 0xE2, 0x38, 0xD1, 0x47, 0xBC, 0x90, 0x2F, 0x5E, 0x83, 0xC4, 0x1A,
-            0x79, 0xF6, 0x0B, 0xD8, 0x42, 0x95, 0xE7, 0x31, 0x64, 0xAF, 0x53, 0x8E, 0x1C, 0xB7,
-            0x29, 0xF0, 0x6A, 0xC1,
-        ],
-        [
-            0x93, 0xEA, 0x56, 0x1D, 0xC7, 0x2E, 0xB8, 0x43, 0x6F, 0xD0, 0xA1, 0x7C, 0x3B, 0xE5,
-            0x86, 0x09, 0xF4, 0x27, 0xBD, 0x6A, 0x18, 0xCE, 0x9B, 0x50, 0xAC, 0x71, 0xE3, 0x48,
-            0xD6, 0x0F, 0x95, 0x3E,
-        ],
-        b"leapterm.plugin-runtime.vmp.v1",
-    );
-
-const fn plugin_vm_token_for_segment(mode: u8, seg: u64, seed: u64) -> u64 {
-    (seg ^ 0x4C45_4150 ^ seed ^ ((mode as u64) << 32)).rotate_left(11)
-}
-
-fn classify_plugin_policy_segment(mode: u8, input: &[u8]) -> Option<u64> {
-    let token = PLUGIN_POLICY_VM.execute(mode, input, 0).ok()?;
-    let range = match mode {
-        0 => 1..=3,
-        1 => 4..=7,
-        2 => 8..=10,
-        _ => return None,
-    };
-    range
-        .into_iter()
-        .find(|&seg| token == plugin_vm_token_for_segment(mode, seg, 0))
-}
-
-fn is_supported_capability(capability: &str) -> bool {
-    if capability.strip_prefix("api:").is_some_and(valid_api_name) {
-        return true;
-    }
-    matches!(
-        classify_plugin_policy_segment(0, capability.as_bytes()),
-        Some(1..=3)
-    )
-}
-
-fn is_supported_license(license: &str) -> bool {
-    matches!(
-        classify_plugin_policy_segment(1, license.as_bytes()),
-        Some(4..=7)
-    )
-}
-
-/// Cryptographic data-flow coupling token derived from executing `PLUGIN_POLICY_VM`
-/// on the internal canary segment. Mixed into RAM and disk sealing key derivation.
-fn plugin_policy_seal_token() -> [u8; 8] {
-    PLUGIN_POLICY_VM
-        .execute(3, b"", 0x4F4D_4E50_564D_5031)
-        .unwrap_or(0)
-        .to_le_bytes()
+    HostPolicy::default().effect_capability(effect)
 }
 
 fn safe_id(id: &str) -> bool {
@@ -494,11 +349,9 @@ impl SealedWasmModule {
         let mut offset = 0usize;
         let mut counter = 0u64;
         let addr_entropy = (&raw const module_bytes as usize).to_le_bytes();
-        let vm_token = plugin_policy_seal_token();
         while offset < len {
             let mut hasher = Sha256::new();
-            hasher.update(b"leapterm.plugin-runtime.wasm-seal.v1\0");
-            hasher.update(vm_token);
+            hasher.update(b"vibe-space.runtime.wasm-seal.v1\0");
             hasher.update(context_seed);
             hasher.update(expected_sha256);
             hasher.update(addr_entropy);
@@ -584,7 +437,6 @@ fn seal_disk_package(
     publisher: &[u8; 32],
     raw_module: &[u8],
 ) -> SealedDiskPackage {
-    let vm_token = plugin_policy_seal_token();
     let sig_bytes = package.signature.as_bytes();
     let manifest_bytes = package.manifest.as_bytes();
     let mut masked = WipingBuffer(vec![0_u8; raw_module.len()]);
@@ -592,8 +444,7 @@ fn seal_disk_package(
     let mut counter = 0u64;
     while offset < raw_module.len() {
         let mut hasher = Sha256::new();
-        hasher.update(b"leapterm.plugin-runtime.disk-seal.v1\0");
-        hasher.update(vm_token);
+        hasher.update(b"vibe-space.runtime.disk-seal.v1\0");
         hasher.update(publisher);
         hasher.update((sig_bytes.len() as u64).to_le_bytes());
         hasher.update(sig_bytes);
@@ -609,8 +460,7 @@ fn seal_disk_package(
         counter = counter.wrapping_add(1);
     }
     let mut tag_hasher = Sha256::new();
-    tag_hasher.update(b"leapterm.plugin-runtime.disk-tag.v1\0");
-    tag_hasher.update(vm_token);
+    tag_hasher.update(b"vibe-space.runtime.disk-tag.v1\0");
     tag_hasher.update(publisher);
     tag_hasher.update((sig_bytes.len() as u64).to_le_bytes());
     tag_hasher.update(sig_bytes);
@@ -648,12 +498,10 @@ fn unseal_disk_package(
     if provided_tag.len() != 32 {
         return Err(Error::Package);
     }
-    let vm_token = plugin_policy_seal_token();
     let sig_bytes = disk.signature.as_bytes();
     let manifest_bytes = disk.manifest.as_bytes();
     let mut tag_hasher = Sha256::new();
-    tag_hasher.update(b"leapterm.plugin-runtime.disk-tag.v1\0");
-    tag_hasher.update(vm_token);
+    tag_hasher.update(b"vibe-space.runtime.disk-tag.v1\0");
     tag_hasher.update(publisher);
     tag_hasher.update((sig_bytes.len() as u64).to_le_bytes());
     tag_hasher.update(sig_bytes);
@@ -674,8 +522,7 @@ fn unseal_disk_package(
     let mut counter = 0u64;
     while offset < masked.0.len() {
         let mut hasher = Sha256::new();
-        hasher.update(b"leapterm.plugin-runtime.disk-seal.v1\0");
-        hasher.update(vm_token);
+        hasher.update(b"vibe-space.runtime.disk-seal.v1\0");
         hasher.update(publisher);
         hasher.update((sig_bytes.len() as u64).to_le_bytes());
         hasher.update(sig_bytes);
@@ -697,7 +544,17 @@ fn unseal_disk_package(
     })
 }
 
+/// Verifies a signed plugin package against [`HostPolicy::default`].
 pub fn verify(package: &SignedPackage, publisher: &[u8; 32]) -> Result<(Manifest, Vec<u8>), Error> {
+    verify_with_policy(package, publisher, &HostPolicy::default())
+}
+
+/// Verifies a signed plugin package against a caller-supplied [`HostPolicy`].
+pub fn verify_with_policy(
+    package: &SignedPackage,
+    publisher: &[u8; 32],
+    policy: &HostPolicy,
+) -> Result<(Manifest, Vec<u8>), Error> {
     if package.manifest.len() > 64 * 1024
         || package.module.len() > 4 * MAX_MODULE_BYTES.div_ceil(3)
         || package.signature.len() != 88
@@ -722,11 +579,11 @@ pub fn verify(package: &SignedPackage, publisher: &[u8; 32]) -> Result<(Manifest
         || !manifest
             .capabilities
             .iter()
-            .all(|c| is_supported_capability(c))
+            .all(|c| policy.is_supported_capability(c))
     {
         return Err(Error::Package);
     }
-    if !is_supported_license(&manifest.license) {
+    if !policy.is_supported_license(&manifest.license) {
         return Err(Error::Package);
     }
     if manifest.network_origins.len() > 32 || manifest.contributions.len() > 64 {
@@ -744,15 +601,7 @@ pub fn verify(package: &SignedPackage, publisher: &[u8; 32]) -> Result<(Manifest
     }
     let mut contribution_ids = BTreeSet::new();
     for c in &manifest.contributions {
-        if ![
-            "app_page",
-            "sidebar_inspector",
-            "mobile_bottom_sheet",
-            "quick_command",
-            "status_bar_item",
-            "terminal_action",
-        ]
-        .contains(&c.slot.as_str())
+        if !policy.contribution_slots.contains(c.slot.as_str())
             || [&c.id, &c.title, &c.command]
                 .iter()
                 .any(|s| s.is_empty() || s.len() > 256)
@@ -781,7 +630,17 @@ pub fn verify_sealed(
     package: &SignedPackage,
     publisher: &[u8; 32],
 ) -> Result<(Manifest, SealedWasmModule), Error> {
-    let (manifest, module) = verify(package, publisher)?;
+    verify_sealed_with_policy(package, publisher, &HostPolicy::default())
+}
+
+/// Verifies a signed plugin package under a caller-supplied [`HostPolicy`] and
+/// seals the decoded Wasm bytecode into a [`SealedWasmModule`].
+pub fn verify_sealed_with_policy(
+    package: &SignedPackage,
+    publisher: &[u8; 32],
+    policy: &HostPolicy,
+) -> Result<(Manifest, SealedWasmModule), Error> {
+    let (manifest, module) = verify_with_policy(package, publisher, policy)?;
     let mut module = WipingBuffer(module);
     let mut context_seed = Vec::with_capacity(32 + package.signature.len());
     context_seed.extend_from_slice(publisher);
@@ -790,13 +649,20 @@ pub fn verify_sealed(
     Ok((manifest, sealed))
 }
 
-fn validate_ui_resource_descriptor(ui_resource: &serde_json::Value) -> Result<(), Error> {
+fn validate_ui_resource_descriptor(
+    ui_resource: &serde_json::Value,
+    policy: &HostPolicy,
+) -> Result<(), Error> {
     let obj = ui_resource.as_object().ok_or(Error::Permission)?;
     let uri = obj
         .get("uri")
         .and_then(|v| v.as_str())
         .ok_or(Error::Permission)?;
-    let Some(view_file) = uri.strip_prefix("ui://leapterm/") else {
+    let Some(view_file) = policy
+        .ui_uri_prefixes
+        .iter()
+        .find_map(|prefix| uri.strip_prefix(prefix.as_str()))
+    else {
         return Err(Error::Permission);
     };
     let Some(stem) = view_file.strip_suffix(".html") else {
@@ -816,10 +682,26 @@ fn validate_ui_resource_descriptor(ui_resource: &serde_json::Value) -> Result<()
 /// The caller supplies a publisher key from a host-managed trust store, never the package.
 pub struct PackageStore {
     root: PathBuf,
+    policy: HostPolicy,
 }
 impl PackageStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self {
+            root: root.into(),
+            policy: HostPolicy::default(),
+        }
+    }
+
+    pub fn with_policy(root: impl Into<PathBuf>, policy: HostPolicy) -> Self {
+        Self {
+            root: root.into(),
+            policy,
+        }
+    }
+
+    #[must_use]
+    pub fn policy(&self) -> &HostPolicy {
+        &self.policy
     }
 
     fn lock(&self) -> Result<fs::File, Error> {
@@ -840,7 +722,7 @@ impl PackageStore {
         publisher: &[u8; 32],
     ) -> Result<InstalledPlugin, Error> {
         let _lock = self.lock()?;
-        let (manifest, module) = verify(package, publisher)?;
+        let (manifest, module) = verify_with_policy(package, publisher, &self.policy)?;
         let module = WipingBuffer(module);
         let sealed_disk = seal_disk_package(package, publisher, &module.0);
         drop(module);
@@ -914,7 +796,9 @@ impl PackageStore {
         let _lock = self.lock()?;
         let mut plugin = self.load(id)?;
         if !grants.is_subset(&plugin.manifest.capabilities)
-            || !grants.iter().all(|c| is_supported_capability(c))
+            || !grants
+                .iter()
+                .all(|c| self.policy.is_supported_capability(c))
         {
             return Err(Error::Permission);
         }
@@ -988,20 +872,20 @@ impl PackageStore {
             .try_into()
             .map_err(|_| Error::Package)?;
         let package = unseal_disk_package(&sealed_disk, &publisher)?;
-        let verified = verify_sealed(&package, &publisher);
+        let verified = verify_sealed_with_policy(&package, &publisher, &self.policy);
         drop(WipingBuffer(package.module.into_bytes()));
         let (manifest, sealed_module) = verified?;
         if manifest != installed.manifest {
             return Err(Error::Package);
         }
-        let mut result = execute_sealed(&sealed_module, request)?;
+        let mut result = execute_sealed_with_policy(&sealed_module, request, &self.policy)?;
         if let Some(obj) = result.as_object_mut() {
             obj.remove("confirmation_required");
         } else {
             return Err(Error::Package);
         }
         if let Some(ui_resource) = result.get("ui_resource") {
-            validate_ui_resource_descriptor(ui_resource)?;
+            validate_ui_resource_descriptor(ui_resource, &self.policy)?;
         }
         // Effects are proposals. The host must also authorize each method and resource.
         let mut pending_confirmations = Vec::new();
@@ -1036,7 +920,7 @@ impl PackageStore {
                     .get("method")
                     .and_then(|v| v.as_str())
                     .ok_or(Error::Permission)?;
-                let (required_capability, read_only) = effect_capability(effect)?;
+                let (required_capability, read_only) = self.policy.effect_capability(effect)?;
                 if capability != required_capability {
                     return Err(Error::Permission);
                 }
@@ -1127,6 +1011,15 @@ pub fn execute_sealed(
     sealed_module: &SealedWasmModule,
     request: &[u8],
 ) -> Result<serde_json::Value, Error> {
+    execute_sealed_with_policy(sealed_module, request, &HostPolicy::default())
+}
+
+/// Executes a [`SealedWasmModule`] using the entrypoint resolution rules in `policy`.
+pub fn execute_sealed_with_policy(
+    sealed_module: &SealedWasmModule,
+    request: &[u8],
+    policy: &HostPolicy,
+) -> Result<serde_json::Value, Error> {
     if sealed_module.len() > MAX_MODULE_BYTES || request.len() > MAX_MESSAGE_BYTES {
         return Err(Error::Package);
     }
@@ -1139,12 +1032,21 @@ pub fn execute_sealed(
     let module = sealed_module.with_decrypted_bytes(|module_bytes| {
         Module::new(&engine, module_bytes).map_err(runtime_error)
     })?;
-    execute_compiled_module(&engine, &module, request)
+    execute_compiled_module(&engine, &module, request, policy)
 }
 
-/// ABI: alloc(length)->pointer; invoke(pointer,length)->(length<<32 | pointer).
+/// ABI: `vibe_alloc(length)->pointer`; `vibe_invoke(pointer,length)->(length<<32 | pointer)`.
 /// A fresh fuel/memory-limited instance runs per invocation, with no host imports.
 pub fn execute(module: &[u8], request: &[u8]) -> Result<serde_json::Value, Error> {
+    execute_with_policy(module, request, &HostPolicy::default())
+}
+
+/// Executes an unsealed Wasm module using the entrypoint resolution rules in `policy`.
+pub fn execute_with_policy(
+    module: &[u8],
+    request: &[u8],
+    policy: &HostPolicy,
+) -> Result<serde_json::Value, Error> {
     if module.len() > MAX_MODULE_BYTES || request.len() > MAX_MESSAGE_BYTES {
         return Err(Error::Package);
     }
@@ -1155,13 +1057,37 @@ pub fn execute(module: &[u8], request: &[u8]) -> Result<serde_json::Value, Error
         .enforced_limits(EnforcedLimits::strict());
     let engine = Engine::new(&config);
     let module = Module::new(&engine, module).map_err(runtime_error)?;
-    execute_compiled_module(&engine, &module, request)
+    execute_compiled_module(&engine, &module, request, policy)
+}
+
+fn resolve_entrypoint<P, R>(
+    instance: &wasmi::Instance,
+    store: &Store<StoreLimits>,
+    policy: &HostPolicy,
+    suffix: &str,
+) -> Result<wasmi::TypedFunc<P, R>, Error>
+where
+    P: wasmi::WasmParams,
+    R: wasmi::WasmResults,
+{
+    let mut last_err = None;
+    for prefix in &policy.entrypoint_prefixes {
+        let name = format!("{prefix}{suffix}");
+        match instance.get_typed_func::<P, R>(store, &name) {
+            Ok(func) => return Ok(func),
+            Err(err) => last_err = Some(err),
+        }
+    }
+    Err(runtime_error(
+        last_err.map_or_else(|| "missing entrypoint".to_owned(), |e| e.to_string()),
+    ))
 }
 
 fn execute_compiled_module(
     engine: &Engine,
     module: &Module,
     request: &[u8],
+    policy: &HostPolicy,
 ) -> Result<serde_json::Value, Error> {
     if module.imports().next().is_some() {
         return Err(Error::Permission);
@@ -1183,18 +1109,9 @@ fn execute_compiled_module(
     let memory = instance
         .get_memory(&store, "memory")
         .ok_or(Error::Package)?;
-    let alloc = instance
-        .get_typed_func::<i32, i32>(&store, "vibe_alloc")
-        .or_else(|_| instance.get_typed_func::<i32, i32>(&store, "omni_alloc"))
-        .or_else(|_| instance.get_typed_func::<i32, i32>(&store, "leap_alloc"))
-        .or_else(|_| instance.get_typed_func::<i32, i32>(&store, "leapterm_alloc"))
-        .map_err(runtime_error)?;
-    let invoke = instance
-        .get_typed_func::<(i32, i32), i64>(&store, "vibe_invoke")
-        .or_else(|_| instance.get_typed_func::<(i32, i32), i64>(&store, "omni_invoke"))
-        .or_else(|_| instance.get_typed_func::<(i32, i32), i64>(&store, "leap_invoke"))
-        .or_else(|_| instance.get_typed_func::<(i32, i32), i64>(&store, "leapterm_invoke"))
-        .map_err(runtime_error)?;
+    let alloc: wasmi::TypedFunc<i32, i32> = resolve_entrypoint(&instance, &store, policy, "alloc")?;
+    let invoke: wasmi::TypedFunc<(i32, i32), i64> =
+        resolve_entrypoint(&instance, &store, policy, "invoke")?;
     let ptr = alloc
         .call(&mut store, request.len() as i32)
         .map_err(runtime_error)?;
@@ -1336,8 +1253,8 @@ mod tests {
         let import = br#"(module (import "wasi_snapshot_preview1" "fd_write" (func)))"#;
         assert!(matches!(execute(import, b"{}"), Err(Error::Permission)));
         let endless = br#"(module (memory (export "memory") 1)
-            (func (export "omni_alloc") (param i32) (result i32) i32.const 0)
-            (func (export "omni_invoke") (param i32 i32) (result i64)
+            (func (export "vibe_alloc") (param i32) (result i32) i32.const 0)
+            (func (export "vibe_invoke") (param i32 i32) (result i64)
                 (loop $forever br $forever) i64.const 0))"#;
         assert!(matches!(execute(endless, b"{}"), Err(Error::Runtime(_))));
     }
@@ -1345,14 +1262,21 @@ mod tests {
     fn validates_output_memory_and_runs_downloaded_code() {
         let wasm =
             br#"(module (memory (export "memory") 1) (data (i32.const 32) "{\"view\":\"hello\"}")
-            (func (export "omni_alloc") (param i32) (result i32) i32.const 1024)
-            (func (export "omni_invoke") (param i32 i32) (result i64) i64.const 68719476768))"#;
+            (func (export "vibe_alloc") (param i32) (result i32) i32.const 1024)
+            (func (export "vibe_invoke") (param i32 i32) (result i64) i64.const 68719476768))"#;
         assert_eq!(execute(wasm, b"{}").unwrap()["view"], "hello");
+
         let source = std::str::from_utf8(wasm).unwrap();
-        for prefix in ["leap_", "leapterm_"] {
-            let renamed = source.replace("omni_", prefix);
-            assert_eq!(execute(renamed.as_bytes(), b"{}").unwrap()["view"], "hello");
-        }
+        let custom_wasm = source.replace("vibe_", "custom_");
+        assert!(matches!(
+            execute(custom_wasm.as_bytes(), b"{}"),
+            Err(Error::Runtime(_))
+        ));
+        let custom_policy = HostPolicy::default().with_entrypoint_prefix("custom_");
+        assert_eq!(
+            execute_with_policy(custom_wasm.as_bytes(), b"{}", &custom_policy).unwrap()["view"],
+            "hello"
+        );
     }
 
     #[test]
@@ -1415,13 +1339,6 @@ mod tests {
             !on_disk_text.contains("AGFzbQ"),
             "installed package.json must not expose Base64 \\0asm header on disk"
         );
-        assert!(
-            !PLUGIN_POLICY_VM
-                .data_ciphertext
-                .windows(b"terminal_write".len())
-                .any(|w| w == b"terminal_write"),
-            "PLUGIN_POLICY_VM ciphertext must not expose plaintext capability names"
-        );
 
         // Overwriting package.json with an unsealed SignedPackage must be rejected
         // by both load() and invoke(), requiring re-installation.
@@ -1444,8 +1361,8 @@ mod tests {
         let escaped = json_payload.replace('\\', "\\\\").replace('"', "\\\"");
         let wat = format!(
             r#"(module (memory (export "memory") 1) (data (i32.const 32) "{escaped}")
-            (func (export "omni_alloc") (param i32) (result i32) i32.const 32768)
-            (func (export "omni_invoke") (param i32 i32) (result i64) i64.const {packed}))"#
+            (func (export "vibe_alloc") (param i32) (result i32) i32.const 32768)
+            (func (export "vibe_invoke") (param i32 i32) (result i64) i64.const {packed}))"#
         );
         let engine = Engine::default();
         let _ = Module::new(&engine, wat.as_bytes()).unwrap();
@@ -1461,10 +1378,10 @@ mod tests {
         wasm.extend_from_slice(&[0x03, 0x03, 0x02, 0x00, 0x01]);
         // Memory section (id=5): 1 memory (min 1 page)
         wasm.extend_from_slice(&[0x05, 0x03, 0x01, 0x00, 0x01]);
-        // Export section (id=7): "memory" (mem 0), "omni_alloc" (func 0), "omni_invoke" (func 1)
+        // Export section (id=7): "memory" (mem 0), "vibe_alloc" (func 0), "vibe_invoke" (func 1)
         let exports: &[u8] = &[
-            0x03, 0x06, b'm', b'e', b'm', b'o', b'r', b'y', 0x02, 0x00, 0x0a, b'o', b'm', b'n',
-            b'i', b'_', b'a', b'l', b'l', b'o', b'c', 0x00, 0x00, 0x0b, b'o', b'm', b'n', b'i',
+            0x03, 0x06, b'm', b'e', b'm', b'o', b'r', b'y', 0x02, 0x00, 0x0a, b'v', b'i', b'b',
+            b'e', b'_', b'a', b'l', b'l', b'o', b'c', 0x00, 0x00, 0x0b, b'v', b'i', b'b', b'e',
             b'_', b'i', b'n', b'v', b'o', b'k', b'e', 0x00, 0x01,
         ];
         wasm.push(0x07);
@@ -1554,14 +1471,11 @@ mod tests {
         let key = SigningKey::from_bytes(&[63; 32]);
         let publisher = key.verifying_key().to_bytes();
 
-        let output_json = r#"{"view":"ok","ui_resource":{"uri":"ui://leapterm/work-result.html","mime_type":"text/html;profile=mcp-app"},"effects":[{"id":"request","capability":"network","method":"network.fetch","arguments":{"url":"https://example.com/api","credential_id":"vault-cred-1"}}]}"#;
-        let pkg = package_with_json_payload(&key, 1, &["network", "terminal_read"], output_json);
+        let output_json = r#"{"view":"ok","ui_resource":{"uri":"ui://vibe/work-result.html","mime_type":"text/html;profile=mcp-app"},"effects":[{"id":"request","capability":"network","method":"network.fetch","arguments":{"url":"https://example.com/api","credential_id":"vault-cred-1"}}]}"#;
+        let pkg = package_with_json_payload(&key, 1, &["network"], output_json);
         store.install(&pkg, &publisher).unwrap();
         store
-            .enable(
-                "test.extension",
-                BTreeSet::from(["network".into(), "terminal_read".into()]),
-            )
+            .enable("test.extension", BTreeSet::from(["network".into()]))
             .unwrap();
 
         // 1. Unconfirmed invocation returns structured confirmation_required proposal for the Flutter UI.
@@ -1634,12 +1548,10 @@ mod tests {
         use std::hint::black_box;
         use std::time::Instant;
 
-        // Verify domain separation & canary coupling in PLUGIN_POLICY_VM
-        assert!(PLUGIN_POLICY_VM.execute(0, b"network", 0).is_ok());
-        assert_eq!(classify_plugin_policy_segment(0, b"MIT"), None);
-        assert_eq!(classify_plugin_policy_segment(1, b"network"), None);
-        assert_eq!(classify_plugin_policy_segment(2, b"MIT"), None);
-        assert_ne!(plugin_policy_seal_token(), [0_u8; 8]);
+        let default_policy = HostPolicy::default();
+        assert!(default_policy.is_supported_capability("network"));
+        assert!(!default_policy.is_supported_capability("clipboard_read"));
+        assert!(default_policy.is_supported_license("MIT"));
 
         let directory = tempfile::tempdir().unwrap();
         let store = PackageStore::new(directory.path());
@@ -1658,10 +1570,9 @@ mod tests {
             ));
         }
         let realistic_json = format!(
-            r#"{{"view":"cluster-summary","records":[{body_records}],"ui_resource":{{"uri":"ui://leapterm/cluster-topology.html","mime_type":"text/html;profile=mcp-app"}},"effects":[{{"id":"request","capability":"network","method":"network.fetch","arguments":{{"url":"https://example.com/api/v1/nodes","credential_id":"vault-node-reader"}}}}]}}"#
+            r#"{{"view":"cluster-summary","records":[{body_records}],"ui_resource":{{"uri":"ui://vibe/cluster-topology.html","mime_type":"text/html;profile=mcp-app"}},"effects":[{{"id":"request","capability":"network","method":"network.fetch","arguments":{{"url":"https://example.com/api/v1/nodes","credential_id":"vault-node-reader"}}}}]}}"#
         );
-        let pkg =
-            package_with_json_payload(&key, 1, &["network", "terminal_read"], &realistic_json);
+        let pkg = package_with_json_payload(&key, 1, &["network"], &realistic_json);
         let raw_wasm_plaintext = STANDARD.decode(&pkg.module).unwrap();
         assert!(
             raw_wasm_plaintext.len() >= 4096,
@@ -1671,10 +1582,7 @@ mod tests {
 
         store.install(&pkg, &publisher).unwrap();
         store
-            .enable(
-                "test.extension",
-                BTreeSet::from(["network".into(), "terminal_read".into()]),
-            )
+            .enable("test.extension", BTreeSet::from(["network".into()]))
             .unwrap();
 
         // (a) Raw on-disk forensics
@@ -1842,27 +1750,31 @@ mod tests {
         const FAST_ITERS: usize = 10_000;
         const INVOKE_ITERS: usize = 200;
 
-        let mut vm_cap_ns = Vec::with_capacity(FAST_ITERS);
+        let mut policy_cap_ns = Vec::with_capacity(FAST_ITERS);
         for _ in 0..FAST_ITERS {
             let t0 = Instant::now();
-            let out = PLUGIN_POLICY_VM
-                .execute(black_box(0), black_box(b"network"), black_box(0))
-                .unwrap();
+            let out = default_policy.is_supported_capability(black_box("network"));
             black_box(out);
-            vm_cap_ns.push(t0.elapsed().as_nanos());
+            policy_cap_ns.push(t0.elapsed().as_nanos());
         }
-        vm_cap_ns.sort_unstable();
+        policy_cap_ns.sort_unstable();
 
-        let mut vm_method_ns = Vec::with_capacity(FAST_ITERS);
+        let mut effect_cap_ns = Vec::with_capacity(FAST_ITERS);
+        let sample_effect = serde_json::json!({
+            "id": "request",
+            "capability": "network",
+            "method": "network.fetch",
+            "arguments": {"url": "https://example.com"}
+        });
         for _ in 0..FAST_ITERS {
             let t0 = Instant::now();
-            let out = PLUGIN_POLICY_VM
-                .execute(black_box(2), black_box(b"network.fetch"), black_box(0))
+            let out = default_policy
+                .effect_capability(black_box(&sample_effect))
                 .unwrap();
             black_box(out);
-            vm_method_ns.push(t0.elapsed().as_nanos());
+            effect_cap_ns.push(t0.elapsed().as_nanos());
         }
-        vm_method_ns.sort_unstable();
+        effect_cap_ns.sort_unstable();
 
         let mut unseal_ns = Vec::with_capacity(FAST_ITERS);
         for _ in 0..FAST_ITERS {
@@ -1901,11 +1813,8 @@ mod tests {
         invoke_confirmed_ns.sort_unstable();
 
         for (label, samples) in [
-            ("PLUGIN_POLICY_VM.execute(0, \"network\", 0)", &vm_cap_ns),
-            (
-                "PLUGIN_POLICY_VM.execute(2, \"network.fetch\", 0)",
-                &vm_method_ns,
-            ),
+            ("HostPolicy::is_supported_capability", &policy_cap_ns),
+            ("HostPolicy::effect_capability", &effect_cap_ns),
             ("unseal_disk_package (4.3 KiB Wasm)", &unseal_ns),
             ("PackageStore::invoke (unconfirmed)", &invoke_unconfirmed_ns),
             (
@@ -1972,14 +1881,14 @@ mod tests {
         let pkg = package_with_json_payload(
             &key,
             1,
-            &["api:leapterm.ui"],
+            &["api:host.ui"],
             r#"{"view":{"type":"text","text":"hello"}}"#,
         );
         store
             .install(&pkg, &key.verifying_key().to_bytes())
             .unwrap();
         let installed = store.load("test.extension").unwrap().revision;
-        let grants = BTreeSet::from(["api:leapterm.ui".to_owned()]);
+        let grants = BTreeSet::from(["api:host.ui".to_owned()]);
         store.enable("test.extension", grants.clone()).unwrap();
         let first = store.load("test.extension").unwrap().revision;
         assert_ne!(installed, first);
@@ -2021,11 +1930,27 @@ mod tests {
 
     #[test]
     fn host_api_capabilities_are_exact_and_manifest_slots_validated() {
+        let default_policy = HostPolicy::default();
         for cap in ["api:", "api:a..b", "api:a/b", "filesystem", "vault_read"] {
-            assert!(!is_supported_capability(cap));
+            assert!(!default_policy.is_supported_capability(cap));
         }
-        assert_eq!(effect_capability(&serde_json::json!({"method":"host.call","capability":"api:leapterm.ui","arguments":{"api":"leapterm.ui","version":1,"input":{}}})).unwrap(),("api:leapterm.ui".to_owned(),false));
-        assert!(effect_capability(&serde_json::json!({"method":"host.call","capability":"terminal_read","arguments":{"api":"leapterm.ui"}})).is_err());
+        assert_eq!(
+            effect_capability(&serde_json::json!({
+                "method": "host.call",
+                "capability": "api:host.ui",
+                "arguments": {"api": "host.ui", "version": 1, "input": {}}
+            }))
+            .unwrap(),
+            ("api:host.ui".to_owned(), false)
+        );
+        assert!(
+            effect_capability(&serde_json::json!({
+                "method": "host.call",
+                "capability": "network",
+                "arguments": {"api": "host.ui"}
+            }))
+            .is_err()
+        );
         let key = SigningKey::from_bytes(&[39; 32]);
         for (field, value) in [
             ("network_origins", serde_json::json!(["http://localhost"])),
@@ -2041,5 +1966,45 @@ mod tests {
             pkg.signature = STANDARD.encode(key.sign(pkg.manifest.as_bytes()).to_bytes());
             assert!(verify(&pkg, &key.verifying_key().to_bytes()).is_err());
         }
+    }
+
+    #[test]
+    fn host_policy_supports_custom_capabilities_ui_prefixes_and_entrypoints() {
+        let policy = HostPolicy::default()
+            .with_method("clipboard.read", "clipboard_read", true)
+            .with_method("clipboard.write", "clipboard_write", false)
+            .with_ui_uri_prefix("ui://example/");
+
+        assert!(policy.is_supported_capability("clipboard_read"));
+        assert!(policy.is_supported_capability("clipboard_write"));
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = PackageStore::with_policy(dir.path(), policy);
+        let key = SigningKey::from_bytes(&[91; 32]);
+        let publisher = key.verifying_key().to_bytes();
+
+        let output_json = r#"{"view":"ok","ui_resource":{"uri":"ui://example/panel.html","mime_type":"text/html;profile=mcp-app"},"effects":[{"id":"read-clip","capability":"clipboard_read","method":"clipboard.read","arguments":{}},{"id":"write-clip","capability":"clipboard_write","method":"clipboard.write","arguments":{"text":"hi"}}]}"#;
+        let pkg =
+            package_with_json_payload(&key, 1, &["clipboard_read", "clipboard_write"], output_json);
+
+        // Default policy rejects custom capabilities
+        assert!(matches!(verify(&pkg, &publisher), Err(Error::Package)));
+
+        // Custom policy accepts and marks read_only vs confirmation_required accurately
+        store.install(&pkg, &publisher).unwrap();
+        store
+            .enable(
+                "test.extension",
+                BTreeSet::from(["clipboard_read".into(), "clipboard_write".into()]),
+            )
+            .unwrap();
+        let out = store.invoke("test.extension", b"{}").unwrap();
+        assert_eq!(out["confirmation_required"]["required"], true);
+        let pending = out["confirmation_required"]["pending_effects"]
+            .as_array()
+            .unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["method"], "clipboard.write");
+        assert_eq!(pending[0]["capability"], "clipboard_write");
     }
 }

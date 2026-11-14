@@ -1,5 +1,9 @@
 export type Json = null | boolean | number | string | Json[] | {[key: string]: Json};
-export type Capability = 'network' | 'terminal_read' | 'terminal_write' | `api:${string}`;
+export type Capability = 'network' | `api:${string}`;
+export interface HostPolicy {
+  capabilities?: readonly string[];
+  methodCapabilities?: Record<string, string>;
+}
 export type Slot = 'app_page' | 'sidebar_inspector' | 'mobile_bottom_sheet' | 'quick_command' | 'status_bar_item' | 'terminal_action';
 export type TriggerScalar = string | number | boolean;
 export type TriggerMatcher =
@@ -84,7 +88,7 @@ export interface Invocation {
 }
 export interface Effect {
   id:string; capability:Capability;
-  method:'network.fetch' | 'terminal.read' | 'terminal.write' | 'host.call';
+  method:'network.fetch' | 'host.call';
   arguments:Record<string,Json>;
 }
 export interface SealedHandle {
@@ -118,12 +122,12 @@ export interface Schema {
 }
 export const slots:readonly Slot[];
 export function validApiName(value:unknown):boolean;
-export function validCapability(value:unknown):boolean;
-export function effectCapability(effect:Effect):Capability;
-export function effectBatch(effects:Effect[]):readonly Readonly<Effect>[];
+export function validCapability(value:unknown,policy?:HostPolicy):boolean;
+export function effectCapability(effect:Effect,policy?:HostPolicy):Capability;
+export function effectBatch(effects:Effect[],policy?:HostPolicy):readonly Readonly<Effect>[];
 export function freezeJson<T extends Json>(value:T):Readonly<T>;
-export function validateManifest(manifest:unknown):Readonly<Manifest>;
-export function verifyPackage(pkg:SignedPackage,publisher:string):Promise<{manifest:Readonly<Manifest>;module:Uint8Array}>;
+export function validateManifest(manifest:unknown,policy?:HostPolicy):Readonly<Manifest>;
+export function verifyPackage(pkg:SignedPackage,publisher:string,policy?:HostPolicy):Promise<{manifest:Readonly<Manifest>;module:Uint8Array}>;
 
 export type SealedResolver = (handleId:string, rawHandle?:SealedHandle) => string | null | undefined;
 export interface VibeStrings {

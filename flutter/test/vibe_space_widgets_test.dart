@@ -229,7 +229,7 @@ void main() {
             ],
           ),
         ],
-        notOffered: const <String>['SSH keys', 'Raw command output'],
+        notOffered: const <String>['Private keys', 'Raw command output'],
         customRunner: customRunner,
       );
 
@@ -323,7 +323,7 @@ void main() {
         await tester.pumpAndSettle();
         expect(find.text('telemetry.disk'), findsAtLeastNWidgets(1));
         expect(find.text('SEALED'), findsAtLeastNWidgets(1));
-        expect(find.textContaining('SSH keys'), findsOneWidget);
+        expect(find.textContaining('Private keys'), findsOneWidget);
         await tester.tap(find.widgetWithText(TextButton, 'Close'));
         await tester.pumpAndSettle();
 

@@ -1,6 +1,6 @@
 # Embedding and exposing APIs
 
-The Rust crate has no LeapTerm dependency. `PackageStore` accepts an application-owned root. Pass the listed activation `revision` to `invoke_at_revision`; re-enable, disable, upgrade, and grant changes produce a fresh revision. Keep any pending effects bound to that revision and the user's selected resource scope.
+The Rust crate is host-agnostic and configurable via `HostPolicy`. `PackageStore` accepts an application-owned root and optional `HostPolicy`. Pass the listed activation `revision` to `invoke_at_revision`; re-enable, disable, upgrade, and grant changes produce a fresh revision. Keep any pending effects bound to that revision and the user's selected resource scope.
 
 The Dart broker can expose an application API:
 
@@ -29,6 +29,6 @@ Send `registry.catalog` in `request.host.apis`. Use `registry.call(effect, grant
 
 Schema support is intentionally bounded: object/properties/required/additionalProperties, array/items/maxItems, string/minLength/maxLength, number/integer/minimum/maximum, boolean, null, and enum. Unsupported keywords fail registration. Input roots must be objects. Trusted handlers must enforce resource authorization as well as schema validation. They must recheck context immediately before side effects; an async timeout cannot undo an external write that already happened.
 
-For UI mods, expose narrow hooks implemented by the host. LeapTerm's `leapterm.ui` v1 permits accent `emerald|blue|purple|amber`. It applies a temporary theme override, removes it on revocation, and never writes workspace preferences. The unchanged app is the default when no mod is enabled. This is the PoC equivalent of a Greasemonkey customization, expressed as a host-owned API instead of injected JavaScript.
+For UI mods, expose narrow hooks implemented by the host. For example, a `host.ui` v1 API might permit accent `emerald|blue|purple|amber`. It applies a temporary theme override, removes it on revocation, and never writes workspace preferences. The unchanged app is the default when no mod is enabled. This is the PoC equivalent of a Greasemonkey customization, expressed as a host-owned API instead of injected JavaScript.
 
-Host APIs run in the application's trusted process. Plugin authors supply only Wasm plus declarative JSON; they cannot supply API handlers. Separate filesystem/network policy, persistence, permission UI, publisher trust, revocation, and multi-user tenant isolation remain host responsibilities. LeapTerm's implementation is the first integration example; this repository does not introduce a plugin marketplace or automatic updater.
+Host APIs run in the application's trusted process. Plugin authors supply only Wasm plus declarative JSON; they cannot supply API handlers. Separate filesystem/network policy, persistence, permission UI, publisher trust, revocation, and multi-user tenant isolation remain host responsibilities. Embedding applications implement and register their own host APIs; this repository does not introduce a plugin marketplace or automatic updater.
