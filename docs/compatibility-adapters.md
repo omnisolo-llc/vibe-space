@@ -5,7 +5,7 @@ Vibe Space separates **what a vibe computes** from **how a host draws it**. Vibe
 ## 1. Multi-Language Guest & Host Support
 
 ### Guest languages (`wasm32` ABI + JS/JSON)
-- **Vendor-neutral Wasm exports**: Hosts accept `vibe_alloc` and `vibe_invoke` as primary exports alongside `omni_`, `leap_`, and `leapterm_` aliases (`runtime/src/lib.rs`, `web/worker.js`).
+- **Vendor-neutral Wasm exports**: Hosts accept `vibe_alloc` and `vibe_invoke` by default, with optional host-configured fallback prefixes via `HostPolicy` (`runtime/src/lib.rs`) and `entrypointPrefixes` (`web/worker.js`).
 - **SDK helpers**:
   - Rust (`sdk/rust`) and C (`sdk/c/vibe_space.h`) export `vibe_alloc` / `vibe_invoke` cleanly, and any import-free `wasm32` toolchain (C++, TinyGo, Zig, AssemblyScript) can target the same 2-function ABI.
   - JavaScript `invoke(input)` functions and declarative JSON specs run in browser sandboxes (`demo/kit/vibekit.js`) and Dart (`dart/lib/src/vibe_protocol.dart`).
@@ -40,7 +40,7 @@ Once normalized to canonical `VibeView`, hosts can render into any UI framework:
 | **Angular, Svelte, Lit, HTMX, Plain HTML** | `defineVibeWebComponents(env)` | Registers `<vibe-view>`, `<vibe-embed>`, and `<vibe-space>` Custom Elements |
 | **Flutter Material / Cupertino / Custom** | `VibeWidgetAdapter.material()`, `.cupertino()`, `.custom(...)` | Swaps widget families or individual node builders while enforcing protocol validation & sealed handle rules |
 | **SwiftUI, Jetpack Compose, Qt, GTK, WinUI, React Native** | `resolveViewTree` / `resolve_view_tree` / `resolveVibeViewTree` | Outputs a headless handle-resolved JSON IR (`sealedResolved` boolean; forged handles render empty `""`) |
-| **Terminal / CLI / SSH TUI** | `renderToTerminal` / `render_terminal` / `VibeTerminalRenderer.render` | Renders Unicode bars (`█░`), sparklines (`▁▂▃▄▅▆▇█`), tables, optional ANSI tones, and `🔒` sealed prefix |
+| **Terminal / CLI / TUI** | `renderToTerminal` / `render_terminal` / `VibeTerminalRenderer.render` | Renders Unicode bars (`█░`), sparklines (`▁▂▃▄▅▆▇█`), tables, optional ANSI tones, and `🔒` sealed prefix |
 | **Markdown & Escaped HTML SSR** | `renderToMarkdown`, `renderToHtmlString` | Safe plain-Markdown and strictly HTML-escaped string outputs |
 
 ## 4. Human Languages, Unicode & RTL (`i18n`)

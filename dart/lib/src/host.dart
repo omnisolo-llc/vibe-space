@@ -7,39 +7,82 @@ bool validApiName(String value) =>
     value.length <= 128 &&
     RegExp(r'^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$').hasMatch(value);
 
-bool validCapability(Object? value) =>
-    value is String &&
-    (const {'network', 'terminal_read', 'terminal_write'}.contains(value) ||
-        (value.startsWith('api:') && validApiName(value.substring(4))));
+/// Host-configurable policy defining built-in capabilities and effect
+/// method-to-capability mappings beyond `network`, `network.fetch`, and
+/// `host.call` (`api:<name>`).
+class VibeHostPolicy {
+  const VibeHostPolicy({
+    this.capabilities = const <String>{'network'},
+    this.methodCapabilities = const <String, String>{
+      'network.fetch': 'network',
+    },
+  });
 
-String effectCapability(JsonMap effect) {
-  final method = effect['method'];
-  final String required;
-  switch (method) {
-    case 'network.fetch':
-      required = 'network';
-    case 'terminal.read':
-      required = 'terminal_read';
-    case 'terminal.write':
-      required = 'terminal_write';
-    case 'host.call':
+  static const VibeHostPolicy standard = VibeHostPolicy();
+
+  final Set<String> capabilities;
+  final Map<String, String> methodCapabilities;
+
+  /// Returns a new [VibeHostPolicy] extending this policy with additional
+  /// host-defined capabilities and `method -> capability` mappings.
+  VibeHostPolicy extend({
+    Iterable<String> extraCapabilities = const <String>[],
+    Map<String, String> extraMethodCapabilities = const <String, String>{},
+  }) {
+    return VibeHostPolicy(
+      capabilities: <String>{
+        ...capabilities,
+        ...extraCapabilities,
+        ...extraMethodCapabilities.values,
+      },
+      methodCapabilities: <String, String>{
+        ...methodCapabilities,
+        ...extraMethodCapabilities,
+      },
+    );
+  }
+
+  bool isValidCapability(Object? value) =>
+      value is String &&
+      (capabilities.contains(value) ||
+          (value.startsWith('api:') && validApiName(value.substring(4))));
+
+  String resolveEffectCapability(JsonMap effect) {
+    final method = effect['method'];
+    final String required;
+    if (method is String && methodCapabilities.containsKey(method)) {
+      required = methodCapabilities[method]!;
+    } else if (method == 'host.call') {
       final args = effect['arguments'];
       final api = args is Map ? args['api'] : null;
       if (api is! String || !validApiName(api)) {
         throw const FormatException('Invalid host API name');
       }
       required = 'api:$api';
-    default:
+    } else {
       throw UnsupportedError('Unsupported extension effect: $method');
+    }
+    if (effect['capability'] != required) {
+      throw StateError('Extension effect capability does not match its method');
+    }
+    if (effect['arguments'] != null && effect['arguments'] is! Map) {
+      throw const FormatException('Invalid extension effect arguments');
+    }
+    return required;
   }
-  if (effect['capability'] != required) {
-    throw StateError('Extension effect capability does not match its method');
-  }
-  if (effect['arguments'] != null && effect['arguments'] is! Map) {
-    throw const FormatException('Invalid extension effect arguments');
-  }
-  return required;
 }
+
+bool validCapability(
+  Object? value, {
+  VibeHostPolicy policy = VibeHostPolicy.standard,
+}) =>
+    policy.isValidCapability(value);
+
+String effectCapability(
+  JsonMap effect, {
+  VibeHostPolicy policy = VibeHostPolicy.standard,
+}) =>
+    policy.resolveEffectCapability(effect);
 
 Object? freezeJson(Object? value, {int depth = 0}) {
   if (depth > 64) throw const FormatException('Extension JSON is too deep');
@@ -66,8 +109,10 @@ Object? freezeJson(Object? value, {int depth = 0}) {
 /// The host executes this original immutable batch after review. Guest code is
 /// never rerun to obtain "confirmed" replacement effects.
 class VibeEffectBatch {
-  VibeEffectBatch(List<dynamic> effects)
-      : effects = List<JsonMap>.unmodifiable(
+  VibeEffectBatch(
+    List<dynamic> effects, {
+    VibeHostPolicy policy = VibeHostPolicy.standard,
+  }) : effects = List<JsonMap>.unmodifiable(
           (freezeJson(effects) as List).map((e) => e as JsonMap),
         ) {
     if (effects.length > 32 ||
@@ -80,7 +125,7 @@ class VibeEffectBatch {
       if (id is! String || id.isEmpty || id.length > 128 || !ids.add(id)) {
         throw const FormatException('Invalid or duplicate effect ID');
       }
-      effectCapability(effect);
+      effectCapability(effect, policy: policy);
     }
   }
   final List<JsonMap> effects;
@@ -280,6 +325,9 @@ class VibeHostApi {
 }
 
 class VibeHostRegistry {
+  VibeHostRegistry({this.policy = VibeHostPolicy.standard});
+
+  final VibeHostPolicy policy;
   final Map<String, VibeHostApi> _apis = {};
   int _generation = 0;
   int get generation => _generation;
@@ -312,8 +360,8 @@ class VibeHostRegistry {
     VibeCallContext context, {
     Future<bool> Function(JsonMap)? approve,
   }) async {
-    effect = VibeEffectBatch([effect]).effects.single;
-    final capability = effectCapability(effect);
+    effect = VibeEffectBatch([effect], policy: policy).effects.single;
+    final capability = effectCapability(effect, policy: policy);
     if (!grants.contains(capability))
       throw StateError('Host API permission denied');
     final args = Map<String, dynamic>.from(effect['arguments'] as Map);
