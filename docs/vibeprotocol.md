@@ -78,3 +78,51 @@ Hosts expose VibeProtocol in two places:
 
 - **`VibeSpacePanel`**: dedicated panel for inspecting what the host offers, authoring vibes from wishes, previewing on sample data, reviewing permission labels, managing installed cards (`⋯` menu), importing shared links, and browsing portable vibes (`needs: []`).
 - **`VibeEmbedCard`**: compact inline box inside an AI agent's reply, marked `Temporary`, displaying a live view, a `Reads:` summary line, an `Inspect` toggle, and a **Pin to Vibe Space** flow (pre-filled editable title & note + permission label).
+
+## 8. Conditional View Triggers (`when`) & Presets
+
+VibeProtocol includes a declarative trigger condition engine (`VibeTriggerCondition` / `when`) so both built-in host presets and user/agent-authored Vibe views can appear automatically when matching terminal, window, or host conditions occur.
+
+### `when` Schema & Matchers
+
+`when` may be declared on `VibeSpec`, `VibeInstalledRecord`, `VibeCanvasPayload`, `VibeConditionalEntry`, and extension `Manifest` / `Contribution` records:
+
+```json
+{
+  "program": ["agy", "claude"],
+  "cwd": "*/leapterm*",
+  "context": {
+    "inTmux": true,
+    "ports": "3000"
+  },
+  "not": {
+    "windowTitle": "*production*"
+  }
+}
+```
+
+- **Target fields**:
+  - `program` / `command`: foreground executable name (matching full path or basename) and full command/argv string.
+  - `window` / `surface` / `windowTitle`: active UI surface (such as `"terminal"`), tab/pane identifier, or OSC/tmux window title.
+  - `cwd` / `pathPattern`: normalized working directory matched via glob, regex, or exact path.
+  - `env` / `context`: arbitrary host key/value predicates (`inTmux == true`, `gitRepo == true`, `portOpen == "3000"`, or list membership on `ports: ["3000", "5173"]`).
+- **Boolean combinators**: `all` (AND), `any` (OR), `not` (NOT), and `always` (`true | false`), bounded to depth 16 and 64 items per branch.
+- **Value matchers**: scalar shorthands (`"agy"`, `"docker*"`, `true`, `3000`, `["agy", "nvim"]`) or explicit operator maps (`exact`, `glob`, `regex`, `contains`, `prefix`, `suffix`, `exists`, `oneOf`, `caseSensitive`).
+
+### Evaluation, Hysteresis & Reactive Decks
+
+- **`VibeTriggerContext` & `VibeTriggerEvaluator`**: evaluates live host snapshots against `VibeConditionalEntry` items, reporting `activeEntries`, `newlyTriggeredIds`, `deactivatedIds`, and `heldIds` with configurable `holdMs` hysteresis and per-episode user dismissal (`dismiss(id)` resets automatically once the condition turns false).
+- **`VibeConditionalRegistry` & Presets**: unifies built-in adaptive presets (`isPreset: true`, `registerPresets(...)`, `hydratePresetPayloads(...)`) with user-authored custom Vibe views (`vibe_ui`, `markdown`, `html`, `wasm`, or JS `VibeSpec`), preserving user enablement, pin, and custom `when` overrides across live refreshes and storage reloads.
+- **`VibeConditionalController` & `VibeTriggeredViewDeck`**: reactive `vibe_space_flutter` widgets rendering active conditional Vibe cards inside `RepaintBoundary` containers with `tabularFigures` typography and `{{variable}}` context template hydration.
+
+## 9. WeChat Mini Program Dual-Layer + Skyline Native Render Engine
+
+VibeProtocol pairs an air-gapped logic runtime (**Layer 1 — `AppService`**) with a native Flutter/Skia view engine (**Layer 2 — `Skyline`**) so custom and AI-generated Vibes run at 60/120 fps with zero WebViews, zero iframes, and zero DOM/network access by default:
+
+- **Layer 1 (`AppService` Logic Sandbox)**:
+  - Authored via `defineMiniProgram({ data, template, onLoad, onShow, onHide, onDataUpdate, methods })` (or `wasm32` `vibe_alloc` / `vibe_invoke` modules).
+  - Air-gapped execution: `window`, `document`, `fetch`, `XMLHttpRequest`, `WebSocket`, `RTCPeerConnection`, `localStorage`, `navigator`, `eval`, and `Function` are statically and dynamically absent.
+  - Incremental state bridge: `this.setData({ 'meta.tps': 94.2, 'bars[0]': 61 })` patches nested object/array paths with prototype-pollution guards, a **`<= 64 KiB`** per-diff cap, and a **`<= 30/s`** rate limit.
+- **Layer 2 (`Skyline` VXML Template + Native `canvas` 2D)**:
+  - `compileVibeTemplate(template, scope)` evaluates `if` / `v-if` / `wx:if`, `for` / `v-for` / `wx:for` (`forItem` / `forIndex`), `{{path}}` typed bindings (preserving `{ "sealed": "h_..." }` handles, arrays, numbers, and booleans), scoped `WXSS` `style` tokens, and `bindtap` / `bindinput` + `dataset` (`data-*`) event round-trips back to Layer 1 `methods[handler](event)`.
+  - First-class `canvas` primitive (`{ "type": "canvas", "width": 260, "height": 56, "commands": [...] }`) renders bounded 2D vector draw-lists (`clear`, `rect`, `rrect`, `circle`, `arc`, `line`, `path`, `polygon`, `bars`, `text`, `linearGradient`) directly onto Flutter's `CustomPaint` Skia/Impeller canvas (and `<svg>` / terminal sparklines on web/CLI), strictly capped at **`<= 2,000`** draw commands per frame tree.

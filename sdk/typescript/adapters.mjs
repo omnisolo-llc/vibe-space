@@ -1,7 +1,9 @@
 const MAX_VIEW_DEPTH = 16;
 const MAX_VIEW_NODES = 1024;
+const MAX_CANVAS_COMMANDS = 2000;
 const MAX_TEXT_LEN = 4096;
 const VALID_TONES = new Set(['default', 'ok', 'warn', 'danger']);
+const VALID_CANVAS_OPS = new Set(['clear', 'rect', 'rrect', 'circle', 'arc', 'line', 'path', 'polygon', 'bars', 'text']);
 const VALID_HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
 
 const LOCALE_PACKS = {
@@ -447,8 +449,8 @@ function sanitizeCommand(raw, fallback = 'action') {
   return raw.trim().slice(0, 128);
 }
 
-function sanitizeArgs(raw) {
-  if (!isPlainObject(raw)) return undefined;
+function sanitizeArgs(raw, depth = 0) {
+  if (!isPlainObject(raw) || depth > 2) return undefined;
   const out = {};
   for (const [k, v] of Object.entries(raw)) {
     if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue;
@@ -456,8 +458,19 @@ function sanitizeArgs(raw) {
       out[k] = v;
     } else if (isSealedHandle(v)) {
       out[k] = { sealed: v.sealed };
+    } else if (isPlainObject(v) && depth < 2) {
+      out[k] = sanitizeArgs(v, depth + 1);
     }
   }
+  return out;
+}
+
+function attachSkylineMeta(out, node) {
+  if (!out || !isPlainObject(node)) return out;
+  if (isPlainObject(node.style)) out.style = sanitizeArgs(node.style, 1);
+  if (typeof node.bindtap === 'string' && node.bindtap) out.bindtap = sanitizeCommand(node.bindtap);
+  if (typeof node.bindinput === 'string' && node.bindinput) out.bindinput = sanitizeCommand(node.bindinput);
+  if (isPlainObject(node.dataset)) out.dataset = sanitizeArgs(node.dataset, 1);
   return out;
 }
 
@@ -860,12 +873,12 @@ function normalizeCanonicalNode(node, depth, budget) {
     const kids = Array.isArray(node.children) ? node.children : [];
     const out = { type: t, children: kids.map(c => normalizeCanonicalNode(c, depth + 1, budget)).filter(Boolean) };
     if (tone !== 'default') out.tone = tone;
-    return out;
+    return attachSkylineMeta(out, node);
   }
   if (t === 'heading') {
     const out = { type: 'heading', text: sanitizeTextSlot(node.text) };
     if (tone !== 'default') out.tone = tone;
-    return out;
+    return attachSkylineMeta(out, node);
   }
   if (t === 'text') {
     const out = { type: 'text', text: sanitizeTextSlot(node.text) };
@@ -873,17 +886,17 @@ function normalizeCanonicalNode(node, depth, budget) {
     if (node.strong || node.bold) out.strong = true;
     if (node.mono || node.code) out.mono = true;
     if (node.italic) out.italic = true;
-    return out;
+    return attachSkylineMeta(out, node);
   }
   if (t === 'badge') {
     const out = { type: 'badge', text: sanitizeTextSlot(node.text) };
     if (tone !== 'default') out.tone = tone;
-    return out;
+    return attachSkylineMeta(out, node);
   }
   if (t === 'stat') {
     const out = { type: 'stat', label: sanitizeTextSlot(node.label), value: sanitizeTextSlot(node.value) };
     if (tone !== 'default') out.tone = tone;
-    return out;
+    return attachSkylineMeta(out, node);
   }
   if (t === 'bar') {
     const val = typeof node.value === 'number' && Number.isFinite(node.value) ? node.value : 0;
@@ -892,13 +905,41 @@ function normalizeCanonicalNode(node, depth, budget) {
     if (node.caption !== undefined) out.caption = sanitizeTextSlot(node.caption);
     if (typeof node.swatch === 'string' && VALID_HEX_COLOR.test(node.swatch)) out.swatch = node.swatch;
     if (tone !== 'default') out.tone = tone;
-    return out;
+    return attachSkylineMeta(out, node);
   }
   if (t === 'sparkline') {
     const vals = Array.isArray(node.values) ? node.values.filter(n => typeof n === 'number' && Number.isFinite(n)).slice(0, 240) : [];
     const out = { type: 'sparkline', values: vals };
     if (tone !== 'default') out.tone = tone;
-    return out;
+    return attachSkylineMeta(out, node);
+  }
+  if (t === 'canvas') {
+    if (!Array.isArray(node.commands)) {
+      throw new Error('canvas node requires a commands array');
+    }
+    budget.canvasCommands = (budget.canvasCommands || 0) + node.commands.length;
+    if (node.commands.length > MAX_CANVAS_COMMANDS || budget.canvasCommands > MAX_CANVAS_COMMANDS) {
+      throw new Error(`canvas command budget (${MAX_CANVAS_COMMANDS}) exceeded`);
+    }
+    const width = typeof node.width === 'number' && Number.isFinite(node.width)
+      ? Math.max(16, Math.min(2048, node.width))
+      : 260;
+    const height = typeof node.height === 'number' && Number.isFinite(node.height)
+      ? Math.max(16, Math.min(2048, node.height))
+      : 56;
+    const commands = [];
+    for (const rawCmd of node.commands) {
+      if (!isPlainObject(rawCmd)) throw new Error('Invalid canvas command');
+      const op = String(rawCmd.op || rawCmd.type || '');
+      if (!VALID_CANVAS_OPS.has(op)) throw new Error(`Unsupported canvas op "${op}"`);
+      const cmd = { ...rawCmd, op };
+      if (cmd.text !== undefined) cmd.text = sanitizeTextSlot(cmd.text);
+      commands.push(cmd);
+    }
+    const out = { type: 'canvas', width, height, commands };
+    if (tone !== 'default') out.tone = tone;
+    if (typeof node.command === 'string') out.command = sanitizeCommand(node.command);
+    return attachSkylineMeta(out, node);
   }
   if (t === 'button' || t === 'action') {
     const out = {
@@ -913,23 +954,23 @@ function normalizeCanonicalNode(node, depth, budget) {
       else out.arguments = args;
     }
     if (tone !== 'default') out.tone = tone;
-    return out;
+    return attachSkylineMeta(out, node);
   }
   if (t === 'table') {
     const headers = Array.isArray(node.headers) ? node.headers.slice(0, 32).map(h => sanitizeTextSlot(h)) : [];
     const rows = Array.isArray(node.rows)
       ? node.rows.slice(0, 200).map(r => (Array.isArray(r) ? r.slice(0, 32).map(c => sanitizeTextSlot(c)) : []))
       : [];
-    return { type: 'table', headers, rows };
+    return attachSkylineMeta({ type: 'table', headers, rows }, node);
   }
   if (t === 'input') {
-    return {
+    return attachSkylineMeta({
       type: 'input',
       id: sanitizeId(node.id, 'input_' + budget.count),
       label: String(sanitizeTextSlot(node.label || 'Input')),
       secret: Boolean(node.secret) || undefined,
       multiline: Boolean(node.multiline) || undefined
-    };
+    }, node);
   }
   if (t === 'checkbox') {
     return {
@@ -1089,6 +1130,22 @@ export function resolveViewTree(view, { resolveSealed } = {}) {
         values: Array.isArray(node.values) ? node.values.slice() : []
       };
     }
+    if (t === 'canvas') {
+      return {
+        type: 'canvas',
+        tone: normalizeTone(node.tone),
+        width: node.width || 260,
+        height: node.height || 56,
+        bindtap: node.bindtap,
+        command: node.command,
+        dataset: node.dataset,
+        commands: (node.commands || []).map(cmd => {
+          if (cmd.text === undefined) return { ...cmd };
+          const slot = resolveSlot(cmd.text, resolveSealed);
+          return { ...cmd, text: slot.text, sealed: slot.sealed, sealedResolved: slot.sealedResolved };
+        })
+      };
+    }
     if (t === 'button' || t === 'action') {
       const textSlot = resolveSlot(t === 'button' ? node.text : node.title, resolveSealed);
       return {
@@ -1196,6 +1253,50 @@ export function renderWithH(h, view, { resolveSealed, onCommand, onInput, classP
         'svg',
         { key, className: classPrefix + '-sparkline' + toneCls, viewBox: '0 0 100 28', preserveAspectRatio: 'none' },
         h('polyline', { points: pts, fill: 'none' })
+      );
+    }
+    if (t === 'canvas') {
+      const w = node.width || 260;
+      const hgt = node.height || 56;
+      const svgKids = [];
+      (node.commands || []).slice(0, MAX_CANVAS_COMMANDS).forEach((cmd, idx) => {
+        if (cmd.op === 'clear') {
+          svgKids.push(h('rect', { key: idx, x: 0, y: 0, width: w, height: hgt, fill: cmd.fill || 'transparent' }));
+        } else if (cmd.op === 'rect' || cmd.op === 'rrect') {
+          svgKids.push(h('rect', { key: idx, x: cmd.x || 0, y: cmd.y || 0, width: cmd.w ?? cmd.width ?? w, height: cmd.h ?? cmd.height ?? hgt, rx: cmd.radius || cmd.r || 0, fill: cmd.fill || 'none', stroke: cmd.stroke }));
+        } else if (cmd.op === 'circle') {
+          svgKids.push(h('circle', { key: idx, cx: cmd.cx ?? cmd.x ?? 0, cy: cmd.cy ?? cmd.y ?? 0, r: cmd.r ?? cmd.radius ?? 4, fill: cmd.fill || 'none', stroke: cmd.stroke }));
+        } else if (cmd.op === 'line') {
+          svgKids.push(h('line', { key: idx, x1: cmd.x1 || 0, y1: cmd.y1 || 0, x2: cmd.x2 || 0, y2: cmd.y2 || 0, stroke: cmd.stroke || cmd.fill || 'currentColor', strokeWidth: cmd.strokeWidth || 1.5 }));
+        } else if (cmd.op === 'bars' && Array.isArray(cmd.values) && cmd.values.length > 0) {
+          const vals = cmd.values.filter(v => typeof v === 'number' && Number.isFinite(v));
+          const max = typeof cmd.max === 'number' && cmd.max > 0 ? cmd.max : Math.max(1, ...vals);
+          const bx = cmd.x || 0, by = cmd.y || 0, bw = cmd.w ?? cmd.width ?? (w - bx), bh = cmd.h ?? cmd.height ?? (hgt - by), gap = cmd.gap ?? 2;
+          const barW = Math.max(1, (bw - gap * (vals.length - 1)) / Math.max(1, vals.length));
+          vals.forEach((v, j) => {
+            const barH = Math.max(1.5, Math.min(1, Math.max(0, v / max)) * bh);
+            svgKids.push(h('rect', { key: `${idx}_${j}`, x: bx + j * (barW + gap), y: by + (bh - barH), width: barW, height: barH, rx: cmd.radius ?? 2, fill: cmd.fill || 'currentColor' }));
+          });
+        } else if (cmd.op === 'text' && cmd.text) {
+          svgKids.push(h('text', { key: idx, x: cmd.x || 0, y: (cmd.y || 0) + (cmd.fontSize || 11), fill: cmd.fill || 'currentColor', fontSize: cmd.fontSize || 11 }, cmd.text));
+        }
+      });
+      return h(
+        'svg',
+        {
+          key,
+          className: classPrefix + '-canvas' + toneCls,
+          viewBox: `0 0 ${w} ${hgt}`,
+          width: w,
+          height: hgt,
+          onClick: (node.bindtap || node.command) && typeof onCommand === 'function'
+            ? () => {
+                if (node.bindtap) onCommand(`mp:tap:${node.bindtap}`, { __mpEvent: true, type: 'tap', handler: node.bindtap, dataset: node.dataset || {} });
+                else onCommand(node.command, {});
+              }
+            : undefined
+        },
+        ...svgKids
       );
     }
     if (t === 'button') {
@@ -1327,6 +1428,21 @@ export function renderToTerminal(view, { resolveSealed, ansi = false, width = 72
       lines.push(wrapAnsi(s, node.tone, ansi));
       return;
     }
+    if (t === 'canvas') {
+      const parts = [];
+      for (const cmd of node.commands || []) {
+        if (cmd.op === 'bars' && Array.isArray(cmd.values) && cmd.values.length > 0) {
+          const min = Math.min(...cmd.values);
+          const max = Math.max(...cmd.values);
+          const span = max - min || 1;
+          parts.push(cmd.values.map(v => sparks[Math.max(0, Math.min(7, Math.round(((v - min) / span) * 7)))]).join(''));
+        } else if (cmd.op === 'text' && cmd.text) {
+          parts.push(cmd.sealed ? (cmd.sealedResolved ? '\ud83d\udd12 ' + cmd.text : '') : cmd.text);
+        }
+      }
+      lines.push(wrapAnsi(parts.filter(Boolean).join(' ') || `[canvas ${node.width}x${node.height}]`, node.tone, ansi));
+      return;
+    }
     if (t === 'table') {
       if (node.headers.length > 0) {
         lines.push(node.headers.map(formatTerminalSlot).join(' | '));
@@ -1407,6 +1523,10 @@ export function renderToMarkdown(view, { resolveSealed } = {}) {
     }
     if (t === 'button') {
       lines.push('[' + formatTerminalSlot(node) + ']');
+      return;
+    }
+    if (t === 'canvas') {
+      lines.push('`[canvas ' + node.width + 'x' + node.height + ']`');
     }
   }
 
@@ -1483,6 +1603,17 @@ export function renderToHtmlString(view, { resolveSealed } = {}) {
         pts = vals.map((v, idx) => ((idx / (vals.length - 1)) * 100).toFixed(1) + ',' + (26 - ((v - min) / span) * 24).toFixed(1)).join(' ');
       }
       return '<svg class="vk-sparkline' + toneCls + '" viewBox="0 0 100 28" preserveAspectRatio="none"><polyline points="' + pts + '"></polyline></svg>';
+    }
+    if (t === 'canvas') {
+      const w = Number(node.width) || 260;
+      const hgt = Number(node.height) || 56;
+      const inner = (node.commands || []).slice(0, MAX_CANVAS_COMMANDS).map(cmd => {
+        if (cmd.op === 'clear') return '<rect x="0" y="0" width="' + w + '" height="' + hgt + '" fill="' + escapeHtml(cmd.fill || 'transparent') + '"/>';
+        if (cmd.op === 'rect' || cmd.op === 'rrect') return '<rect x="' + (Number(cmd.x) || 0) + '" y="' + (Number(cmd.y) || 0) + '" width="' + (Number(cmd.w ?? cmd.width) || w) + '" height="' + (Number(cmd.h ?? cmd.height) || hgt) + '" rx="' + (Number(cmd.radius ?? cmd.r) || 0) + '" fill="' + escapeHtml(cmd.fill || 'none') + '"/>';
+        if (cmd.op === 'text' && cmd.text) return '<text x="' + (Number(cmd.x) || 0) + '" y="' + ((Number(cmd.y) || 0) + (Number(cmd.fontSize) || 11)) + '">' + escapeHtml(cmd.text) + '</text>';
+        return '';
+      }).join('');
+      return '<svg class="vk-canvas' + toneCls + '" viewBox="0 0 ' + w + ' ' + hgt + '" width="' + w + '" height="' + hgt + '">' + inner + '</svg>';
     }
     if (t === 'table') {
       const ths = node.headers.map(h => '<th>' + renderSlotHtml(h) + '</th>').join('');

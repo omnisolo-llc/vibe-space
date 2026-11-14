@@ -1,11 +1,75 @@
 export type Json = null | boolean | number | string | Json[] | {[key: string]: Json};
 export type Capability = 'network' | 'terminal_read' | 'terminal_write' | `api:${string}`;
 export type Slot = 'app_page' | 'sidebar_inspector' | 'mobile_bottom_sheet' | 'quick_command' | 'status_bar_item' | 'terminal_action';
-export interface Contribution {id:string; slot:Slot; title:string; command:string}
+export type TriggerScalar = string | number | boolean;
+export type TriggerMatcher =
+  | TriggerScalar
+  | TriggerScalar[]
+  | {exact?:TriggerScalar | null; equals?:TriggerScalar | null; caseSensitive?:boolean}
+  | {glob?:string; wildcard?:string; caseSensitive?:boolean}
+  | {regex?:string; pattern?:string; caseSensitive?:boolean}
+  | {contains:TriggerScalar; caseSensitive?:boolean}
+  | {prefix?:string; startsWith?:string; caseSensitive?:boolean}
+  | {suffix?:string; endsWith?:string; caseSensitive?:boolean}
+  | {exists:boolean}
+  | {oneOf?:TriggerScalar[]; in?:TriggerScalar[]; caseSensitive?:boolean};
+export interface TriggerCondition {
+  always?:boolean;
+  program?:TriggerMatcher;
+  command?:TriggerMatcher;
+  window?:TriggerMatcher;
+  surface?:TriggerMatcher;
+  windowTitle?:TriggerMatcher;
+  cwd?:TriggerMatcher;
+  pathPattern?:TriggerMatcher;
+  env?:Record<string,TriggerMatcher>;
+  context?:Record<string,TriggerMatcher>;
+  all?:TriggerCondition[];
+  any?:TriggerCondition[];
+  not?:TriggerCondition;
+}
+export interface TriggerContext {
+  program?:string;
+  command?:string;
+  argv?:string[];
+  window?:string;
+  surface?:string;
+  windowTitle?:string;
+  cwd?:string;
+  env?:Record<string,Json>;
+  context?:Record<string,Json>;
+  timestampMs?:number;
+  [key:string]:unknown;
+}
+export interface ConditionalVibeEntry {
+  id:string;
+  title:string;
+  subtitle?:string;
+  when?:TriggerCondition;
+  condition?:TriggerCondition;
+  isPreset?:boolean;
+  enabled?:boolean;
+  pinned?:boolean;
+  priority?:number;
+  order?:number;
+  holdMs?:number;
+  [key:string]:unknown;
+}
+export interface TriggerEvaluationResult<T extends ConditionalVibeEntry = ConditionalVibeEntry> {
+  context:TriggerContext;
+  activeEntries:T[];
+  activeIds:string[];
+  newlyTriggeredIds:string[];
+  deactivatedIds:string[];
+  heldIds:string[];
+  changed:boolean;
+}
+export interface Contribution {id:string; slot:Slot; title:string; command:string; when?:TriggerCondition}
 export interface Manifest {
   id:string; version:number; api_version:1; name:string;
   license:'MIT' | 'Apache-2.0' | 'BSD-3-Clause' | 'MIT OR Apache-2.0';
   module_sha256:string; capabilities:Capability[]; network_origins:string[]; contributions:Contribution[];
+  when?:TriggerCondition;
 }
 /** Exact manifest UTF-8 is signed with Ed25519. Binary fields are padded base64. */
 export interface SignedPackage {manifest:string; signature:string; module:string}
@@ -40,6 +104,7 @@ export type View =
   | {type:'stat'; label:ViewTextValue; value:ViewTextValue; tone?:ViewTone}
   | {type:'bar'; label:ViewTextValue; value:number; max?:number; caption?:ViewTextValue; tone?:ViewTone; swatch?:string}
   | {type:'sparkline'; values:number[]; tone?:ViewTone}
+  | {type:'canvas'; width?:number; height?:number; commands:Record<string,unknown>[]; tone?:ViewTone; bindtap?:string; command?:string}
   | {type:'button'; text:ViewTextValue; command:string; args?:Record<string,Json>; arguments?:Record<string,Json>; tone?:ViewTone}
   | {type:'action'; title:string; command:string; arguments?:Record<string,Json>; tone?:ViewTone}
   | {type:'table'; headers:ViewTextValue[]; rows:(ViewTextValue | boolean | null)[][]; tone?:ViewTone}
@@ -83,3 +148,31 @@ export function renderToHtmlString(view:unknown, options?:{resolveSealed?:Sealed
 export function defineVibeWebComponents(env?:Record<string,unknown>):boolean | Record<string,unknown>;
 export function getVibeStrings(locale?:string, overrides?:Record<string,string | boolean>):VibeStrings;
 export function isRtlLocale(locale?:string):boolean;
+export function validateTriggerCondition(condition:unknown, depth?:number):TriggerCondition;
+export function evaluateTriggerCondition(condition:TriggerCondition, context?:TriggerContext):boolean;
+export function hydrateVibeTemplate(template:string, context?:TriggerContext, options?:{escapeHtml?:boolean; escapeJson?:boolean}):string;
+export function createTriggerEvaluator():{
+  dismiss(id:string):void;
+  undismiss(id:string):void;
+  reset():void;
+  evaluate<T extends ConditionalVibeEntry>(entries:Iterable<T>, context?:TriggerContext, nowMs?:number):TriggerEvaluationResult<T>;
+};
+
+export const MAX_SET_DATA_BYTES:number;
+export const MAX_SET_DATA_RATE_PER_SEC:number;
+export const MAX_CANVAS_COMMANDS:number;
+export function validateMiniProgramSource(source:string):boolean;
+export function applySetData(currentData:Record<string,unknown>, patch:Record<string,unknown>):Record<string,unknown>;
+export function lookupScopePath(scope:Record<string,unknown>, expr:string):unknown;
+export function compileTemplate(template:Record<string,unknown>, scope?:Record<string,unknown>):View;
+export function defineMiniProgram(spec:Record<string,unknown>):Record<string,unknown>;
+export function createMiniProgramSession(definition:Record<string,unknown>, options?:{template?:Record<string,unknown>; maxRatePerSec?:number}):{
+  readonly data:Record<string,unknown>;
+  readonly lifecycle:string;
+  setData(patch:Record<string,unknown>, nowMs?:number):void;
+  load(initialHostData?:Record<string,unknown>, initialContext?:TriggerContext):void;
+  updateHostData(nextHostData?:Record<string,unknown>, nextContext?:TriggerContext):void;
+  dispatchEvent(event:{type:string; handler:string; target?:Record<string,unknown>; detail?:Record<string,unknown>}):boolean;
+  hide():void;
+  buildView():View | null;
+};

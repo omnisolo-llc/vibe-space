@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'vibe_protocol.dart';
+import 'vibe_runtime_config.dart' show kMaxVibeCanvasCommands;
+import 'vibe_vxml_template.dart' show normalizeVibeStyleTokens;
 
 /// Depth and node limits matching `validateVibeView` in `vibe_space_flutter`.
 const int kMaxAdaptedViewDepth = 16;
@@ -17,6 +19,7 @@ const Set<String> _kCanonicalViewTypes = <String>{
   'stat',
   'bar',
   'sparkline',
+  'canvas',
   'table',
   'divider',
   'progress',
@@ -50,9 +53,16 @@ class VibeUiCompatibilityAdapter {
   /// Adapts [raw] (canonical `VibeView`, A2UI payload, Adaptive Card, or
   /// Markdown) into a validated canonical `VibeView` map.
   ///
+  /// When [dataModel] is supplied (for example, live host `needs` capability
+  /// streams + trigger context), A2UI `{ "path": "/..." }` bindings resolve
+  /// against the merged `dataModelUpdate` + [dataModel] state.
+  ///
   /// Throws [FormatException] when [raw] cannot be converted safely or exceeds
   /// depth/node limits.
-  static Map<String, Object?> adapt(Object? raw) {
+  static Map<String, Object?> adapt(
+    Object? raw, {
+    Map<String, Object?>? dataModel,
+  }) {
     if (raw == null) {
       throw const FormatException('View payload cannot be null');
     }
@@ -62,11 +72,12 @@ class VibeUiCompatibilityAdapter {
     }
 
     if (raw is List) {
-      return _adaptA2UiMessageList(raw);
+      return _adaptA2UiMessageList(raw, dataModel: dataModel);
     }
 
     if (raw is! Map) {
-      throw FormatException('Unsupported view payload type: ${raw.runtimeType}');
+      throw FormatException(
+          'Unsupported view payload type: ${raw.runtimeType}');
     }
 
     final map = _stringifyMap(raw);
@@ -74,9 +85,24 @@ class VibeUiCompatibilityAdapter {
     // Markdown wrapper object
     if (map['format'] == 'markdown' ||
         map['type'] == 'markdown' ||
-        (map.containsKey('markdown') && map['markdown'] is String && !map.containsKey('type'))) {
+        (map.containsKey('markdown') &&
+            map['markdown'] is String &&
+            !map.containsKey('type'))) {
       final md = (map['markdown'] ?? map['content'] ?? '').toString();
       return _adaptMarkdown(md);
+    }
+
+    // Unwrap { "a2ui": ... } envelope if present
+    if (map.containsKey('a2ui') &&
+        (map['a2ui'] is Map || map['a2ui'] is List)) {
+      final embeddedModel = map['dataModel'] is Map
+          ? _stringifyMap(map['dataModel'] as Map)
+          : const <String, Object?>{};
+      final merged = <String, Object?>{
+        ...embeddedModel,
+        if (dataModel != null) ...dataModel,
+      };
+      return adapt(map['a2ui'], dataModel: merged);
     }
 
     // Adaptive Card
@@ -84,12 +110,13 @@ class VibeUiCompatibilityAdapter {
       return _adaptAdaptiveCard(map);
     }
 
-    // A2UI surfaceUpdate / components adjacency list / nested component
+    // A2UI surfaceUpdate / dataModelUpdate / components adjacency list / nested component
     if (map.containsKey('surfaceUpdate') ||
+        map.containsKey('dataModelUpdate') ||
         map.containsKey('beginRendering') ||
         (map['components'] is List) ||
         map.containsKey('component')) {
-      return _adaptA2Ui(map);
+      return _adaptA2Ui(map, dataModel: dataModel);
     }
 
     // PascalCase A2UI nested node (e.g. { "type": "Column", "children": [...] })
@@ -97,7 +124,14 @@ class VibeUiCompatibilityAdapter {
     if (rawType != null &&
         !_kCanonicalViewTypes.contains(rawType) &&
         _isA2UiComponentName(rawType)) {
-      return _adaptA2UiNode(map, <String, Map<String, Object?>>{}, 0, _NodeBudget(), <String>{});
+      return _adaptA2UiNode(
+        map,
+        <String, Map<String, Object?>>{},
+        0,
+        _NodeBudget(),
+        <String>{},
+        dataModel: dataModel ?? const <String, Object?>{},
+      );
     }
 
     // Canonical VibeView
@@ -105,9 +139,12 @@ class VibeUiCompatibilityAdapter {
   }
 
   /// Like [adapt], returning `null` instead of throwing on invalid input.
-  static Map<String, Object?>? tryAdapt(Object? raw) {
+  static Map<String, Object?>? tryAdapt(
+    Object? raw, {
+    Map<String, Object?>? dataModel,
+  }) {
     try {
-      return adapt(raw);
+      return adapt(raw, dataModel: dataModel);
     } on Object {
       return null;
     }
@@ -131,6 +168,7 @@ class VibeUiCompatibilityAdapter {
 
     final tone = _validTone(node['tone']);
 
+    Map<String, Object?> result;
     switch (type) {
       case 'column':
       case 'row':
@@ -154,7 +192,7 @@ class VibeUiCompatibilityAdapter {
             }
           }
         }
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': type,
           if (tone != null) 'tone': tone,
           'children': children,
@@ -163,7 +201,7 @@ class VibeUiCompatibilityAdapter {
       case 'heading':
       case 'badge':
       case 'text':
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': type,
           'text': _normalizeTextOrSealed(node['text']),
           if (tone != null) 'tone': tone,
@@ -175,7 +213,7 @@ class VibeUiCompatibilityAdapter {
         };
 
       case 'stat':
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': 'stat',
           'label': _normalizeTextOrSealed(node['label']),
           'value': _normalizeTextOrSealed(node['value']),
@@ -192,7 +230,7 @@ class VibeUiCompatibilityAdapter {
             ? node['max'] as num
             : 1;
         final swatch = node['swatch']?.toString();
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': 'bar',
           'label': _normalizeTextOrSealed(node['label']),
           'value': val,
@@ -212,27 +250,31 @@ class VibeUiCompatibilityAdapter {
             if (v is num && v.isFinite) vals.add(v.toDouble());
           }
         }
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': 'sparkline',
           'values': vals,
           if (tone != null) 'tone': tone,
         };
+
+      case 'canvas':
+        result = _normalizeCanvasNode(node, tone, budget);
 
       case 'progress':
         final rawVal = node['value'];
         final val = rawVal is num && rawVal.isFinite
             ? rawVal.toDouble().clamp(0.0, 1.0)
             : 0.0;
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': 'progress',
           'value': val,
         };
 
       case 'divider':
-        return const <String, Object?>{'type': 'divider'};
+        result = <String, Object?>{'type': 'divider'};
 
       case 'table':
-        final rawHeaders = node['headers'] is List ? node['headers'] as List : const [];
+        final rawHeaders =
+            node['headers'] is List ? node['headers'] as List : const [];
         final headers = <Object?>[
           for (final h in rawHeaders.take(32)) _normalizeTextOrSealed(h),
         ];
@@ -245,7 +287,7 @@ class VibeUiCompatibilityAdapter {
             ]);
           }
         }
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': 'table',
           'headers': headers,
           'rows': rows,
@@ -253,15 +295,18 @@ class VibeUiCompatibilityAdapter {
 
       case 'button':
       case 'action':
-        final title = _normalizePlainString(node['text'] ?? node['title'] ?? 'Action', 256);
+        final title = _normalizePlainString(
+            node['text'] ?? node['title'] ?? 'Action', 256);
         final cmd = _normalizePlainString(node['command'] ?? 'action', 128);
         final rawArgs = node['arguments'] ?? node['args'];
         final Map<String, Object?>? args =
             rawArgs is Map ? _stringifyMap(rawArgs) : null;
-        if (args != null && args['url'] is String && _kUnsafeSchemeRegex.hasMatch(args['url'] as String)) {
+        if (args != null &&
+            args['url'] is String &&
+            _kUnsafeSchemeRegex.hasMatch(args['url'] as String)) {
           args.remove('url');
         }
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': type,
           if (type == 'button') 'text': title else 'title': title,
           'command': cmd,
@@ -272,7 +317,7 @@ class VibeUiCompatibilityAdapter {
 
       case 'input':
         final id = _claimUniqueId(node['id']?.toString(), seenInputIds, budget);
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': 'input',
           'id': id,
           'label': _normalizePlainString(node['label'] ?? 'Input', 256),
@@ -282,18 +327,20 @@ class VibeUiCompatibilityAdapter {
 
       case 'checkbox':
         final id = _claimUniqueId(node['id']?.toString(), seenInputIds, budget);
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': 'checkbox',
           'id': id,
           'label': _normalizePlainString(node['label'] ?? 'Option', 256),
           if (node['checked'] == true) 'checked': true,
-          if (node['command'] is String && (node['command'] as String).isNotEmpty)
+          if (node['command'] is String &&
+              (node['command'] as String).isNotEmpty)
             'command': _normalizePlainString(node['command'], 128),
         };
 
       case 'option_group':
         final id = _claimUniqueId(node['id']?.toString(), seenInputIds, budget);
-        final rawOptions = node['options'] is List ? node['options'] as List : const [];
+        final rawOptions =
+            node['options'] is List ? node['options'] as List : const [];
         final options = <Map<String, Object?>>[];
         for (var i = 0; i < rawOptions.length && options.length < 50; i++) {
           final opt = rawOptions[i];
@@ -311,15 +358,17 @@ class VibeUiCompatibilityAdapter {
           }
         }
         if (options.isEmpty) {
-          options.add(const <String, Object?>{'id': 'opt_0', 'label': 'Option'});
+          options
+              .add(const <String, Object?>{'id': 'opt_0', 'label': 'Option'});
         }
-        return <String, Object?>{
+        result = <String, Object?>{
           'type': 'option_group',
           'id': id,
           if (node['label'] is String)
             'label': _normalizePlainString(node['label'], 256),
           if (node['multiSelect'] == true) 'multiSelect': true,
-          if (node['command'] is String && (node['command'] as String).isNotEmpty)
+          if (node['command'] is String &&
+              (node['command'] as String).isNotEmpty)
             'command': _normalizePlainString(node['command'], 128),
           'options': options,
         };
@@ -327,6 +376,155 @@ class VibeUiCompatibilityAdapter {
       default:
         throw FormatException('Unsupported view node type: $type');
     }
+
+    return _withMiniProgramMeta(node, result);
+  }
+
+  static const Set<String> _kCanvasOps = <String>{
+    'clear',
+    'rect',
+    'rrect',
+    'circle',
+    'arc',
+    'line',
+    'path',
+    'polygon',
+    'bars',
+    'text',
+  };
+
+  static Map<String, Object?> _normalizeCanvasNode(
+    Map<String, Object?> node,
+    String? tone,
+    _NodeBudget budget,
+  ) {
+    final w = node['width'] is num && (node['width'] as num).isFinite
+        ? (node['width'] as num).toDouble().clamp(16.0, 2048.0)
+        : 240.0;
+    final h = node['height'] is num && (node['height'] as num).isFinite
+        ? (node['height'] as num).toDouble().clamp(16.0, 2048.0)
+        : 64.0;
+    final rawCommands = node['commands'] ?? node['draw'];
+    if (rawCommands is! List) {
+      throw const FormatException('Canvas node requires a commands list');
+    }
+    budget.consumeCanvasCommands(rawCommands.length);
+    final commands = <Map<String, Object?>>[];
+    for (final item in rawCommands) {
+      if (item is! Map) continue;
+      final cm = _stringifyMap(item);
+      final op = (cm['op'] ?? cm['type'])?.toString().trim().toLowerCase();
+      if (op == null || !_kCanvasOps.contains(op)) {
+        throw FormatException('Unsupported canvas command op: $op');
+      }
+      final normalizedCmd = <String, Object?>{'op': op};
+      for (final entry in cm.entries) {
+        final k = entry.key;
+        final v = entry.value;
+        if (k == 'op' || k == 'type' || v == null) continue;
+        if (v is num) {
+          if (v.isFinite) normalizedCmd[k] = v.toDouble();
+        } else if (v is bool) {
+          normalizedCmd[k] = v;
+        } else if (k == 'text') {
+          normalizedCmd['text'] = _normalizeTextOrSealed(v);
+        } else if (v is String) {
+          normalizedCmd[k] = _normalizePlainString(v, 256);
+        } else if (k == 'values' && v is List) {
+          normalizedCmd['values'] = <double>[
+            for (final n in v.take(512))
+              if (n is num && n.isFinite) n.toDouble(),
+          ];
+        } else if (k == 'points' && v is List) {
+          final pts = <List<double>>[];
+          for (final pt in v.take(512)) {
+            if (pt is List && pt.length >= 2 && pt[0] is num && pt[1] is num) {
+              final px = (pt[0] as num).toDouble();
+              final py = (pt[1] as num).toDouble();
+              if (px.isFinite && py.isFinite) pts.add(<double>[px, py]);
+            } else if (pt is Map && pt['x'] is num && pt['y'] is num) {
+              final px = (pt['x'] as num).toDouble();
+              final py = (pt['y'] as num).toDouble();
+              if (px.isFinite && py.isFinite) pts.add(<double>[px, py]);
+            }
+          }
+          normalizedCmd['points'] = pts;
+        } else if (k == 'linearGradient' && v is Map) {
+          final gm = _stringifyMap(v);
+          final rawColors = gm['colors'];
+          if (rawColors is List) {
+            final colors = <String>[
+              for (final c in rawColors.take(8))
+                if (c != null) _normalizePlainString(c, 32),
+            ];
+            if (colors.length >= 2) {
+              normalizedCmd['linearGradient'] = <String, Object?>{
+                'colors': colors,
+                if (gm['begin'] is List)
+                  'begin': <double>[
+                    for (final b in (gm['begin'] as List).take(2))
+                      if (b is num && b.isFinite) b.toDouble(),
+                  ],
+                if (gm['end'] is List)
+                  'end': <double>[
+                    for (final b in (gm['end'] as List).take(2))
+                      if (b is num && b.isFinite) b.toDouble(),
+                  ],
+              };
+            }
+          }
+        }
+      }
+      commands.add(normalizedCmd);
+    }
+
+    final rawArgs = node['args'] ?? node['arguments'];
+    return <String, Object?>{
+      'type': 'canvas',
+      'width': w,
+      'height': h,
+      'commands': commands,
+      if (tone != null) 'tone': tone,
+      if (node['alt'] != null) 'alt': _normalizeTextOrSealed(node['alt']),
+      if (node['label'] != null) 'label': _normalizeTextOrSealed(node['label']),
+      if (node['command'] is String && (node['command'] as String).isNotEmpty)
+        'command': _normalizePlainString(node['command'], 128),
+      if (rawArgs is Map) 'args': _stringifyMap(rawArgs),
+    };
+  }
+
+  static Map<String, Object?> _withMiniProgramMeta(
+    Map<String, Object?> sourceNode,
+    Map<String, Object?> normalized,
+  ) {
+    final style = normalizeVibeStyleTokens(sourceNode['style']);
+    final bindTap = sourceNode['bindtap'];
+    final bindInput = sourceNode['bindinput'];
+    final bindChange = sourceNode['bindchange'];
+    final dataset = sourceNode['dataset'];
+    if (style == null &&
+        bindTap == null &&
+        bindInput == null &&
+        bindChange == null &&
+        dataset == null) {
+      return normalized;
+    }
+    final out = Map<String, Object?>.from(normalized);
+    if (style != null) out['style'] = style;
+    for (final entry in <String, Object?>{
+      'bindtap': bindTap,
+      'bindinput': bindInput,
+      'bindchange': bindChange,
+    }.entries) {
+      final s = entry.value?.toString().trim();
+      if (s != null && RegExp(r'^[a-zA-Z_$][a-zA-Z0-9_$]{0,63}$').hasMatch(s)) {
+        out[entry.key] = s;
+      }
+    }
+    if (dataset is Map && dataset.isNotEmpty) {
+      out['dataset'] = _stringifyMap(dataset);
+    }
+    return out;
   }
 
   // ---------------------------------------------------------------------------
@@ -358,9 +556,156 @@ class VibeUiCompatibilityAdapter {
     return names.contains(raw.toLowerCase());
   }
 
-  static Map<String, Object?> _adaptA2UiMessageList(List<dynamic> messages) {
+  static void _applyA2UiDataModelUpdate(
+    Map<String, Object?> target,
+    Map<String, Object?> dmu,
+  ) {
+    final rawPath = dmu['path']?.toString().trim() ?? '';
+    final segments = rawPath
+        .split('/')
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+
+    Map<String, Object?> bucket = target;
+    for (final seg in segments) {
+      final next = bucket[seg];
+      if (next is Map) {
+        final copy = _stringifyMap(next);
+        bucket[seg] = copy;
+        bucket = copy;
+      } else {
+        final created = <String, Object?>{};
+        bucket[seg] = created;
+        bucket = created;
+      }
+    }
+
+    Object? decodeEntryValue(Map<String, Object?> entry) {
+      if (entry.containsKey('valueString')) return entry['valueString'];
+      if (entry.containsKey('valueNumber')) return entry['valueNumber'];
+      if (entry.containsKey('valueBoolean')) return entry['valueBoolean'];
+      if (entry.containsKey('value')) return entry['value'];
+      if (entry['valueList'] is List) return entry['valueList'];
+      if (entry['valueMap'] is List) {
+        final nested = <String, Object?>{};
+        for (final sub in entry['valueMap'] as List) {
+          if (sub is Map) {
+            final sm = _stringifyMap(sub);
+            final k = sm['key']?.toString();
+            if (k != null && k.isNotEmpty) {
+              nested[k] = decodeEntryValue(sm);
+            }
+          }
+        }
+        return nested;
+      }
+      if (entry['valueMap'] is Map) {
+        return _stringifyMap(entry['valueMap'] as Map);
+      }
+      return null;
+    }
+
+    if (dmu['contents'] is List) {
+      for (final item in dmu['contents'] as List) {
+        if (item is! Map) continue;
+        final em = _stringifyMap(item);
+        final key = em['key']?.toString();
+        if (key != null && key.isNotEmpty) {
+          bucket[key] = decodeEntryValue(em);
+        }
+      }
+    } else if (dmu['data'] is Map) {
+      bucket.addAll(_stringifyMap(dmu['data'] as Map));
+    } else if (dmu['values'] is Map) {
+      bucket.addAll(_stringifyMap(dmu['values'] as Map));
+    } else {
+      for (final entry in dmu.entries) {
+        if (entry.key == 'surfaceId' || entry.key == 'path') continue;
+        bucket[entry.key] = entry.value;
+      }
+    }
+  }
+
+  static (bool, Object?) _lookupA2UiPath(
+    Map<String, Object?> model,
+    String rawPath,
+  ) {
+    final trimmed = rawPath.trim();
+    if (trimmed.isEmpty || model.isEmpty) return (false, null);
+    if (trimmed == '/') return (true, model);
+
+    List<String> segments;
+    if (trimmed.startsWith('/')) {
+      segments = trimmed
+          .substring(1)
+          .split('/')
+          .map((s) => s.replaceAll('~1', '/').replaceAll('~0', '~'))
+          .where((s) => s.isNotEmpty)
+          .toList();
+    } else if (model.containsKey(trimmed)) {
+      return (true, model[trimmed]);
+    } else {
+      segments = trimmed.split('.').where((s) => s.isNotEmpty).toList();
+    }
+
+    Object? cursor = model;
+    for (var i = 0; i < segments.length; i++) {
+      final seg = segments[i];
+      if (cursor is Map) {
+        if (cursor.containsKey(seg)) {
+          cursor = cursor[seg];
+          continue;
+        }
+        // Support dotted capability keys like `terminal.agy` in dot-notation paths
+        if (!trimmed.startsWith('/') && i + 1 < segments.length) {
+          final joined = '$seg.${segments[i + 1]}';
+          if (cursor.containsKey(joined)) {
+            cursor = cursor[joined];
+            i++;
+            continue;
+          }
+        }
+        return (false, null);
+      }
+      if (cursor is List) {
+        final idx = int.tryParse(seg);
+        if (idx == null || idx < 0 || idx >= cursor.length) {
+          return (false, null);
+        }
+        cursor = cursor[idx];
+        continue;
+      }
+      return (false, null);
+    }
+    return (cursor != null, cursor);
+  }
+
+  static Object? _resolveA2UiBoundValue(
+    Object? raw,
+    Map<String, Object?> dataModel,
+  ) {
+    if (raw is! Map) return raw;
+    if (VibeSealedHandle.tryParse(raw) != null) return raw;
+    final m = _stringifyMap(raw);
+    if (m['path'] is String) {
+      final (found, bound) = _lookupA2UiPath(dataModel, m['path'] as String);
+      if (found) return bound;
+    }
+    if (m.containsKey('literalNumber')) return m['literalNumber'];
+    if (m.containsKey('literalBoolean')) return m['literalBoolean'];
+    if (m.containsKey('literalString')) return m['literalString'];
+    if (m.containsKey('literalArray')) return m['literalArray'];
+    return raw;
+  }
+
+  static Map<String, Object?> _adaptA2UiMessageList(
+    List<dynamic> messages, {
+    Map<String, Object?>? dataModel,
+  }) {
     final merged = <String, Object?>{};
     final allComponents = <Object?>[];
+    final resolvedModel = <String, Object?>{};
     String? rootId;
 
     for (final msg in messages) {
@@ -373,6 +718,12 @@ class VibeUiCompatibilityAdapter {
         }
         if (su['root'] is String) rootId ??= su['root'] as String;
       }
+      if (m['dataModelUpdate'] is Map) {
+        _applyA2UiDataModelUpdate(
+          resolvedModel,
+          _stringifyMap(m['dataModelUpdate'] as Map),
+        );
+      }
       if (m['beginRendering'] is Map) {
         final br = _stringifyMap(m['beginRendering'] as Map);
         if (br['root'] is String) rootId = br['root'] as String;
@@ -383,20 +734,49 @@ class VibeUiCompatibilityAdapter {
       if (m['root'] is String) rootId ??= m['root'] as String;
     }
 
+    if (dataModel != null) {
+      resolvedModel.addAll(dataModel);
+    }
+
     if (allComponents.isEmpty) {
       throw const FormatException('A2UI message list contains no components');
     }
     merged['components'] = allComponents;
     if (rootId != null) merged['root'] = rootId;
-    return _adaptA2Ui(merged);
+    return _adaptA2Ui(merged, dataModel: resolvedModel);
   }
 
-  static Map<String, Object?> _adaptA2Ui(Map<String, Object?> doc) {
+  static Map<String, Object?> _adaptA2Ui(
+    Map<String, Object?> doc, {
+    Map<String, Object?>? dataModel,
+  }) {
     final budget = _NodeBudget();
     final seenIds = <String>{};
+    final resolvedModel = <String, Object?>{};
+    if (doc['dataModel'] is Map) {
+      resolvedModel.addAll(_stringifyMap(doc['dataModel'] as Map));
+    }
+    if (doc['dataModelUpdate'] is Map) {
+      _applyA2UiDataModelUpdate(
+        resolvedModel,
+        _stringifyMap(doc['dataModelUpdate'] as Map),
+      );
+    }
+    if (dataModel != null) {
+      resolvedModel.addAll(dataModel);
+    }
 
-    if (doc.containsKey('component') && doc['components'] is! List && !doc.containsKey('surfaceUpdate')) {
-      return _adaptA2UiNode(doc, <String, Map<String, Object?>>{}, 0, budget, seenIds);
+    if (doc.containsKey('component') &&
+        doc['components'] is! List &&
+        !doc.containsKey('surfaceUpdate')) {
+      return _adaptA2UiNode(
+        doc,
+        <String, Map<String, Object?>>{},
+        0,
+        budget,
+        seenIds,
+        dataModel: resolvedModel,
+      );
     }
 
     Map<String, Object?> source = doc;
@@ -438,6 +818,7 @@ class VibeUiCompatibilityAdapter {
       budget,
       seenIds,
       <String>{},
+      dataModel: resolvedModel,
     );
   }
 
@@ -447,8 +828,9 @@ class VibeUiCompatibilityAdapter {
     int depth,
     _NodeBudget budget,
     Set<String> seenInputIds,
-    Set<String> activePath,
-  ) {
+    Set<String> activePath, {
+    Map<String, Object?> dataModel = const <String, Object?>{},
+  }) {
     if (!activePath.add(id)) {
       throw FormatException('Cycle detected in A2UI component graph at "$id"');
     }
@@ -464,6 +846,7 @@ class VibeUiCompatibilityAdapter {
       budget,
       seenInputIds,
       activePath: activePath,
+      dataModel: dataModel,
     );
     activePath.remove(id);
     return result;
@@ -476,6 +859,7 @@ class VibeUiCompatibilityAdapter {
     _NodeBudget budget,
     Set<String> seenInputIds, {
     Set<String>? activePath,
+    Map<String, Object?> dataModel = const <String, Object?>{},
   }) {
     if (depth > kMaxAdaptedViewDepth) {
       throw const FormatException('A2UI view exceeds maximum depth');
@@ -500,7 +884,7 @@ class VibeUiCompatibilityAdapter {
     }
 
     final lower = compName.toLowerCase();
-    final tone = _validTone(props['tone']);
+    final tone = _validTone(_resolveA2UiBoundValue(props['tone'], dataModel));
 
     List<Map<String, Object?>> resolveChildren() {
       final rawChildren = props['children'];
@@ -518,7 +902,17 @@ class VibeUiCompatibilityAdapter {
       final out = <Map<String, Object?>>[];
       for (final item in list) {
         if (item is String && byId.containsKey(item)) {
-          out.add(_adaptA2UiById(item, byId, depth + 1, budget, seenInputIds, path));
+          out.add(
+            _adaptA2UiById(
+              item,
+              byId,
+              depth + 1,
+              budget,
+              seenInputIds,
+              path,
+              dataModel: dataModel,
+            ),
+          );
         } else if (item is Map) {
           out.add(
             _adaptA2UiNode(
@@ -528,6 +922,7 @@ class VibeUiCompatibilityAdapter {
               budget,
               seenInputIds,
               activePath: path,
+              dataModel: dataModel,
             ),
           );
         }
@@ -540,12 +935,30 @@ class VibeUiCompatibilityAdapter {
         final sealed = VibeSealedHandle.tryParse(raw);
         if (sealed != null) return sealed.toJson();
         final m = _stringifyMap(raw);
-        if (m.containsKey('literalString')) return resolveA2UiText(m['literalString']);
-        if (m.containsKey('literalNumber')) return m['literalNumber']?.toString() ?? '';
-        if (m.containsKey('literalBoolean')) return m['literalBoolean']?.toString() ?? '';
+        if (m['path'] is String) {
+          final (found, bound) =
+              _lookupA2UiPath(dataModel, m['path'] as String);
+          if (found) return _normalizeTextOrSealed(bound);
+        }
+        if (m.containsKey('literalString'))
+          return resolveA2UiText(m['literalString']);
+        if (m.containsKey('literalNumber'))
+          return m['literalNumber']?.toString() ?? '';
+        if (m.containsKey('literalBoolean'))
+          return m['literalBoolean']?.toString() ?? '';
         if (m.containsKey('text')) return resolveA2UiText(m['text']);
       }
       return _normalizeTextOrSealed(raw);
+    }
+
+    num? resolveA2UiNum(Object? raw) {
+      final bound = _resolveA2UiBoundValue(raw, dataModel);
+      if (bound is num && bound.isFinite) return bound;
+      if (bound is String) {
+        final parsed = double.tryParse(bound);
+        if (parsed != null && parsed.isFinite) return parsed;
+      }
+      return null;
     }
 
     switch (lower) {
@@ -574,7 +987,11 @@ class VibeUiCompatibilityAdapter {
       case 'text':
         final hint = props['usageHint']?.toString().toLowerCase() ?? '';
         final textVal = resolveA2UiText(props['text']);
-        if (hint == 'h1' || hint == 'h2' || hint == 'h3' || hint == 'heading' || hint == 'title') {
+        if (hint == 'h1' ||
+            hint == 'h2' ||
+            hint == 'h3' ||
+            hint == 'heading' ||
+            hint == 'title') {
           return <String, Object?>{'type': 'heading', 'text': textVal};
         }
         return <String, Object?>{
@@ -595,25 +1012,30 @@ class VibeUiCompatibilityAdapter {
         };
 
       case 'bar':
-        final maxV = props['max'] is num && (props['max'] as num) > 0
-            ? (props['max'] as num).toDouble()
+        final resolvedMax = resolveA2UiNum(props['max']);
+        final maxV = resolvedMax != null && resolvedMax > 0
+            ? resolvedMax.toDouble()
             : 1.0;
-        final val = props['value'] is num ? (props['value'] as num).toDouble() : 0.0;
+        final resolvedVal = resolveA2UiNum(props['value']);
+        final val = resolvedVal != null ? resolvedVal.toDouble() : 0.0;
         final swatch = props['swatch']?.toString();
         return <String, Object?>{
           'type': 'bar',
           'label': resolveA2UiText(props['label']),
           'value': val,
           'max': maxV,
-          if (props['caption'] != null) 'caption': resolveA2UiText(props['caption']),
+          if (props['caption'] != null)
+            'caption': resolveA2UiText(props['caption']),
           if (tone != null) 'tone': tone,
-          if (swatch != null && _kHexSwatchRegex.hasMatch(swatch)) 'swatch': swatch,
+          if (swatch != null && _kHexSwatchRegex.hasMatch(swatch))
+            'swatch': swatch,
         };
 
       case 'sparkline':
+        final rawVals = _resolveA2UiBoundValue(props['values'], dataModel);
         final vals = <double>[
-          if (props['values'] is List)
-            for (final v in (props['values'] as List).take(240))
+          if (rawVals is List)
+            for (final v in rawVals.take(240))
               if (v is num && v.isFinite) v.toDouble(),
         ];
         return <String, Object?>{
@@ -625,18 +1047,19 @@ class VibeUiCompatibilityAdapter {
       case 'progressbar':
       case 'linearprogress':
       case 'progress':
-        final rawVal = props['value'] ?? props['progress'];
-        final val = rawVal is num && rawVal.isFinite
-            ? rawVal.toDouble().clamp(0.0, 1.0)
-            : 0.0;
+        final resolvedVal = resolveA2UiNum(props['value'] ?? props['progress']);
+        final val =
+            resolvedVal != null ? resolvedVal.toDouble().clamp(0.0, 1.0) : 0.0;
         return <String, Object?>{'type': 'progress', 'value': val};
 
       case 'divider':
         return const <String, Object?>{'type': 'divider'};
 
       case 'table':
-        final rawHeaders = props['headers'] is List ? props['headers'] as List : const [];
-        final rawRows = props['rows'] is List ? props['rows'] as List : const [];
+        final rawHeaders =
+            props['headers'] is List ? props['headers'] as List : const [];
+        final boundRows = _resolveA2UiBoundValue(props['rows'], dataModel);
+        final rawRows = boundRows is List ? boundRows : const [];
         return <String, Object?>{
           'type': 'table',
           'headers': <Object?>[
@@ -647,14 +1070,17 @@ class VibeUiCompatibilityAdapter {
               if (r is List)
                 <Object?>[
                   for (final c in r.take(32))
-                    VibeSealedHandle.tryParse(c)?.toJson() ?? _normalizeCellOrSealed(c),
+                    VibeSealedHandle.tryParse(c)?.toJson() ??
+                        _normalizeCellOrSealed(c),
                 ],
           ],
         };
 
       case 'button':
         var label = props['text'] ?? props['label'] ?? props['title'];
-        if (label == null && props['child'] is String && byId.containsKey(props['child'])) {
+        if (label == null &&
+            props['child'] is String &&
+            byId.containsKey(props['child'])) {
           final childNode = _adaptA2UiById(
             props['child'] as String,
             byId,
@@ -662,6 +1088,7 @@ class VibeUiCompatibilityAdapter {
             budget,
             seenInputIds,
             path,
+            dataModel: dataModel,
           );
           label = childNode['text'];
         }
@@ -674,10 +1101,13 @@ class VibeUiCompatibilityAdapter {
         );
         final args = actionMap['context'] is Map
             ? _stringifyMap(actionMap['context'] as Map)
-            : (props['args'] is Map ? _stringifyMap(props['args'] as Map) : null);
+            : (props['args'] is Map
+                ? _stringifyMap(props['args'] as Map)
+                : null);
         return <String, Object?>{
           'type': 'button',
-          'text': _normalizePlainString(resolveA2UiText(label ?? 'Action'), 256),
+          'text':
+              _normalizePlainString(resolveA2UiText(label ?? 'Action'), 256),
           'command': cmd,
           if (tone != null) 'tone': tone,
           if (args != null) 'args': args,
@@ -690,13 +1120,17 @@ class VibeUiCompatibilityAdapter {
           seenInputIds,
           budget,
         );
-        final fieldType = props['textFieldType']?.toString().toLowerCase() ?? '';
+        final fieldType =
+            props['textFieldType']?.toString().toLowerCase() ?? '';
         return <String, Object?>{
           'type': 'input',
           'id': id,
-          'label': _normalizePlainString(resolveA2UiText(props['label'] ?? 'Input'), 256),
-          if (fieldType == 'obscured' || props['secret'] == true) 'secret': true,
-          if (fieldType == 'longtext' || props['multiline'] == true) 'multiline': true,
+          'label': _normalizePlainString(
+              resolveA2UiText(props['label'] ?? 'Input'), 256),
+          if (fieldType == 'obscured' || props['secret'] == true)
+            'secret': true,
+          if (fieldType == 'longtext' || props['multiline'] == true)
+            'multiline': true,
         };
 
       case 'checkbox':
@@ -705,11 +1139,16 @@ class VibeUiCompatibilityAdapter {
           seenInputIds,
           budget,
         );
+        final boundChecked = _resolveA2UiBoundValue(
+          props['value'] ?? props['checked'],
+          dataModel,
+        );
         return <String, Object?>{
           'type': 'checkbox',
           'id': id,
-          'label': _normalizePlainString(resolveA2UiText(props['label'] ?? 'Option'), 256),
-          if (props['value'] == true || props['checked'] == true) 'checked': true,
+          'label': _normalizePlainString(
+              resolveA2UiText(props['label'] ?? 'Option'), 256),
+          if (boundChecked == true) 'checked': true,
         };
 
       case 'multiplechoice':
@@ -720,13 +1159,15 @@ class VibeUiCompatibilityAdapter {
           seenInputIds,
           budget,
         );
-        final rawOpts = props['options'] is List ? props['options'] as List : const [];
+        final rawOpts =
+            props['options'] is List ? props['options'] as List : const [];
         final options = <Map<String, Object?>>[];
         for (var i = 0; i < rawOpts.length && options.length < 50; i++) {
           final opt = rawOpts[i];
           if (opt is Map) {
             final om = _stringifyMap(opt);
-            final val = om['value']?.toString() ?? om['id']?.toString() ?? 'opt_$i';
+            final val =
+                om['value']?.toString() ?? om['id']?.toString() ?? 'opt_$i';
             final lbl = resolveA2UiText(om['label'] ?? val).toString();
             options.add(<String, Object?>{
               'id': val.isEmpty ? 'opt_$i' : val,
@@ -736,16 +1177,18 @@ class VibeUiCompatibilityAdapter {
           }
         }
         if (options.isEmpty) {
-          options.add(const <String, Object?>{'id': 'opt_0', 'label': 'Option'});
+          options
+              .add(const <String, Object?>{'id': 'opt_0', 'label': 'Option'});
         }
         final maxSel = props['maxAllowedSelections'];
-        final multi = props['multiSelect'] == true ||
-            (maxSel is int && maxSel > 1);
+        final multi =
+            props['multiSelect'] == true || (maxSel is int && maxSel > 1);
         return <String, Object?>{
           'type': 'option_group',
           'id': id,
           if (props['label'] != null)
-            'label': _normalizePlainString(resolveA2UiText(props['label']), 256),
+            'label':
+                _normalizePlainString(resolveA2UiText(props['label']), 256),
           if (multi) 'multiSelect': true,
           'options': options,
         };
@@ -898,7 +1341,8 @@ class VibeUiCompatibilityAdapter {
         };
 
       case 'Table':
-        final rawCols = el['columns'] is List ? el['columns'] as List : const [];
+        final rawCols =
+            el['columns'] is List ? el['columns'] as List : const [];
         final headers = <Object?>[];
         for (var i = 0; i < rawCols.length && headers.length < 32; i++) {
           final c = rawCols[i];
@@ -914,7 +1358,9 @@ class VibeUiCompatibilityAdapter {
           if (r is Map && r['cells'] is List) {
             final rowCells = <Object?>[];
             for (final cell in (r['cells'] as List).take(32)) {
-              if (cell is Map && cell['items'] is List && (cell['items'] as List).isNotEmpty) {
+              if (cell is Map &&
+                  cell['items'] is List &&
+                  (cell['items'] as List).isNotEmpty) {
                 final first = (cell['items'] as List).first;
                 rowCells.add(
                   first is Map
@@ -954,7 +1400,8 @@ class VibeUiCompatibilityAdapter {
         return <String, Object?>{
           'type': 'input',
           'id': id,
-          'label': _normalizePlainString(el['label'] ?? el['placeholder'] ?? id, 256),
+          'label': _normalizePlainString(
+              el['label'] ?? el['placeholder'] ?? id, 256),
           if (style == 'password') 'secret': true,
           if (el['isMultiline'] == true) 'multiline': true,
         };
@@ -970,7 +1417,8 @@ class VibeUiCompatibilityAdapter {
 
       case 'Input.ChoiceSet':
         final id = _claimUniqueId(el['id']?.toString(), seenInputIds, budget);
-        final choices = el['choices'] is List ? el['choices'] as List : const [];
+        final choices =
+            el['choices'] is List ? el['choices'] as List : const [];
         final options = <Map<String, Object?>>[];
         for (var i = 0; i < choices.length && options.length < 50; i++) {
           final ch = choices[i];
@@ -984,12 +1432,14 @@ class VibeUiCompatibilityAdapter {
           }
         }
         if (options.isEmpty) {
-          options.add(const <String, Object?>{'id': 'opt_0', 'label': 'Option'});
+          options
+              .add(const <String, Object?>{'id': 'opt_0', 'label': 'Option'});
         }
         return <String, Object?>{
           'type': 'option_group',
           'id': id,
-          if (el['label'] != null) 'label': _normalizePlainString(el['label'], 256),
+          if (el['label'] != null)
+            'label': _normalizePlainString(el['label'], 256),
           if (el['isMultiSelect'] == true) 'multiSelect': true,
           'options': options,
         };
@@ -1057,7 +1507,9 @@ class VibeUiCompatibilityAdapter {
     final budget = _NodeBudget();
     budget.consume();
     final cleaned = markdown
-        .replaceAll(RegExp(r'<script\b[^>]*>[\s\S]*?</script>', caseSensitive: false), '')
+        .replaceAll(
+            RegExp(r'<script\b[^>]*>[\s\S]*?</script>', caseSensitive: false),
+            '')
         .trim();
     if (cleaned.isEmpty) {
       return const <String, Object?>{
@@ -1215,10 +1667,20 @@ class VibeUiCompatibilityAdapter {
 
 class _NodeBudget {
   int count = 0;
+  int canvasCommands = 0;
 
   void consume() {
     if (++count > kMaxAdaptedViewNodes) {
       throw const FormatException('Extension view limit exceeded (nodes)');
+    }
+  }
+
+  void consumeCanvasCommands(int n) {
+    canvasCommands += n;
+    if (canvasCommands > kMaxVibeCanvasCommands) {
+      throw FormatException(
+        'Canvas exceeds $kMaxVibeCanvasCommands commands limit ($canvasCommands)',
+      );
     }
   }
 }
@@ -1247,6 +1709,9 @@ class VibeResolvedNode {
     this.maxValue,
     this.swatch,
     this.values = const <double>[],
+    this.canvasWidth,
+    this.canvasHeight,
+    this.canvasCommands = const <Map<String, Object?>>[],
     this.headers = const <String>[],
     this.rows = const <List<String>>[],
     this.command,
@@ -1276,6 +1741,9 @@ class VibeResolvedNode {
   final double? maxValue;
   final String? swatch;
   final List<double> values;
+  final double? canvasWidth;
+  final double? canvasHeight;
+  final List<Map<String, Object?>> canvasCommands;
   final List<String> headers;
   final List<List<String>> rows;
   final String? command;
@@ -1299,6 +1767,9 @@ class VibeResolvedNode {
         if (maxValue != null) 'maxValue': maxValue,
         if (swatch != null) 'swatch': swatch,
         if (values.isNotEmpty) 'values': values,
+        if (canvasWidth != null) 'width': canvasWidth,
+        if (canvasHeight != null) 'height': canvasHeight,
+        if (canvasCommands.isNotEmpty) 'commands': canvasCommands,
         if (headers.isNotEmpty) 'headers': headers,
         if (rows.isNotEmpty) 'rows': rows,
         if (command != null) 'command': command,
@@ -1350,7 +1821,8 @@ VibeResolvedNode _resolveNode(
     case 'column':
     case 'row':
     case 'card':
-      final rawChildren = node['children'] is List ? node['children'] as List : const [];
+      final rawChildren =
+          node['children'] is List ? node['children'] as List : const [];
       return VibeResolvedNode(
         type: type,
         tone: tone,
@@ -1429,8 +1901,37 @@ VibeResolvedNode _resolveNode(
         tone: tone,
       );
 
+    case 'canvas':
+      final altSlot = _resolveSlot(node['alt'] ?? node['label'], resolveSealed);
+      var anyCmdSealed = altSlot.resolved;
+      final resolvedCmds = <Map<String, Object?>>[];
+      if (node['commands'] is List) {
+        for (final rawCmd in node['commands'] as List) {
+          if (rawCmd is! Map) continue;
+          final cm = rawCmd.map((k, v) => MapEntry(k.toString(), v));
+          if (cm.containsKey('text')) {
+            final ts = _resolveSlot(cm['text'], resolveSealed);
+            cm['text'] = ts.text;
+            if (ts.resolved) anyCmdSealed = true;
+          }
+          resolvedCmds.add(cm);
+        }
+      }
+      return VibeResolvedNode(
+        type: 'canvas',
+        label: altSlot.text.isEmpty ? null : altSlot.text,
+        labelSealed: altSlot.resolved,
+        sealedResolved: anyCmdSealed,
+        canvasWidth: (node['width'] as num?)?.toDouble() ?? 240.0,
+        canvasHeight: (node['height'] as num?)?.toDouble() ?? 64.0,
+        canvasCommands: resolvedCmds,
+        command: node['command']?.toString(),
+        tone: tone,
+      );
+
     case 'table':
-      final rawHeaders = node['headers'] is List ? node['headers'] as List : const [];
+      final rawHeaders =
+          node['headers'] is List ? node['headers'] as List : const [];
       final headers = <String>[];
       final hSealed = <bool>[];
       var anySealed = false;
@@ -1499,7 +2000,8 @@ VibeResolvedNode _resolveNode(
       );
 
     case 'option_group':
-      final rawOpts = node['options'] is List ? node['options'] as List : const [];
+      final rawOpts =
+          node['options'] is List ? node['options'] as List : const [];
       return VibeResolvedNode(
         type: 'option_group',
         id: node['id']?.toString(),
@@ -1574,7 +2076,9 @@ class VibeTerminalRenderer {
         final rowParts = <String>[];
         for (final child in node.children) {
           final sub = <String>[];
-          _renderNode(child, sub, ansi: ansi, width: max(20, width ~/ max(1, node.children.length)));
+          _renderNode(child, sub,
+              ansi: ansi,
+              width: max(20, width ~/ max(1, node.children.length)));
           if (sub.isNotEmpty) rowParts.add(sub.join(' '));
         }
         if (rowParts.isNotEmpty) {
@@ -1629,10 +2133,49 @@ class VibeTerminalRenderer {
           for (final v in node.values) {
             final idx = span == 0
                 ? 3
-                : (((v - minV) / span) * (_sparkChars.length - 1)).round().clamp(0, _sparkChars.length - 1);
+                : (((v - minV) / span) * (_sparkChars.length - 1))
+                    .round()
+                    .clamp(0, _sparkChars.length - 1);
             buf.write(_sparkChars[idx]);
           }
           lines.add(_colorize(buf.toString(), node.tone, ansi));
+        }
+      case 'canvas':
+        final header = node.label != null
+            ? '${_withLock(node.label!, node.labelSealed)}: '
+            : '';
+        final barVals = <double>[];
+        final textItems = <String>[];
+        for (final cmd in node.canvasCommands) {
+          if (cmd['op'] == 'bars' && cmd['values'] is List) {
+            for (final v in cmd['values'] as List) {
+              if (v is num && v.isFinite) barVals.add(v.toDouble());
+            }
+          } else if (cmd['op'] == 'text' && cmd['text'] is String) {
+            final t = (cmd['text'] as String).trim();
+            if (t.isNotEmpty) textItems.add(t);
+          }
+        }
+        if (barVals.isNotEmpty) {
+          final minV = barVals.reduce(min);
+          final maxV = barVals.reduce(max);
+          final span = maxV - minV;
+          final spark = barVals
+              .map(
+                (v) => _sparkChars[span == 0
+                    ? 3
+                    : (((v - minV) / span) * (_sparkChars.length - 1))
+                        .round()
+                        .clamp(0, _sparkChars.length - 1)],
+              )
+              .join();
+          final suffix = textItems.isNotEmpty ? ' ${textItems.join(' ')}' : '';
+          lines.add('$header${_colorize(spark, node.tone, ansi)}$suffix');
+        } else {
+          final summary = textItems.isNotEmpty
+              ? textItems.join(' · ')
+              : '[canvas ${(node.canvasWidth ?? 240).round()}x${(node.canvasHeight ?? 64).round()}]';
+          lines.add('$header${_colorize(summary, node.tone, ansi)}');
         }
       case 'table':
         final colCount = node.headers.length;
@@ -1640,7 +2183,8 @@ class VibeTerminalRenderer {
         final widths = List<int>.filled(colCount, 3);
         final formattedHeaders = <String>[
           for (var c = 0; c < colCount; c++)
-            _withLock(node.headers[c], c < node.headerSealed.length && node.headerSealed[c]),
+            _withLock(node.headers[c],
+                c < node.headerSealed.length && node.headerSealed[c]),
         ];
         for (var c = 0; c < colCount; c++) {
           widths[c] = max(widths[c], formattedHeaders[c].length);
@@ -1648,7 +2192,8 @@ class VibeTerminalRenderer {
         final formattedRows = <List<String>>[];
         for (var r = 0; r < node.rows.length; r++) {
           final row = node.rows[r];
-          final rowSealed = r < node.cellSealed.length ? node.cellSealed[r] : const <bool>[];
+          final rowSealed =
+              r < node.cellSealed.length ? node.cellSealed[r] : const <bool>[];
           final cells = <String>[];
           for (var c = 0; c < colCount; c++) {
             final raw = c < row.length ? row[c] : '';
@@ -1659,8 +2204,11 @@ class VibeTerminalRenderer {
           }
           formattedRows.add(cells);
         }
-        String formatRow(List<String> cells) =>
-            cells.asMap().entries.map((e) => e.value.padRight(widths[e.key])).join(' | ');
+        String formatRow(List<String> cells) => cells
+            .asMap()
+            .entries
+            .map((e) => e.value.padRight(widths[e.key]))
+            .join(' | ');
         lines.add(formatRow(formattedHeaders));
         lines.add(widths.map((w) => '─' * w).join('─┼─'));
         for (final r in formattedRows) {
@@ -1674,7 +2222,8 @@ class VibeTerminalRenderer {
       case 'input':
         lines.add('${node.label ?? 'Input'}: [________]');
       case 'checkbox':
-        lines.add('${node.checked == true ? '[x]' : '[ ]'} ${node.label ?? ''}');
+        lines
+            .add('${node.checked == true ? '[x]' : '[ ]'} ${node.label ?? ''}');
       case 'option_group':
         if (node.label != null && node.label!.isNotEmpty) {
           lines.add('${node.label}:');
@@ -1735,7 +2284,8 @@ class VibeMarkdownRenderer {
       case 'bar':
       case 'progress':
         final maxV = (node.maxValue ?? 1.0) > 0 ? node.maxValue! : 1.0;
-        final pct = (((node.numValue ?? 0.0) / maxV).clamp(0.0, 1.0) * 100).round();
+        final pct =
+            (((node.numValue ?? 0.0) / maxV).clamp(0.0, 1.0) * 100).round();
         final capText = _withLock(node.caption ?? '', node.captionSealed);
         final cap = capText.isNotEmpty ? ' ($capText)' : '';
         final barLabel = _withLock(node.label ?? 'Progress', node.labelSealed);
@@ -1743,6 +2293,13 @@ class VibeMarkdownRenderer {
       case 'sparkline':
         final pts = node.values.map((v) => v.toStringAsFixed(2)).join(', ');
         lines.add('`[$pts]`');
+      case 'canvas':
+        final lbl = node.label != null
+            ? _withLock(node.label!, node.labelSealed)
+            : 'Canvas';
+        lines.add(
+          '- **$lbl:** `[canvas ${(node.canvasWidth ?? 240).round()}x${(node.canvasHeight ?? 64).round()}, ${node.canvasCommands.length} cmds]`',
+        );
       case 'table':
         if (node.headers.isEmpty) break;
         final hdrs = <String>[
@@ -1756,12 +2313,12 @@ class VibeMarkdownRenderer {
         lines.add('| ${hdrs.map((_) => '---').join(' | ')} |');
         for (var rIdx = 0; rIdx < node.rows.length; rIdx++) {
           final r = node.rows[rIdx];
-          final cs = rIdx < node.cellSealed.length ? node.cellSealed[rIdx] : const <bool>[];
+          final cs = rIdx < node.cellSealed.length
+              ? node.cellSealed[rIdx]
+              : const <bool>[];
           final cells = <String>[
             for (var i = 0; i < hdrs.length; i++)
-              i < r.length
-                  ? _withLock(r[i], i < cs.length && cs[i])
-                  : '',
+              i < r.length ? _withLock(r[i], i < cs.length && cs[i]) : '',
           ];
           lines.add('| ${cells.join(' | ')} |');
         }
@@ -1773,7 +2330,8 @@ class VibeMarkdownRenderer {
       case 'input':
         lines.add('- **${node.label ?? 'Input'}:** `...`');
       case 'checkbox':
-        lines.add('- [${node.checked == true ? 'x' : ' '}] ${node.label ?? ''}');
+        lines
+            .add('- [${node.checked == true ? 'x' : ' '}] ${node.label ?? ''}');
       case 'option_group':
         if (node.label != null && node.label!.isNotEmpty) {
           lines.add('**${node.label}**');
@@ -2148,8 +2706,7 @@ class VibeStrings {
           previewSampleLabel: 'Aperçu fictif',
           returnToLiveLabel: 'Revenir au direct',
           portableGalleryTitle: 'Vibes portables',
-          portableGallerySubtitle:
-              'Aucune donnée requise, fonctionne partout.',
+          portableGallerySubtitle: 'Aucune donnée requise, fonctionne partout.',
           addLabel: 'Ajouter',
         ),
       'de' => const VibeStrings(
@@ -2252,7 +2809,8 @@ class VibeStrings {
           previewSampleLabel: 'معاينة عينة',
           returnToLiveLabel: 'العودة للبيانات الحية',
           portableGalleryTitle: 'برامج محمولة',
-          portableGallerySubtitle: 'لا تحتاج لصلاحيات التطبيق وتعمل في أي مكان.',
+          portableGallerySubtitle:
+              'لا تحتاج لصلاحيات التطبيق وتعمل في أي مكان.',
           addLabel: 'إضافة',
         ),
       _ => const VibeStrings.en(),
@@ -2276,18 +2834,21 @@ class VibeStrings {
       updateLabel: overrides['updateLabel'] ?? base.updateLabel,
       cancelLabel: overrides['cancelLabel'] ?? base.cancelLabel,
       installedHeading: overrides['installedHeading'] ?? base.installedHeading,
-      filterPlaceholder: overrides['filterPlaceholder'] ?? base.filterPlaceholder,
+      filterPlaceholder:
+          overrides['filterPlaceholder'] ?? base.filterPlaceholder,
       emptyInstalled: overrides['emptyInstalled'] ?? base.emptyInstalled,
       sealedLegend: overrides['sealedLegend'] ?? base.sealedLegend,
       temporaryBadge: overrides['temporaryBadge'] ?? base.temporaryBadge,
       pinnedBadge: overrides['pinnedBadge'] ?? base.pinnedBadge,
       pausedBadge: overrides['pausedBadge'] ?? base.pausedBadge,
       sampleDataBadge: overrides['sampleDataBadge'] ?? base.sampleDataBadge,
-      sourceOfflineBadge: overrides['sourceOfflineBadge'] ?? base.sourceOfflineBadge,
+      sourceOfflineBadge:
+          overrides['sourceOfflineBadge'] ?? base.sourceOfflineBadge,
       sourceUnavailableBadge:
           overrides['sourceUnavailableBadge'] ?? base.sourceUnavailableBadge,
       pinToVibeSpace: overrides['pinToVibeSpace'] ?? base.pinToVibeSpace,
-      pinnedToVibeSpace: overrides['pinnedToVibeSpace'] ?? base.pinnedToVibeSpace,
+      pinnedToVibeSpace:
+          overrides['pinnedToVibeSpace'] ?? base.pinnedToVibeSpace,
       madeByAgent: overrides['madeByAgent'] ?? base.madeByAgent,
       inspectLabel: overrides['inspectLabel'] ?? base.inspectLabel,
       hideInspectLabel: overrides['hideInspectLabel'] ?? base.hideInspectLabel,
@@ -2304,8 +2865,10 @@ class VibeStrings {
       deleteLabel: overrides['deleteLabel'] ?? base.deleteLabel,
       undoLabel: overrides['undoLabel'] ?? base.undoLabel,
       retryLabel: overrides['retryLabel'] ?? base.retryLabel,
-      previewSampleLabel: overrides['previewSampleLabel'] ?? base.previewSampleLabel,
-      returnToLiveLabel: overrides['returnToLiveLabel'] ?? base.returnToLiveLabel,
+      previewSampleLabel:
+          overrides['previewSampleLabel'] ?? base.previewSampleLabel,
+      returnToLiveLabel:
+          overrides['returnToLiveLabel'] ?? base.returnToLiveLabel,
       portableGalleryTitle:
           overrides['portableGalleryTitle'] ?? base.portableGalleryTitle,
       portableGallerySubtitle:

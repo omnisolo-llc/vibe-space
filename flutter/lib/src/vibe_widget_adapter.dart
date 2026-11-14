@@ -108,6 +108,15 @@ typedef VibeSealedTextBuilder = Widget Function(
   TextStyle? style,
 );
 
+typedef VibeNodeCanvasBuilder = Widget Function(
+  BuildContext context,
+  Map<String, dynamic> node,
+  double width,
+  double height,
+  List<Map<String, dynamic>> commands,
+  VoidCallback? onTap,
+);
+
 /// Compatibility adapter allowing [VibeView] and [VibeCanvasView] to render
 /// through Material, Cupertino, or custom host design-system widgets while
 /// preserving VibeProtocol validation and sealed-handle isolation.
@@ -128,7 +137,8 @@ class VibeWidgetAdapter {
         inputBuilder = null,
         checkboxBuilder = null,
         optionGroupBuilder = null,
-        sealedTextBuilder = null;
+        sealedTextBuilder = null,
+        canvasBuilder = null;
 
   const VibeWidgetAdapter.cupertino()
       : kit = VibeWidgetKit.cupertino,
@@ -145,7 +155,8 @@ class VibeWidgetAdapter {
         inputBuilder = null,
         checkboxBuilder = null,
         optionGroupBuilder = null,
-        sealedTextBuilder = null;
+        sealedTextBuilder = null,
+        canvasBuilder = null;
 
   const VibeWidgetAdapter.custom({
     this.fallbackKit = VibeWidgetKit.material,
@@ -162,6 +173,7 @@ class VibeWidgetAdapter {
     this.checkboxBuilder,
     this.optionGroupBuilder,
     this.sealedTextBuilder,
+    this.canvasBuilder,
   }) : kit = VibeWidgetKit.custom;
 
   final VibeWidgetKit kit;
@@ -179,6 +191,7 @@ class VibeWidgetAdapter {
   final VibeNodeCheckboxBuilder? checkboxBuilder;
   final VibeNodeOptionGroupBuilder? optionGroupBuilder;
   final VibeSealedTextBuilder? sealedTextBuilder;
+  final VibeNodeCanvasBuilder? canvasBuilder;
 
   /// Returns whether Cupertino primitives should be used when no custom builder
   /// overrides a node.
@@ -257,6 +270,7 @@ class VibeWidgetAdapterScope extends InheritedWidget {
 
   @override
   bool updateShouldNotify(VibeWidgetAdapterScope oldWidget) {
-    return !identical(adapter, oldWidget.adapter) && adapter != oldWidget.adapter;
+    return !identical(adapter, oldWidget.adapter) &&
+        adapter != oldWidget.adapter;
   }
 }
