@@ -44,7 +44,7 @@ See [VibeProtocol Contract](docs/vibeprotocol.md), [Compatibility Adapters](docs
 
 Vibe Space supports every major guest language, UI toolkit, and human language behind the same capability and sealed-handle trust boundary:
 
-- **All guest & host languages**: Primary `vibe_alloc` / `vibe_invoke` Wasm exports (alongside `omni_` / `leap_` / `leapterm_` aliases) work from Rust, C/C++, TinyGo, Zig, AssemblyScript, and other import-free `wasm32` toolchains; host kits and adapters ship in **Rust** (`runtime`), **TypeScript / JavaScript** (`sdk/typescript/adapters.mjs`, `demo/kit`), and **Dart / Flutter** (`dart`, `flutter`).
+- **All guest & host languages**: Primary `vibe_alloc` / `vibe_invoke` Wasm exports (with optional host-configured fallback entrypoint prefixes) work from Rust, C/C++, TinyGo, Zig, AssemblyScript, and other import-free `wasm32` toolchains; host kits and adapters ship in **Rust** (`runtime`), **TypeScript / JavaScript** (`sdk/typescript/adapters.mjs`, `demo/kit`), and **Dart / Flutter** (`dart`, `flutter`).
 - **Inbound UI dialect adapters**: `adaptExternalUi` / `VibeUiCompatibilityAdapter.adapt` / `adapt_external_ui` convert **A2UI** (`surfaceUpdate` adjacency lists & nested components), **Adaptive Cards**, and **Markdown** into validated canonical `VibeView` trees while preserving `{ "sealed": "h_..." }` handles.
 - **Outbound UI toolkit adapters**:
   - **React, Preact, Vue 3, Solid, SSR**: `renderWithH(h, view, opts)` (zero `document` dependency).

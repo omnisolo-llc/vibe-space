@@ -58,11 +58,30 @@ void main() {
     );
     expect(
       () => VibeEffectBatch([
-        {...effect(), 'capability': 'terminal_read'},
+        {...effect(), 'capability': 'network'},
       ]),
       throwsStateError,
     );
     expect(() => VibeEffectBatch([effect(), effect()]), throwsFormatException);
+  });
+  test('VibeHostPolicy allows registering custom capabilities and methods', () {
+    final policy = VibeHostPolicy.standard.extend(
+      extraMethodCapabilities: const {'clipboard.read': 'clipboard_read'},
+    );
+    expect(validCapability('network'), isTrue);
+    expect(validCapability('clipboard_read'), isFalse);
+    expect(validCapability('clipboard_read', policy: policy), isTrue);
+
+    final clipEffect = <String, dynamic>{
+      'id': 'clip-1',
+      'method': 'clipboard.read',
+      'capability': 'clipboard_read',
+      'arguments': <String, dynamic>{},
+    };
+    expect(() => effectCapability(clipEffect), throwsUnsupportedError);
+    expect(effectCapability(clipEffect, policy: policy), 'clipboard_read');
+    final batch = VibeEffectBatch([clipEffect], policy: policy);
+    expect(batch.effects.single['capability'], 'clipboard_read');
   });
   test(
     'unregistered APIs, forged grants and missing approval never dispatch',
