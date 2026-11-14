@@ -1144,6 +1144,13 @@ pub fn default_package_directory(home: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+pub(crate) fn test_wasm_exec_guard() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_dalek::{Signer, SigningKey};
@@ -1250,6 +1257,7 @@ mod tests {
     }
     #[test]
     fn wasm_has_no_ambient_io_and_is_fuel_bounded() {
+        let _exec_guard = test_wasm_exec_guard();
         let import = br#"(module (import "wasi_snapshot_preview1" "fd_write" (func)))"#;
         assert!(matches!(execute(import, b"{}"), Err(Error::Permission)));
         let endless = br#"(module (memory (export "memory") 1)
@@ -1260,6 +1268,7 @@ mod tests {
     }
     #[test]
     fn validates_output_memory_and_runs_downloaded_code() {
+        let _exec_guard = test_wasm_exec_guard();
         let wasm =
             br#"(module (memory (export "memory") 1) (data (i32.const 32) "{\"view\":\"hello\"}")
             (func (export "vibe_alloc") (param i32) (result i32) i32.const 1024)
@@ -1466,6 +1475,7 @@ mod tests {
     #[test]
     fn invoke_returns_structured_confirmation_required_and_validates_opaque_credentials_and_ui_resources()
      {
+        let _exec_guard = test_wasm_exec_guard();
         let directory = tempfile::tempdir().unwrap();
         let store = PackageStore::new(directory.path());
         let key = SigningKey::from_bytes(&[63; 32]);
@@ -1548,6 +1558,7 @@ mod tests {
         use std::hint::black_box;
         use std::time::Instant;
 
+        let _exec_guard = test_wasm_exec_guard();
         let default_policy = HostPolicy::default();
         assert!(default_policy.is_supported_capability("network"));
         assert!(!default_policy.is_supported_capability("clipboard_read"));
@@ -1875,6 +1886,7 @@ mod tests {
     }
     #[test]
     fn activation_revision_never_revives_old_invocations() {
+        let _exec_guard = test_wasm_exec_guard();
         let dir = tempfile::tempdir().unwrap();
         let store = PackageStore::new(dir.path());
         let key = SigningKey::from_bytes(&[38; 32]);
@@ -1914,6 +1926,7 @@ mod tests {
 
     #[test]
     fn compile_and_instance_resources_are_bounded() {
+        let _exec_guard = test_wasm_exec_guard();
         let oversized_type = format!("(module (func (param {})))", "i32 ".repeat(33));
         assert!(matches!(
             execute(oversized_type.as_bytes(), b"{}"),
@@ -1970,6 +1983,7 @@ mod tests {
 
     #[test]
     fn host_policy_supports_custom_capabilities_ui_prefixes_and_entrypoints() {
+        let _exec_guard = test_wasm_exec_guard();
         let policy = HostPolicy::default()
             .with_method("clipboard.read", "clipboard_read", true)
             .with_method("clipboard.write", "clipboard_write", false)

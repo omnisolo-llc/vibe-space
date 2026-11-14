@@ -86,7 +86,15 @@ test('validateManifest validates contribution when triggers and hydrateVibeTempl
       when: {program: 'agy', env: {TMUX: {exists: true}}},
     }],
   };
-  assert.equal(validateManifest(base).contributions[0].when.program, 'agy');
+  assert.throws(() => validateManifest(base));
+  assert.equal(
+    validateManifest({...base, capabilities: ['api:host.ui']}).contributions[0].when.program,
+    'agy'
+  );
+  assert.equal(
+    validateManifest(base, {capabilities: ['terminal_read']}).contributions[0].when.program,
+    'agy'
+  );
   assert.throws(() => validateTriggerCondition({program: {regex: '[unclosed'}}));
   assert.equal(
     hydrateVibeTemplate('Branch: {{gitBranch}}', {context: {gitBranch: 'feat/<x>'}}, {escapeHtml: true}),
