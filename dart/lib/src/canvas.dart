@@ -224,52 +224,28 @@ typedef VibeCanvasMcpReadHandler = Future<VibeCanvasMcpReadResponse> Function(
   VibeCanvasMcpReadRequest request,
 );
 
-/// Allowed read-only MCP tools callable from inside a Vibe Canvas object,
-/// including canonical ChatGPT/Claude MCP tool names and backward-compatible aliases.
-const Set<String> kAllowedReadOnlyCanvasMcpTools = <String>{
-  'host_process_list',
-  'runner_info',
-  'runner_ping',
-  'runner_usage',
-  'server.network.sockets',
-  'ssh_resource',
-  'server.telemetry.snapshot',
-  'server.process.inspect',
-  'mcp.ssh.exec_readonly',
-  'mcp.server.metrics',
-  'mcp.server.network_bandwidth',
-  'mcp.server.processes',
-  'client.canvas.read_metrics',
-  'list_devices',
-  'list_runners',
-  'list_projects',
-  'runtime_status',
-  'list_tools',
-  'tool_manifest',
-  'project_overview',
-  'list_project_files',
-  'read_files',
-  'search_project_texts',
-  'git_status',
-  'git_diff_hunks',
-  'git_log',
-  'list_jobs',
-  'observe_jobs',
-  'job_tail',
-  'session_shell_status',
-};
-
-/// Returns `true` if [toolName] is on the strict read-only MCP allowlist
-/// evaluated by [VibeMcpToolCatalog] under [condition] (defaults to
+/// Returns `true` if [toolName] is permitted as a read-only MCP tool under
+/// [allowedTools] or [catalog] (defaults to [VibeMcpToolCatalog.instance])
+/// evaluated with [condition] (defaults to
 /// [VibeMcpSelectionCondition.canvasReadOnly]).
 bool isReadOnlyCanvasMcpTool(
   String toolName, {
+  VibeMcpToolCatalog? catalog,
+  Set<String>? allowedTools,
   VibeMcpSelectionCondition? condition,
 }) {
-  return VibeMcpToolCatalog.instance.isAllowed(
-    toolName,
-    condition: condition ?? VibeMcpSelectionCondition.canvasReadOnly(),
-  );
+  final targetCatalog = catalog ?? VibeMcpToolCatalog.instance;
+  final effectiveCondition =
+      condition ?? VibeMcpSelectionCondition.canvasReadOnly();
+  final descriptor = targetCatalog.find(toolName);
+  if (descriptor != null) {
+    return effectiveCondition.allows(descriptor);
+  }
+  if (allowedTools != null) {
+    final normalized = toolName.trim().toLowerCase();
+    return allowedTools.any((t) => t.trim().toLowerCase() == normalized);
+  }
+  return false;
 }
 
 const Set<String> _kAllowedReadOnlySingleBinaries = <String>{

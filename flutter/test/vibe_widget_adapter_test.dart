@@ -15,7 +15,7 @@ void main() {
 
         final host = VibeProtocolHost(
           id: 'ios-host',
-          name: 'LeapTerm iOS',
+          name: 'Example iOS',
           capabilities: <VibeCapability>[
             VibeCapability(
               name: 'servers',
@@ -323,7 +323,7 @@ void main() {
 
         final host = VibeProtocolHost(
           id: 'i18n-host',
-          name: 'LeapTerm',
+          name: 'Example Host',
           capabilities: <VibeCapability>[
             VibeCapability(
               name: 'telemetry.disk',

@@ -5,7 +5,7 @@
   "name": "Hello Vibe Space (Rust)",
   "license": "MIT",
   "capabilities": [
-    "api:leapterm.ui"
+    "api:host.ui"
   ],
   "network_origins": [],
   "contributions": [
