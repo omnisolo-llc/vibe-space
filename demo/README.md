@@ -22,7 +22,7 @@ No build step, `npm install`, or external network access is needed.
 ### Option 1: Local HTTP server
 
 ```bash
-cd core/framework/demo
+cd demo
 python3 -m http.server 8765
 ```
 
@@ -30,7 +30,7 @@ Then open <http://localhost:8765/> in a modern browser.
 
 ### Option 2: Directly from disk (`file://`)
 
-Open `core/framework/demo/index.html` (or either app's `index.html`) directly in your browser. All scripts are classic `<script src>` tags with no ES module imports or external assets.
+Open `demo/index.html` (or either app's `index.html`) directly in your browser. All scripts are classic `<script src>` tags with no ES module imports or external assets.
 
 ## What Is Real, Scripted, and a Stand-In
 

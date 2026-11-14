@@ -1489,6 +1489,7 @@ mod tests {
 
     #[test]
     fn wasm_vibe_alloc_and_vibe_invoke_exports_execute_cleanly() {
+        let _exec_guard = crate::test_wasm_exec_guard();
         let wat = r#"(module
             (memory (export "memory") 1)
             (data (i32.const 64) "{\"ok\":true,\"abi\":\"vibe\"}")
