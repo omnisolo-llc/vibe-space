@@ -14,7 +14,7 @@ void main() {
           'prefix': 'AGY',
           'caseSensitive': false
         },
-        'cwd': '*/leapterm*',
+        'cwd': '*/example-project*',
         'env': <String, Object?>{
           'TMUX': <String, Object?>{'exists': true},
         },
@@ -36,7 +36,7 @@ void main() {
         'surface': 'terminal',
         'window': 'dev-pane-1',
         'windowTitle': 'agy · session',
-        'cwd': '/workspace/leapterm/app',
+        'cwd': '/workspace/example-project/app',
         'env': <String, Object?>{'TMUX': '/tmp/tmux-1000/default,123,0'},
         'context': <String, Object?>{
           'inTmux': true,

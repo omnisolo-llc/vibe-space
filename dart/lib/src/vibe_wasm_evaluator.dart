@@ -183,6 +183,7 @@ class VibeWasmEvaluator {
   static FutureOr<Map<String, Object?>> evaluateRaw(
     Uint8List wasmBytes,
     Map<String, Object?> input, {
+    List<String> entrypointPrefixes = const <String>['vibe'],
     FutureOr<Map<String, Object?>> Function(
       Uint8List wasmBytes,
       Map<String, Object?> input,
@@ -192,7 +193,11 @@ class VibeWasmEvaluator {
     if (customRunner != null) {
       return customRunner(wasmBytes, input);
     }
-    return _interpretWasmGuest(wasmBytes, input);
+    return _interpretWasmGuest(
+      wasmBytes,
+      input,
+      entrypointPrefixes: entrypointPrefixes,
+    );
   }
 
   /// Executes [wasmBytes] and adapts any returned `view` / `a2ui` / `markdown`
@@ -200,13 +205,19 @@ class VibeWasmEvaluator {
   static FutureOr<Map<String, Object?>> evaluate(
     Uint8List wasmBytes,
     Map<String, Object?> input, {
+    List<String> entrypointPrefixes = const <String>['vibe'],
     FutureOr<Map<String, Object?>> Function(
       Uint8List wasmBytes,
       Map<String, Object?> input,
     )? customRunner,
     Map<String, Object?>? dataModel,
   }) {
-    final res = evaluateRaw(wasmBytes, input, customRunner: customRunner);
+    final res = evaluateRaw(
+      wasmBytes,
+      input,
+      entrypointPrefixes: entrypointPrefixes,
+      customRunner: customRunner,
+    );
     if (res is Future<Map<String, Object?>>) {
       return res.then((out) => _normalizeWasmOutput(out, dataModel));
     }
@@ -246,8 +257,9 @@ class VibeWasmEvaluator {
 
   static Map<String, Object?> _interpretWasmGuest(
     Uint8List bytes,
-    Map<String, Object?> input,
-  ) {
+    Map<String, Object?> input, {
+    List<String> entrypointPrefixes = const <String>['vibe'],
+  }) {
     final types = <({int params, int results})>[];
     final funcTypeIndices = <int>[];
     final globals = <BigInt>[];
@@ -339,15 +351,20 @@ class VibeWasmEvaluator {
       reader.offset = end;
     }
 
+    final prefixes = entrypointPrefixes.isEmpty
+        ? const <String>['vibe']
+        : entrypointPrefixes;
     final memExp = exports['memory'];
-    final allocExp = exports['vibe_alloc'] ??
-        exports['leap_alloc'] ??
-        exports['leapterm_alloc'] ??
-        exports['omni_alloc'];
-    final invokeExp = exports['vibe_invoke'] ??
-        exports['leap_invoke'] ??
-        exports['leapterm_invoke'] ??
-        exports['omni_invoke'];
+    ({int kind, int index})? findEntrypoint(String suffix) {
+      for (final prefix in prefixes) {
+        final exp = exports['${prefix}_$suffix'];
+        if (exp != null) return exp;
+      }
+      return exports['vibe_$suffix'];
+    }
+
+    final allocExp = findEntrypoint('alloc');
+    final invokeExp = findEntrypoint('invoke');
     if (memExp == null ||
         memExp.kind != 2 ||
         allocExp == null ||

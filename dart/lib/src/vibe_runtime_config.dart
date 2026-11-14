@@ -176,6 +176,7 @@ String buildVibeSpaceDomHtml({
   List<String> needs = const <String>[],
   Map<String, Object?> initialData = const <String, Object?>{},
   VibeTriggerContext initialContext = const VibeTriggerContext(),
+  List<String> entrypointPrefixes = const <String>['vibe'],
   String? wasmBase64,
   String? jsGlue,
   String? actionToken,
@@ -202,6 +203,10 @@ String buildVibeSpaceDomHtml({
     (actionToken != null && actionToken.trim().isNotEmpty)
         ? actionToken.trim()
         : _randomActionToken(),
+  );
+
+  final prefixesJson = escapeJsonForHtmlScript(
+    entrypointPrefixes.isEmpty ? const <String>['vibe'] : entrypointPrefixes,
   );
 
   final wasmBootstrap = cleanWasmB64.isNotEmpty
@@ -267,11 +272,20 @@ String buildVibeSpaceDomHtml({
   let _context = $ctxJson;
   const _subscribers = new Set();
 
+  const _entrypointPrefixes = $prefixesJson;
+  function findWasmEntrypoint(e, suffix) {
+    for (const prefix of _entrypointPrefixes) {
+      const fn = e[prefix + '_' + suffix];
+      if (typeof fn === 'function') return fn;
+    }
+    return typeof e['vibe_' + suffix] === 'function' ? e['vibe_' + suffix] : null;
+  }
+
   function invokeWasmGuest(command) {
     const e = window.vibeWasmExports;
     if (!e) return null;
-    const alloc = e.vibe_alloc || e.leap_alloc || e.leapterm_alloc || e.omni_alloc;
-    const invoke = e.vibe_invoke || e.leap_invoke || e.leapterm_invoke || e.omni_invoke;
+    const alloc = findWasmEntrypoint(e, 'alloc');
+    const invoke = findWasmEntrypoint(e, 'invoke');
     if (!e.memory || typeof alloc !== 'function' || typeof invoke !== 'function') return null;
     const payload = new TextEncoder().encode(JSON.stringify({ command: command || 'refresh', data: _data, context: _context }));
     const ptr = alloc(payload.length);
