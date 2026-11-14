@@ -17,7 +17,7 @@ test('evaluateTriggerCondition supports combinators, globs, regex, cwd, env, and
   const cond = {
     all: [
       {program: ['agy', 'docker*']},
-      {cwd: '*/leapterm*'},
+      {cwd: '*/example-project*'},
       {context: {inTmux: true, portOpen: '3000'}},
     ],
     not: {windowTitle: {regex: 'production', caseSensitive: false}},
@@ -26,14 +26,14 @@ test('evaluateTriggerCondition supports combinators, globs, regex, cwd, env, and
     program: '/usr/local/bin/agy',
     command: 'agy chat',
     windowTitle: 'dev-shell',
-    cwd: '/home/kevin/work/leapterm/app',
+    cwd: '/workspace/example-project/app',
     context: {inTmux: true, ports: ['3000', '5173']},
   }), true);
 
   assert.equal(evaluateTriggerCondition(cond, {
     program: 'docker-compose',
     windowTitle: 'PRODUCTION-SSH',
-    cwd: '/home/kevin/work/leapterm',
+    cwd: '/workspace/example-project',
     context: {inTmux: true, ports: ['3000']},
   }), false);
 });

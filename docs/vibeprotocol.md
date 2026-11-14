@@ -90,7 +90,7 @@ VibeProtocol includes a declarative trigger condition engine (`VibeTriggerCondit
 ```json
 {
   "program": ["agy", "claude"],
-  "cwd": "*/leapterm*",
+  "cwd": "*/example-project*",
   "context": {
     "inTmux": true,
     "ports": "3000"
