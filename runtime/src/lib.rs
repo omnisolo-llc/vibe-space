@@ -1078,9 +1078,10 @@ where
             Err(err) => last_err = Some(err),
         }
     }
-    Err(runtime_error(
-        last_err.map_or_else(|| "missing entrypoint".to_owned(), |e| e.to_string()),
-    ))
+    Err(runtime_error(last_err.map_or_else(
+        || "missing entrypoint".to_owned(),
+        |e| e.to_string(),
+    )))
 }
 
 fn execute_compiled_module(

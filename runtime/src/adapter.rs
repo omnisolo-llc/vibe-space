@@ -1173,7 +1173,8 @@ fn resolve_node_recursive(
                 let mut cmd_out = cmd.clone();
                 if let Some(cmd_obj) = cmd_out.as_object_mut() {
                     if let Some(txt_val) = cmd_obj.get("text").cloned() {
-                        let (txt, is_sealed, ok) = resolve_text_value(Some(&txt_val), resolve_sealed);
+                        let (txt, is_sealed, ok) =
+                            resolve_text_value(Some(&txt_val), resolve_sealed);
                         if is_sealed {
                             had_sealed = true;
                             all_resolved &= ok;
