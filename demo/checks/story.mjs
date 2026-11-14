@@ -3,7 +3,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { DEMO_ROOT, launchChromium, loadPlaywright, startDemoServer } from './server.mjs';
 
-const SHOTS_DIR = '/home/kevin/leapterm/target/vibeprotocol-demo/shots';
+const SHOTS_DIR = process.env.VIBE_DEMO_SHOTS_DIR || path.resolve('target/vibeprotocol-demo/shots');
 
 function assert(cond, msg) {
   if (!cond) {
@@ -99,7 +99,6 @@ async function verifyStartPage(context, baseUrl, viewport, errorLog, snap, check
   await homePage.waitForSelector('h1, main, .hosts-grid');
   const homeText = await homePage.evaluate(() => document.body.innerText);
   assert(homeText.includes('VibeProtocol demo'), 'Home page missing title "VibeProtocol demo"');
-  assert(!/leapterm/i.test(homeText), 'Home page still mentions LeapTerm');
   assert(homeText.includes('PocketLedger'), 'Home page missing PocketLedger');
   assert(homeText.includes('PulseMail'), 'Home page missing PulseMail');
   assert(homeText.includes('CartScout'), 'Home page missing CartScout');

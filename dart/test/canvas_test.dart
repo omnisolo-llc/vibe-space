@@ -145,33 +145,62 @@ void main() {
   });
 
   test('isReadOnlyCanvasMcpTool and isReadOnlyCanvasShellCommand enforce strict read-only policy', () {
-    // Legacy aliases
-    expect(isReadOnlyCanvasMcpTool('mcp.server.metrics'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('mcp.server.network_bandwidth'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('mcp.server.processes'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('mcp.ssh.exec_readonly'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('client.canvas.read_metrics'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('server.telemetry.snapshot'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('server.process.inspect'), isTrue);
+    // Empty default catalog rejects unlisted tools
+    expect(isReadOnlyCanvasMcpTool('telemetry.snapshot'), isFalse);
+    expect(isReadOnlyCanvasMcpTool('workspace.write'), isFalse);
 
-    // Canonical MCP tools
-    expect(isReadOnlyCanvasMcpTool('host_process_list'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('runner_info'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('runner_ping'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('runner_usage'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('server.network.sockets'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('ssh_resource'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('read_files'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('git_status'), isTrue);
-    expect(isReadOnlyCanvasMcpTool('observe_jobs'), isTrue);
-
-    // Mutating / unlisted tools are rejected
-    expect(isReadOnlyCanvasMcpTool('server.containers.prune_images'), isFalse);
-    expect(isReadOnlyCanvasMcpTool('write_project_file'), isFalse);
-    expect(isReadOnlyCanvasMcpTool('apply_text_edits'), isFalse);
-    expect(isReadOnlyCanvasMcpTool('run_shell'), isFalse);
-    expect(isReadOnlyCanvasMcpTool('host_process_terminate'), isFalse);
-    expect(isReadOnlyCanvasMcpTool('client.canvas.render'), isFalse);
+    // Host-injected catalog and allowedTools allow only registered read-only tools
+    final customCatalog = VibeMcpToolCatalog(
+      tools: <VibeMcpToolDescriptor>[
+        VibeMcpToolDescriptor(
+          name: 'telemetry.snapshot',
+          scope: 'telemetry:read',
+          mutates: false,
+          category: VibeMcpToolCategory.telemetry,
+          description: 'Read host CPU/RAM telemetry.',
+          aliases: const <String>{'client.canvas.read_metrics'},
+        ),
+        VibeMcpToolDescriptor(
+          name: 'workspace.write',
+          scope: 'workspace:write',
+          mutates: true,
+          category: VibeMcpToolCategory.edit,
+          description: 'Write workspace file.',
+        ),
+      ],
+    );
+    expect(
+      isReadOnlyCanvasMcpTool('telemetry.snapshot', catalog: customCatalog),
+      isTrue,
+    );
+    expect(
+      isReadOnlyCanvasMcpTool(
+        'client.canvas.read_metrics',
+        catalog: customCatalog,
+      ),
+      isTrue,
+    );
+    expect(
+      isReadOnlyCanvasMcpTool('workspace.write', catalog: customCatalog),
+      isFalse,
+    );
+    expect(
+      isReadOnlyCanvasMcpTool(
+        'custom.readonly',
+        catalog: customCatalog,
+        allowedTools: const <String>{'custom.readonly'},
+      ),
+      isTrue,
+    );
+    // Registered mutating tool cannot be bypassed via allowedTools
+    expect(
+      isReadOnlyCanvasMcpTool(
+        'workspace.write',
+        catalog: customCatalog,
+        allowedTools: const <String>{'workspace.write'},
+      ),
+      isFalse,
+    );
 
     expect(isReadOnlyCanvasShellCommand('LC_ALL=C cat /proc/net/dev'), isTrue);
     expect(isReadOnlyCanvasShellCommand('LANG=C uptime'), isTrue);
@@ -258,25 +287,78 @@ void main() {
   });
 
   test('VibeMcpToolCatalog resolves canonical names, tags, and conditional exposure', () {
-    final catalog = VibeMcpToolCatalog.instance;
+    final catalog = VibeMcpToolCatalog(
+      tools: <VibeMcpToolDescriptor>[
+        VibeMcpToolDescriptor(
+          name: 'telemetry.snapshot',
+          scope: 'telemetry:read',
+          mutates: false,
+          category: VibeMcpToolCategory.telemetry,
+          description: 'Read host metrics.',
+          aliases: const <String>{'host.metrics', 'client.canvas.read_metrics'},
+        ),
+        VibeMcpToolDescriptor(
+          name: 'process.inspect',
+          scope: 'telemetry:read',
+          mutates: false,
+          category: VibeMcpToolCategory.telemetry,
+          tags: <VibeMcpToolTag>{
+            VibeMcpToolTag.readOnly,
+            VibeMcpToolTag.processInspect,
+            VibeMcpToolTag.telemetry,
+          },
+          description: 'Inspect running processes.',
+          aliases: const <String>{'host.processes'},
+        ),
+        VibeMcpToolDescriptor(
+          name: 'network.sockets',
+          scope: 'network:read',
+          mutates: false,
+          category: VibeMcpToolCategory.telemetry,
+          requiredContext: const <String>{'remote_session'},
+          tags: <VibeMcpToolTag>{
+            VibeMcpToolTag.readOnly,
+            VibeMcpToolTag.networkInspect,
+            VibeMcpToolTag.telemetry,
+          },
+          description: 'Inspect open network sockets.',
+        ),
+        VibeMcpToolDescriptor(
+          name: 'workspace.write',
+          scope: 'workspace:write',
+          mutates: true,
+          category: VibeMcpToolCategory.edit,
+          requiresProjectContext: true,
+          description: 'Write workspace file.',
+        ),
+        VibeMcpToolDescriptor(
+          name: 'client.canvas.render',
+          scope: 'ui:write',
+          mutates: true,
+          location: VibeMcpExecutionLocation.client,
+          category: VibeMcpToolCategory.clientUi,
+          description: 'Render Vibe Canvas.',
+          aliases: const <String>{'vibe.canvas'},
+        ),
+      ],
+    );
 
     // Canonical resolution from aliases
-    expect(catalog.resolveCanonicalName('mcp.server.metrics'), 'runner_info');
-    expect(catalog.resolveCanonicalName('server.telemetry.snapshot'), 'runner_info');
-    expect(catalog.resolveCanonicalName('client.canvas.read_metrics'), 'runner_info');
-    expect(catalog.resolveCanonicalName('mcp.server.network_bandwidth'), 'server.network.sockets');
-    expect(catalog.resolveCanonicalName('mcp.server.processes'), 'host_process_list');
-    expect(catalog.resolveCanonicalName('server.process.inspect'), 'host_process_list');
-    expect(catalog.resolveCanonicalName('mcp.ssh.exec_readonly'), 'ssh_resource');
+    expect(catalog.resolveCanonicalName('host.metrics'), 'telemetry.snapshot');
+    expect(
+      catalog.resolveCanonicalName('client.canvas.read_metrics'),
+      'telemetry.snapshot',
+    );
+    expect(catalog.resolveCanonicalName('host.processes'), 'process.inspect');
     expect(catalog.resolveCanonicalName('vibe.canvas'), 'client.canvas.render');
 
     // Selection condition filtering
     final telemetryCondition = VibeMcpSelectionCondition.canvasReadOnly(
-      anyTags: const <VibeMcpToolTag>{
+      activeContext: const <String>{'remote_session'},
+      anyTags: <VibeMcpToolTag>{
         VibeMcpToolTag.telemetry,
         VibeMcpToolTag.processInspect,
         VibeMcpToolTag.networkInspect,
-        VibeMcpToolTag.sshReadOnly,
       },
     );
     final selectedNames =
@@ -284,75 +366,104 @@ void main() {
     expect(
       selectedNames,
       containsAll(<String>{
-        'host_process_list',
-        'runner_info',
-        'runner_ping',
-        'runner_usage',
-        'server.network.sockets',
-        'ssh_resource',
+        'telemetry.snapshot',
+        'process.inspect',
+        'network.sockets',
       }),
     );
-    expect(selectedNames, isNot(contains('write_project_file')));
-    expect(selectedNames, isNot(contains('run_shell')));
-    expect(selectedNames, isNot(contains('host_process_terminate')));
+    expect(selectedNames, isNot(contains('workspace.write')));
+    expect(selectedNames, isNot(contains('client.canvas.render')));
 
-    // Without active SSH session, tools requiring SSH are filtered out
-    final noSshCondition = VibeMcpSelectionCondition.canvasReadOnly(
-      hasActiveSshSession: false,
-      anyTags: const <VibeMcpToolTag>{
+    // Without required context, context-gated tools are filtered out
+    final noSessionCondition = VibeMcpSelectionCondition.canvasReadOnly(
+      activeContext: const <String>{},
+      anyTags: <VibeMcpToolTag>{
+        VibeMcpToolTag.telemetry,
         VibeMcpToolTag.networkInspect,
-        VibeMcpToolTag.sshReadOnly,
       },
     );
-    final noSshNames =
-        catalog.selectTools(noSshCondition).map((t) => t.name).toSet();
-    expect(noSshNames, isNot(contains('server.network.sockets')));
-    expect(noSshNames, isNot(contains('ssh_resource')));
+    final noSessionNames =
+        catalog.selectTools(noSessionCondition).map((t) => t.name).toSet();
+    expect(noSessionNames, contains('telemetry.snapshot'));
+    expect(noSessionNames, isNot(contains('network.sockets')));
 
     // LLM prompt formatting includes canonical names and aliases
     final prompt = catalog.buildLlmContextPrompt(telemetryCondition);
-    expect(prompt, contains('`runner_info`'));
-    expect(prompt, contains('`host_process_list`'));
-    expect(prompt, contains('`server.network.sockets`'));
-    expect(prompt, contains('`ssh_resource`'));
+    expect(prompt, contains('`telemetry.snapshot`'));
+    expect(prompt, contains('`process.inspect`'));
+    expect(prompt, contains('`network.sockets`'));
   });
 
-  test('VibeMcpToolDescriptor.fromCatalogJson and fromProjectToolCatalogJson parse canonical catalog', () {
-    final descriptor = VibeMcpToolDescriptor.fromCatalogJson(<String, dynamic>{
-      'name': 'read_files',
-      'scope': 'project:read',
-      'mutates': false,
-      'description': 'Read UTF-8 files with full-file SHA-256 revisions.',
-      'location': 'runner',
-      'input_schema': <String, dynamic>{
-        'type': 'object',
-        'properties': <String, dynamic>{
-          'project_id': <String, dynamic>{'type': 'string'},
-        },
+  test('VibeMcpToolDescriptor.fromCatalogJson and VibeMcpToolCatalog.fromCatalogJson support custom host hooks', () {
+    const customCategory = VibeMcpToolCategory('notes', 'Notes');
+    const customTag = VibeMcpToolTag('notes_read');
+    final catalog = VibeMcpToolCatalog.fromCatalogJson(
+      jsonEncode(<String, dynamic>{
+        'tools': <Map<String, dynamic>>[
+          <String, dynamic>{
+            'name': 'notes.list',
+            'scope': 'notes:read',
+            'mutates': false,
+            'description': 'List notes in workspace.',
+            'location': 'host',
+            'required_context': <String>['project'],
+            'aliases': <String>['list_notes'],
+          },
+          <String, dynamic>{
+            'name': 'notes.write',
+            'scope': 'notes:write',
+            'mutates': true,
+            'description': 'Write note.',
+            'location': 'host',
+          },
+        ],
+      }),
+      classifyCategory: (name) =>
+          name.startsWith('notes.') ? customCategory : VibeMcpToolCategory.runtime,
+      deriveTags: ({required name, required scope, required mutates}) =>
+          <VibeMcpToolTag>{
+        if (mutates) VibeMcpToolTag.mutating else VibeMcpToolTag.readOnly,
+        if (!mutates && name.startsWith('notes.')) customTag,
       },
-    });
-    expect(descriptor.name, 'read_files');
-    expect(descriptor.isReadOnly, isTrue);
-    expect(descriptor.requiresProjectContext, isTrue);
-    expect(descriptor.category, VibeMcpToolCategory.project);
-    expect(descriptor.tags, contains(VibeMcpToolTag.filesystemRead));
-    expect(descriptor.tags, contains(VibeMcpToolTag.compactDiscovery));
-    expect(descriptor.surfaces, contains(VibeMcpExposureSurface.canvasReadOnly));
+      deriveSurfaces: ({
+        required name,
+        required mutates,
+        required category,
+        required tags,
+      }) =>
+          <VibeMcpExposureSurface>{
+        VibeMcpExposureSurface.externalAssistant,
+        if (!mutates && tags.contains(customTag))
+          VibeMcpExposureSurface.canvasReadOnly,
+      },
+    );
 
-    final mutatingDescriptor = VibeMcpToolDescriptor.fromCatalogJson(<String, dynamic>{
-      'name': 'write_project_file',
-      'scope': 'project:write',
-      'mutates': true,
-      'description': 'Write file.',
-      'location': 'runner',
-    });
-    expect(mutatingDescriptor.isReadOnly, isFalse);
+    final readTool = catalog.find('list_notes')!;
+    expect(readTool.name, 'notes.list');
+    expect(readTool.isReadOnly, isTrue);
+    expect(readTool.requiresProjectContext, isTrue);
+    expect(readTool.category, customCategory);
+    expect(readTool.tags, contains(customTag));
+    expect(readTool.surfaces, contains(VibeMcpExposureSurface.canvasReadOnly));
     expect(
-      mutatingDescriptor.surfaces,
+      VibeMcpSelectionCondition.canvasReadOnly(
+        activeContext: const <String>{'project'},
+      ).allows(readTool),
+      isTrue,
+    );
+    expect(
+      VibeMcpSelectionCondition.canvasReadOnly().allows(readTool),
+      isFalse,
+    );
+
+    final writeTool = catalog.find('notes.write')!;
+    expect(writeTool.isReadOnly, isFalse);
+    expect(
+      writeTool.surfaces,
       isNot(contains(VibeMcpExposureSurface.canvasReadOnly)),
     );
     expect(
-      VibeMcpSelectionCondition.canvasReadOnly().allows(mutatingDescriptor),
+      VibeMcpSelectionCondition.canvasReadOnly().allows(writeTool),
       isFalse,
     );
   });
