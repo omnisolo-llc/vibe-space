@@ -2,8 +2,10 @@ import 'dart:async';
 
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:vibe_space/vibe_space.dart' show VibeUiCompatibilityAdapter;
+import 'package:vibe_space/vibe_space.dart'
+    show VibeUiCompatibilityAdapter, kMaxVibeCanvasCommands;
 
+import 'vibe_skyline_canvas.dart';
 import 'vibe_widget_adapter.dart';
 
 const Set<String> _validTones = <String>{'default', 'ok', 'warn', 'danger'};
@@ -16,6 +18,7 @@ const Set<String> _kCanonicalVibeNodeTypes = <String>{
   'stat',
   'bar',
   'sparkline',
+  'canvas',
   'row',
   'card',
   'column',
@@ -27,6 +30,19 @@ const Set<String> _kCanonicalVibeNodeTypes = <String>{
   'checkbox',
   'option_group',
   'table',
+};
+
+const Set<String> _kValidCanvasOps = <String>{
+  'clear',
+  'rect',
+  'rrect',
+  'circle',
+  'arc',
+  'line',
+  'path',
+  'polygon',
+  'bars',
+  'text',
 };
 
 /// Returns whether [map] looks like an external UI dialect (A2UI,
@@ -110,6 +126,7 @@ class VibeViewToneScope extends InheritedWidget {
 /// Only declarative widgets cross the extension boundary; no downloaded Flutter widget code runs.
 void validateVibeView(Map<String, dynamic> view) {
   var count = 0;
+  var canvasCommands = 0;
   final inputs = <String>{};
   void visit(Map<String, dynamic> node, int depth) {
     if (depth > 16 || ++count > 1024) {
@@ -165,12 +182,14 @@ void validateVibeView(Map<String, dynamic> view) {
           throw const FormatException('Invalid extension bar value');
         }
         final barMax = node['max'];
-        if (barMax != null && (barMax is! num || !barMax.isFinite || barMax <= 0)) {
+        if (barMax != null &&
+            (barMax is! num || !barMax.isFinite || barMax <= 0)) {
           throw const FormatException('Invalid extension bar max');
         }
         textOrSealed('caption', maximum: 256, allowNull: true, allowNum: true);
         final swatch = node['swatch'];
-        if (swatch != null && (swatch is! String || !_hexColorRe.hasMatch(swatch))) {
+        if (swatch != null &&
+            (swatch is! String || !_hexColorRe.hasMatch(swatch))) {
           throw const FormatException('Invalid extension bar swatch');
         }
         validateTone();
@@ -182,6 +201,36 @@ void validateVibeView(Map<String, dynamic> view) {
         for (final v in values) {
           if (v is! num || !v.isFinite) {
             throw const FormatException('Invalid extension sparkline point');
+          }
+        }
+        validateTone();
+      case 'canvas':
+        final cw = node['width'];
+        final ch = node['height'];
+        if (cw != null &&
+            (cw is! num || !cw.isFinite || cw <= 0 || cw > 2048)) {
+          throw const FormatException('Invalid extension canvas width');
+        }
+        if (ch != null &&
+            (ch is! num || !ch.isFinite || ch <= 0 || ch > 2048)) {
+          throw const FormatException('Invalid extension canvas height');
+        }
+        final cmds = node['commands'];
+        if (cmds is! List || cmds.length > kMaxVibeCanvasCommands) {
+          throw const FormatException('Invalid extension canvas commands');
+        }
+        canvasCommands += cmds.length;
+        if (canvasCommands > kMaxVibeCanvasCommands) {
+          throw const FormatException(
+              'Extension canvas command limit exceeded');
+        }
+        for (final cmd in cmds) {
+          if (cmd is! Map) {
+            throw const FormatException('Invalid extension canvas command');
+          }
+          final op = (cmd['op'] ?? cmd['type'])?.toString();
+          if (op == null || !_kValidCanvasOps.contains(op)) {
+            throw const FormatException('Invalid extension canvas op');
           }
         }
         validateTone();
@@ -356,7 +405,11 @@ class VibeView extends StatelessWidget {
     if (_effectiveAdapter(context).usesCupertino) {
       return CupertinoColors.secondaryLabel.resolveFrom(context);
     }
-    return Theme.of(context).textTheme.bodySmall?.color?.withValues(alpha: 0.72) ??
+    return Theme.of(context)
+            .textTheme
+            .bodySmall
+            ?.color
+            ?.withValues(alpha: 0.72) ??
         Colors.grey;
   }
 
@@ -478,6 +531,16 @@ class VibeView extends StatelessWidget {
   Widget build(BuildContext context) {
     if (depth > 16) throw const FormatException('Extension view is too deep');
     final node = depth == 0 ? normalizeVibeViewInput(value) : value;
+    final built = _buildNode(context, node);
+    return applyVibeSkylineNodeStyle(
+      context,
+      built,
+      node,
+      onCommand: onCommand,
+    );
+  }
+
+  Widget _buildNode(BuildContext context, Map<String, dynamic> node) {
     final effectiveAdapter = _effectiveAdapter(context);
     final usesCupertino = effectiveAdapter.usesCupertino;
 
@@ -728,10 +791,61 @@ class VibeView extends StatelessWidget {
             painter: _SparklinePainter(points: points, color: strokeColor),
           ),
         );
+      case 'canvas':
+        final cw =
+            ((node['width'] as num?)?.toDouble() ?? 260.0).clamp(16.0, 2048.0);
+        final ch =
+            ((node['height'] as num?)?.toDouble() ?? 56.0).clamp(16.0, 2048.0);
+        final rawCmds = node['commands'];
+        final commands = <Map<String, dynamic>>[
+          if (rawCmds is List)
+            for (final cmd in rawCmds.take(kMaxVibeCanvasCommands))
+              if (cmd is Map) Map<String, dynamic>.from(cmd),
+        ];
+        final bindTap = node['bindtap']?.toString();
+        final explicitCmd = node['command']?.toString();
+        VoidCallback? onTap;
+        if (bindTap != null && bindTap.isNotEmpty) {
+          onTap = () => onCommand('mp:tap:$bindTap', <String, dynamic>{
+                '__mpEvent': true,
+                'type': 'tap',
+                'handler': bindTap,
+                if (node['id'] != null) 'id': node['id'],
+                if (node['dataset'] is Map)
+                  'dataset': Map<String, dynamic>.from(node['dataset'] as Map),
+              });
+        } else if (explicitCmd != null && explicitCmd.isNotEmpty) {
+          final rawArgs = node['arguments'] ?? node['args'];
+          final args = Map<String, dynamic>.from(rawArgs as Map? ?? {});
+          onTap = () => onCommand(explicitCmd, args);
+        }
+        if (effectiveAdapter.canvasBuilder != null) {
+          return effectiveAdapter.canvasBuilder!(
+            context,
+            node,
+            cw,
+            ch,
+            commands,
+            onTap,
+          );
+        }
+        return VibeSkylineCanvas(
+          width: cw,
+          height: ch,
+          commands: commands,
+          tone: node['tone']?.toString(),
+          semanticsLabel: (node['label'] ?? node['alt'])?.toString(),
+          resolveSealed: resolveSealed,
+          onTap: onTap,
+        );
       case 'row':
       case 'card':
       case 'column':
         final children = (node['children'] as List).take(100);
+        final rawStyle = node['style'];
+        final styleGap = rawStyle is Map && rawStyle['gap'] is num
+            ? (rawStyle['gap'] as num).toDouble().clamp(0.0, 64.0)
+            : null;
         final widgets = <Widget>[
           for (final child in children)
             VibeView(
@@ -745,14 +859,19 @@ class VibeView extends StatelessWidget {
             ),
         ];
         if (node['type'] == 'row') {
-          return Wrap(spacing: 10, runSpacing: 8, children: widgets);
+          return Wrap(
+            spacing: styleGap ?? 10,
+            runSpacing: styleGap ?? 8,
+            children: widgets,
+          );
         }
+        final colGap = styleGap ?? 8.0;
         final column = Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             for (var i = 0; i < widgets.length; i++) ...<Widget>[
-              if (i > 0) const SizedBox(height: 8),
+              if (i > 0) SizedBox(height: colGap),
               widgets[i],
             ],
           ],
@@ -863,7 +982,21 @@ class VibeView extends StatelessWidget {
         final inputLabel = node['label'] as String;
         final isSecret = node['secret'] == true;
         final isMultiline = node['multiline'] == true;
-        void handleInputChanged(String text) => onInput?.call(inputId, text);
+        final bindInput = node['bindinput']?.toString();
+        void handleInputChanged(String text) {
+          onInput?.call(inputId, text);
+          if (bindInput != null && bindInput.isNotEmpty) {
+            onCommand('mp:input:$bindInput', <String, dynamic>{
+              '__mpEvent': true,
+              'type': 'input',
+              'handler': bindInput,
+              'id': inputId,
+              'value': text,
+              if (node['dataset'] is Map)
+                'dataset': Map<String, dynamic>.from(node['dataset'] as Map),
+            });
+          }
+        }
         if (effectiveAdapter.inputBuilder != null) {
           return effectiveAdapter.inputBuilder!(
             context,
@@ -934,9 +1067,8 @@ class VibeView extends StatelessWidget {
           adapter: effectiveAdapter,
         );
       case 'table':
-        final headers = (node['headers'] as List)
-            .take(32)
-            .toList(growable: false);
+        final headers =
+            (node['headers'] as List).take(32).toList(growable: false);
         final rows = (node['rows'] as List).take(200);
         final headerWidgets = <Widget>[
           for (final h in headers)
@@ -1085,7 +1217,8 @@ class _SparklinePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _SparklinePainter oldDelegate) {
-    if (color != oldDelegate.color || points.length != oldDelegate.points.length) {
+    if (color != oldDelegate.color ||
+        points.length != oldDelegate.points.length) {
       return true;
     }
     for (var i = 0; i < points.length; i++) {
@@ -1363,7 +1496,8 @@ class _VibeOptionGroupFieldState extends State<_VibeOptionGroupField> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            if (widget.label != null && widget.label!.trim().isNotEmpty) ...<Widget>[
+            if (widget.label != null &&
+                widget.label!.trim().isNotEmpty) ...<Widget>[
               Text(
                 widget.label!,
                 style: const TextStyle(
@@ -1389,7 +1523,8 @@ class _VibeOptionGroupFieldState extends State<_VibeOptionGroupField> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          if (widget.label != null && widget.label!.trim().isNotEmpty) ...<Widget>[
+          if (widget.label != null &&
+              widget.label!.trim().isNotEmpty) ...<Widget>[
             Text(
               widget.label!,
               style: const TextStyle(
@@ -1466,8 +1601,7 @@ class _VibeOptionGroupFieldState extends State<_VibeOptionGroupField> {
     final unselectedBg = isDark
         ? Colors.white.withValues(alpha: 0.03)
         : Colors.black.withValues(alpha: 0.02);
-    final allSelected =
-        widget.options.isNotEmpty &&
+    final allSelected = widget.options.isNotEmpty &&
         _selectedIds.length == widget.options.length;
 
     return Column(
@@ -1562,16 +1696,14 @@ class _VibeOptionGroupFieldState extends State<_VibeOptionGroupField> {
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
               for (var i = 0; i < widget.options.length; i++) ...<Widget>[
-                if (i > 0)
-                  Divider(height: 1, thickness: 1, color: borderColor),
+                if (i > 0) Divider(height: 1, thickness: 1, color: borderColor),
                 () {
                   final opt = widget.options[i];
                   final optId = opt['id'].toString();
                   final optLabel = opt['label'].toString();
-                  final optDesc =
-                      (opt['description'] ?? opt['subtitle'] ?? '')
-                          .toString()
-                          .trim();
+                  final optDesc = (opt['description'] ?? opt['subtitle'] ?? '')
+                      .toString()
+                      .trim();
                   final selected = _selectedIds.contains(optId);
                   return Material(
                     color: selected ? selectedBg : Colors.transparent,
@@ -1647,8 +1779,7 @@ class _VibeOptionGroupFieldState extends State<_VibeOptionGroupField> {
                                       optDesc,
                                       style: TextStyle(
                                         fontSize: 11.5,
-                                        color: theme
-                                            .textTheme.bodyMedium?.color
+                                        color: theme.textTheme.bodyMedium?.color
                                             ?.withValues(alpha: 0.65),
                                       ),
                                     ),

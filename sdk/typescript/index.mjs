@@ -1,3 +1,5 @@
+import {validateTriggerCondition} from './triggers.mjs';
+
 export const slots = Object.freeze(['app_page','sidebar_inspector','mobile_bottom_sheet','quick_command','status_bar_item','terminal_action']);
 export const validApiName = value => typeof value === 'string' && value.length <= 128 && /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(value);
 export const validCapability = value => ['network','terminal_read','terminal_write'].includes(value) || (typeof value === 'string' && value.startsWith('api:') && validApiName(value.slice(4)));
@@ -42,8 +44,10 @@ export function validateManifest(manifest) {
   if (!Array.isArray(manifest.contributions ?? []) || (manifest.contributions?.length ?? 0) > 64) throw Error('Invalid contributions');
   for (const c of manifest.contributions ?? []) {
     if (!slots.includes(c.slot) || !['id','title','command'].every(k => typeof c[k] === 'string' && c[k].length > 0 && c[k].length <= 256) || ids.has(c.id)) throw Error('Invalid contribution');
+    if (c.when !== undefined) validateTriggerCondition(c.when);
     ids.add(c.id);
   }
+  if (manifest.when !== undefined) validateTriggerCondition(manifest.when);
   return freezeJson({...manifest, network_origins:manifest.network_origins ?? [], contributions:manifest.contributions ?? []});
 }
 const unbase64 = value => {
@@ -77,3 +81,22 @@ export {
   getVibeStrings,
   isRtlLocale
 } from './adapters.mjs';
+
+export {
+  validateTriggerCondition,
+  evaluateTriggerCondition,
+  hydrateVibeTemplate,
+  createTriggerEvaluator
+} from './triggers.mjs';
+
+export {
+  MAX_SET_DATA_BYTES,
+  MAX_SET_DATA_RATE_PER_SEC,
+  MAX_CANVAS_COMMANDS,
+  validateMiniProgramSource,
+  applySetData,
+  lookupScopePath,
+  compileTemplate,
+  defineMiniProgram,
+  createMiniProgramSession
+} from './miniprogram.mjs';

@@ -450,10 +450,75 @@
       node.type === 'stat' ||
       node.type === 'bar' ||
       node.type === 'sparkline' ||
+      (node.type === 'canvas' && Array.isArray(node.commands) && node.commands.length <= 2000) ||
       node.type === 'table' ||
       node.type === 'divider' ||
       node.type === 'button'
     );
+  }
+
+  function populateCanvasSvg(doc, svg, node, resolveFn) {
+    var SVG_NS = 'http://www.w3.org/2000/svg';
+    while (svg.firstChild) svg.removeChild(svg.firstChild);
+    var w = typeof node.width === 'number' && Number.isFinite(node.width) ? Math.max(16, Math.min(2048, node.width)) : 260;
+    var h = typeof node.height === 'number' && Number.isFinite(node.height) ? Math.max(16, Math.min(2048, node.height)) : 56;
+    svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+    svg.setAttribute('width', String(w));
+    svg.setAttribute('height', String(h));
+    var cmds = Array.isArray(node.commands) ? node.commands.slice(0, 2000) : [];
+    for (var i = 0; i < cmds.length; i++) {
+      var cmd = cmds[i];
+      if (!isPlainObject(cmd)) continue;
+      var op = String(cmd.op || cmd.type || '');
+      if (op === 'clear') {
+        var clr = doc.createElementNS(SVG_NS, 'rect');
+        clr.setAttribute('x', '0'); clr.setAttribute('y', '0');
+        clr.setAttribute('width', String(w)); clr.setAttribute('height', String(h));
+        clr.setAttribute('fill', String(cmd.fill || 'transparent'));
+        svg.appendChild(clr);
+      } else if (op === 'rect' || op === 'rrect') {
+        var r = doc.createElementNS(SVG_NS, 'rect');
+        r.setAttribute('x', String(Number(cmd.x) || 0));
+        r.setAttribute('y', String(Number(cmd.y) || 0));
+        r.setAttribute('width', String(Number(cmd.w != null ? cmd.w : cmd.width) || w));
+        r.setAttribute('height', String(Number(cmd.h != null ? cmd.h : cmd.height) || h));
+        if (cmd.radius || cmd.r) r.setAttribute('rx', String(Number(cmd.radius || cmd.r) || 0));
+        r.setAttribute('fill', String(cmd.fill || 'none'));
+        if (cmd.stroke) r.setAttribute('stroke', String(cmd.stroke));
+        svg.appendChild(r);
+      } else if (op === 'bars' && Array.isArray(cmd.values) && cmd.values.length > 0) {
+        var vals = [];
+        for (var vi = 0; vi < cmd.values.length; vi++) {
+          if (typeof cmd.values[vi] === 'number' && Number.isFinite(cmd.values[vi])) vals.push(cmd.values[vi]);
+        }
+        if (!vals.length) continue;
+        var maxV = typeof cmd.max === 'number' && cmd.max > 0 ? cmd.max : Math.max.apply(null, [1].concat(vals));
+        var bx = Number(cmd.x) || 0, by = Number(cmd.y) || 0;
+        var bw = Number(cmd.w != null ? cmd.w : cmd.width) || (w - bx);
+        var bh = Number(cmd.h != null ? cmd.h : cmd.height) || (h - by);
+        var gap = cmd.gap != null ? Number(cmd.gap) : 2;
+        var barW = Math.max(1, (bw - gap * (vals.length - 1)) / vals.length);
+        for (var bj = 0; bj < vals.length; bj++) {
+          var barH = Math.max(1.5, Math.min(1, Math.max(0, vals[bj] / maxV)) * bh);
+          var br = doc.createElementNS(SVG_NS, 'rect');
+          br.setAttribute('x', String(bx + bj * (barW + gap)));
+          br.setAttribute('y', String(by + (bh - barH)));
+          br.setAttribute('width', String(barW));
+          br.setAttribute('height', String(barH));
+          br.setAttribute('rx', String(cmd.radius != null ? Number(cmd.radius) : 2));
+          br.setAttribute('fill', String(cmd.fill || 'currentColor'));
+          svg.appendChild(br);
+        }
+      } else if (op === 'text' && cmd.text != null) {
+        var tx = doc.createElementNS(SVG_NS, 'text');
+        tx.setAttribute('x', String(Number(cmd.x) || 0));
+        tx.setAttribute('y', String((Number(cmd.y) || 0) + (Number(cmd.fontSize) || 11)));
+        tx.setAttribute('fill', String(cmd.fill || 'currentColor'));
+        tx.setAttribute('font-size', String(Number(cmd.fontSize) || 11));
+        setSlotContent(tx, cmd.text, resolveFn);
+        svg.appendChild(tx);
+      }
+    }
   }
 
   function sameShape(a, b, depth, budget) {
@@ -630,6 +695,14 @@
       return { el: el, type: 'sparkline', poly: poly };
     }
 
+    if (node.type === 'canvas') {
+      var CANVAS_SVG_NS = 'http://www.w3.org/2000/svg';
+      el = doc.createElementNS(CANVAS_SVG_NS, 'svg');
+      applyClasses(el, 'vk-canvas', [toneCls]);
+      populateCanvasSvg(doc, el, node, ctx.resolve);
+      return { el: el, type: 'canvas', doc: doc };
+    }
+
     if (node.type === 'table') {
       el = doc.createElement('table');
       el.className = 'vk-table';
@@ -768,6 +841,12 @@
       if (slot.poly.getAttribute('points') !== pts) {
         slot.poly.setAttribute('points', pts);
       }
+      return;
+    }
+
+    if (node.type === 'canvas') {
+      applyClasses(slot.el, 'vk-canvas', [toneCls]);
+      populateCanvasSvg(slot.doc, slot.el, node, ctx.resolve);
       return;
     }
 

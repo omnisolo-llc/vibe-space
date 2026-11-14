@@ -1,8 +1,10 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
+import 'dart:typed_data';
 
 import 'compatibility_adapter.dart';
+import 'vibe_trigger_condition.dart';
 
 /// Maximum UTF-8 byte length for a share token (`#vibe=...`).
 const int kMaxVibeShareBytes = 32 * 1024;
@@ -289,7 +291,7 @@ class VibePermissionLabel {
   final List<String> cannot;
 }
 
-/// JSON-safe VibePackage definition (`id`, `name`, `wish`, `version`, `needs`, `refresh`, `source`).
+/// JSON-safe VibePackage definition (`id`, `name`, `wish`, `version`, `needs`, `refresh`, `when`, `source`).
 class VibeSpec {
   const VibeSpec({
     required this.id,
@@ -298,6 +300,7 @@ class VibeSpec {
     required this.version,
     this.needs = const <String>[],
     this.refreshMs,
+    this.when,
     required this.source,
   });
 
@@ -307,6 +310,7 @@ class VibeSpec {
   final int version;
   final List<String> needs;
   final int? refreshMs;
+  final VibeTriggerCondition? when;
   final String source;
 
   /// Validates package constraints and throws [FormatException] on violation.
@@ -322,12 +326,14 @@ class VibeSpec {
     }
     for (final cap in needs) {
       if (cap.trim().isEmpty || cap.length > 120) {
-        throw const FormatException('Each capability in needs must be non-empty');
+        throw const FormatException(
+            'Each capability in needs must be non-empty');
       }
     }
     if (refreshMs != null && refreshMs! < 500) {
       throw const FormatException('Vibe refreshMs must be >= 500 ms');
     }
+    when?.validate();
     if (source.trim().isEmpty) {
       throw const FormatException('Vibe source must be a non-empty string');
     }
@@ -344,6 +350,8 @@ class VibeSpec {
     List<String>? needs,
     int? refreshMs,
     bool clearRefreshMs = false,
+    VibeTriggerCondition? when,
+    bool clearWhen = false,
     String? source,
   }) {
     return VibeSpec(
@@ -353,6 +361,7 @@ class VibeSpec {
       version: version ?? this.version,
       needs: List<String>.unmodifiable(needs ?? this.needs),
       refreshMs: clearRefreshMs ? null : (refreshMs ?? this.refreshMs),
+      when: clearWhen ? null : (when ?? this.when),
       source: source ?? this.source,
     );
   }
@@ -364,6 +373,7 @@ class VibeSpec {
         'version': version,
         'needs': List<String>.from(needs),
         if (refreshMs != null) 'refresh': refreshMs,
+        if (when != null) 'when': when!.toJson(),
         'source': source,
       };
 
@@ -375,9 +385,9 @@ class VibeSpec {
     final wish = json['wish'];
     final version = json['version'];
     final rawNeeds = json['needs'];
-    final rawRefresh = json.containsKey('refresh')
-        ? json['refresh']
-        : json['refreshMs'];
+    final rawRefresh =
+        json.containsKey('refresh') ? json['refresh'] : json['refreshMs'];
+    final rawWhen = json['when'];
     final source = json['source'];
 
     if (id is! String) {
@@ -402,6 +412,15 @@ class VibeSpec {
       }
       parsedRefresh = rawRefresh;
     }
+    VibeTriggerCondition? parsedWhen;
+    if (rawWhen != null) {
+      if (rawWhen is! Map) {
+        throw const FormatException('Vibe when must be an object');
+      }
+      parsedWhen = VibeTriggerCondition.fromJson(
+        rawWhen.map((k, v) => MapEntry(k.toString(), v)),
+      );
+    }
     if (source is! String) {
       throw const FormatException('Vibe source must be a string');
     }
@@ -413,6 +432,7 @@ class VibeSpec {
       version: version,
       needs: List<String>.unmodifiable(rawNeeds.cast<String>()),
       refreshMs: parsedRefresh,
+      when: parsedWhen,
       source: source,
     );
     spec.validate();
@@ -429,6 +449,7 @@ class VibeSpec {
           other.version == version &&
           _canonicalJsonString(other.needs) == _canonicalJsonString(needs) &&
           other.refreshMs == refreshMs &&
+          other.when == when &&
           other.source == source;
 
   @override
@@ -439,6 +460,7 @@ class VibeSpec {
         version,
         _canonicalJsonString(needs),
         refreshMs,
+        when,
         source,
       );
 }
@@ -484,7 +506,8 @@ class VibeShareCodec {
     final jsonStr = utf8.decode(decodedBytes);
     final parsed = jsonDecode(jsonStr);
     if (parsed is! Map) {
-      throw const FormatException('Share link payload must decode to an object');
+      throw const FormatException(
+          'Share link payload must decode to an object');
     }
     return VibeSpec.fromJson(
       parsed.map((k, v) => MapEntry(k.toString(), v)),
@@ -539,6 +562,8 @@ class VibeInstalledRecord {
     this.args,
     required this.title,
     this.note = '',
+    this.when,
+    this.triggerEnabled = true,
     this.pinned = false,
     this.paused = false,
     this.collapsed = false,
@@ -558,6 +583,10 @@ class VibeInstalledRecord {
 
   /// Host-only note; never sent into sandbox `input` or share links.
   final String note;
+
+  /// Optional host-level trigger override (`when ?? vibe.when`).
+  final VibeTriggerCondition? when;
+  final bool triggerEnabled;
   final bool pinned;
   final bool paused;
   final bool collapsed;
@@ -565,6 +594,9 @@ class VibeInstalledRecord {
   final int installedAtMs;
   final int updatedAtMs;
   final List<VibeVersionSnapshot> history;
+
+  /// Effective trigger condition combining host override [when] and [vibe.when].
+  VibeTriggerCondition? get effectiveTrigger => when ?? vibe.when;
 
   VibeInstalledRecord copyWith({
     String? instanceId,
@@ -574,6 +606,9 @@ class VibeInstalledRecord {
     bool clearArgs = false,
     String? title,
     String? note,
+    VibeTriggerCondition? when,
+    bool clearWhen = false,
+    bool? triggerEnabled,
     bool? pinned,
     bool? paused,
     bool? collapsed,
@@ -595,6 +630,8 @@ class VibeInstalledRecord {
                   : null)),
       title: title ?? this.title,
       note: note ?? this.note,
+      when: clearWhen ? null : (when ?? this.when),
+      triggerEnabled: triggerEnabled ?? this.triggerEnabled,
       pinned: pinned ?? this.pinned,
       paused: paused ?? this.paused,
       collapsed: collapsed ?? this.collapsed,
@@ -612,6 +649,8 @@ class VibeInstalledRecord {
         'args': args != null ? _deepCloneJson(args) : null,
         'title': title,
         'note': note,
+        if (when != null) 'when': when!.toJson(),
+        if (!triggerEnabled) 'triggerEnabled': false,
         'pinned': pinned,
         'paused': paused,
         'collapsed': collapsed,
@@ -632,15 +671,13 @@ class VibeInstalledRecord {
       rawVibe.map((k, v) => MapEntry(k.toString(), v)),
     );
     final rawInst = json['instanceId'];
-    final instanceId =
-        rawInst is String && rawInst.trim().isNotEmpty
-            ? rawInst.trim()
-            : 'inst_${_randomHex(8)}';
+    final instanceId = rawInst is String && rawInst.trim().isNotEmpty
+        ? rawInst.trim()
+        : 'inst_${_randomHex(8)}';
     final rawOrigin = json['origin']?.toString();
-    final origin =
-        rawOrigin != null && _kValidOrigins.contains(rawOrigin)
-            ? rawOrigin
-            : 'yours';
+    final origin = rawOrigin != null && _kValidOrigins.contains(rawOrigin)
+        ? rawOrigin
+        : 'yours';
     final rawArgs = json['args'];
     Map<String, Object?>? args;
     if (rawArgs is Map) {
@@ -648,8 +685,9 @@ class VibeInstalledRecord {
       _assertJsonSafe(args);
     }
     final rawInstalledAt = json['installedAtMs'] ?? json['installedAt'];
-    final installedAtMs =
-        rawInstalledAt is int ? rawInstalledAt : DateTime.now().millisecondsSinceEpoch;
+    final installedAtMs = rawInstalledAt is int
+        ? rawInstalledAt
+        : DateTime.now().millisecondsSinceEpoch;
     final rawUpdatedAt = json['updatedAtMs'] ?? json['updatedAt'];
     final updatedAtMs = rawUpdatedAt is int ? rawUpdatedAt : installedAtMs;
 
@@ -679,6 +717,8 @@ class VibeInstalledRecord {
       args: args,
       title: _normalizeTitle(json['title'] as String?, spec.name),
       note: _normalizeNote(json['note'] as String?),
+      when: VibeTriggerCondition.tryParse(json['when']),
+      triggerEnabled: json['triggerEnabled'] != false,
       pinned: json['pinned'] == true,
       paused: json['paused'] == true,
       collapsed: json['collapsed'] == true,
@@ -894,7 +934,8 @@ class VibeSandboxEvaluator {
     if (!raw.containsKey('state') ||
         !raw.containsKey('view') ||
         raw.length != 2) {
-      throw const FormatException('Vibe output must have exact keys { state, view }');
+      throw const FormatException(
+          'Vibe output must have exact keys { state, view }');
     }
     final adaptedView = VibeUiCompatibilityAdapter.adapt(raw['view']);
     final normalized = <String, Object?>{
@@ -931,12 +972,15 @@ class VibeSandboxEvaluator {
     }
 
     if (!_kInvokeDeclRegex.hasMatch(trimmed)) {
-      throw const FormatException('Vibe source must define function invoke(input)');
+      throw const FormatException(
+          'Vibe source must define function invoke(input)');
     }
     if (!_hasBalancedDelimiters(trimmed)) {
       throw const FormatException('SyntaxError in vibe source');
     }
-    final throwMatch = RegExp(r'''throw\s+new\s+Error\(\s*['"]([^'"]+)['"]\s*\)''').firstMatch(trimmed);
+    final throwMatch =
+        RegExp(r'''throw\s+new\s+Error\(\s*['"]([^'"]+)['"]\s*\)''')
+            .firstMatch(trimmed);
     if (throwMatch != null && !trimmed.contains('try')) {
       throw FormatException(throwMatch.group(1) ?? 'Vibe threw an error');
     }
@@ -956,7 +1000,9 @@ class VibeSandboxEvaluator {
         vibe.id.startsWith('disk-watch')) {
       final limit = _parseTopLimit(trimmed);
       final threshold = _parsePrimaryThreshold(trimmed) ??
-          (trimmed.contains('above 90%') || trimmed.contains('0.9') ? 0.9 : 0.8);
+          (trimmed.contains('above 90%') || trimmed.contains('0.9')
+              ? 0.9
+              : 0.8);
       final warn = _parseNamedNumber(trimmed, 'WARN_LEVEL') ?? 0.6;
       return _evalDiskWatch(
         threshold: threshold,
@@ -1064,7 +1110,10 @@ class VibeSandboxEvaluator {
     final data = input['data'] as Map? ?? const <String, Object?>{};
     final rawRows = data['telemetry.disk'];
     final rows = rawRows is List
-        ? rawRows.whereType<Map>().map((m) => Map<String, Object?>.from(m)).toList()
+        ? rawRows
+            .whereType<Map>()
+            .map((m) => Map<String, Object?>.from(m))
+            .toList()
         : <Map<String, Object?>>[];
 
     rows.sort((a, b) {
@@ -1108,9 +1157,8 @@ class VibeSandboxEvaluator {
         final pct = (used * 100).round();
         final mount = row['mount']?.toString() ?? '/';
         final sizeGb = row['sizeGb'] ?? 0;
-        final tone = used >= threshold
-            ? 'danger'
-            : (used >= warn ? 'warn' : 'ok');
+        final tone =
+            used >= threshold ? 'danger' : (used >= warn ? 'warn' : 'ok');
         children.add(<String, Object?>{
           'type': 'bar',
           'label': row['server'] ?? 'unknown',
@@ -1144,7 +1192,10 @@ class VibeSandboxEvaluator {
     final data = input['data'] as Map? ?? const <String, Object?>{};
     final rawRows = data['telemetry.load'];
     final rows = rawRows is List
-        ? rawRows.whereType<Map>().map((m) => Map<String, Object?>.from(m)).toList()
+        ? rawRows
+            .whereType<Map>()
+            .map((m) => Map<String, Object?>.from(m))
+            .toList()
         : <Map<String, Object?>>[];
 
     final prevState = input['state'] is Map
@@ -1161,7 +1212,7 @@ class VibeSandboxEvaluator {
     final args = input['args'];
     final targetHandle =
         (args is Map ? VibeSealedHandle.tryParse(args['server']) : null) ??
-        VibeSealedHandle.tryParse(prevState['targetServer']);
+            VibeSealedHandle.tryParse(prevState['targetServer']);
 
     Map<String, Object?>? matchedRow;
     if (targetHandle != null) {
@@ -1201,7 +1252,10 @@ class VibeSandboxEvaluator {
           'view': <String, Object?>{
             'type': 'column',
             'children': <Map<String, Object?>>[
-              <String, Object?>{'type': 'heading', 'text': targetHandle.toJson()},
+              <String, Object?>{
+                'type': 'heading',
+                'text': targetHandle.toJson()
+              },
               <String, Object?>{
                 'type': 'row',
                 'children': <Map<String, Object?>>[
@@ -1305,7 +1359,8 @@ class VibeSandboxEvaluator {
         children.add(<String, Object?>{
           'type': 'bar',
           'label': row['server'] ?? 'unknown',
-          'caption': 'CPU ${(cpu * 100).round()}% · Mem ${(mem * 100).round()}%',
+          'caption':
+              'CPU ${(cpu * 100).round()}% · Mem ${(mem * 100).round()}%',
           'value': cpu,
           'max': 1,
           'tone': toneFor(cpu),
@@ -1341,7 +1396,10 @@ class VibeSandboxEvaluator {
     final data = input['data'] as Map? ?? const <String, Object?>{};
     final rawRows = data[capability];
     final rows = rawRows is List
-        ? rawRows.whereType<Map>().map((m) => Map<String, Object?>.from(m)).toList()
+        ? rawRows
+            .whereType<Map>()
+            .map((m) => Map<String, Object?>.from(m))
+            .toList()
         : <Map<String, Object?>>[];
 
     final children = <Map<String, Object?>>[
@@ -1363,7 +1421,9 @@ class VibeSandboxEvaluator {
     final sampleRow = rows.first;
     final resolvedLabelField = labelField ??
         sampleRow.keys.firstWhere(
-          (k) => sampleRow[k] is String || VibeSealedHandle.tryParse(sampleRow[k]) != null,
+          (k) =>
+              sampleRow[k] is String ||
+              VibeSealedHandle.tryParse(sampleRow[k]) != null,
           orElse: () => sampleRow.keys.first,
         );
     final resolvedValueField = valueField ??
@@ -1492,9 +1552,11 @@ class VibeSandboxEvaluator {
     final elapsed = (duration - rem).clamp(0, duration);
     final minsLeft = (rem / 60000).ceil();
     final running = st['running'] == true;
-    final isPaused = st['paused'] == true || (!running && rem > 0 && rem < duration);
-    final statusText =
-        running ? 'Running' : (rem == 0 ? 'Done' : (isPaused ? 'Paused' : 'Ready'));
+    final isPaused =
+        st['paused'] == true || (!running && rem > 0 && rem < duration);
+    final statusText = running
+        ? 'Running'
+        : (rem == 0 ? 'Done' : (isPaused ? 'Paused' : 'Ready'));
     final tone = rem == 0
         ? 'ok'
         : (running ? (rem <= 5 * 60 * 1000 ? 'warn' : 'ok') : 'default');
@@ -1563,13 +1625,13 @@ class VibeSandboxEvaluator {
   }
 
   static double? _parseNamedNumber(String source, String name) {
-    final m = RegExp('\\b$name\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)').firstMatch(source);
+    final m =
+        RegExp('\\b$name\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)').firstMatch(source);
     return m != null ? double.tryParse(m.group(1)!) : null;
   }
 
   static double? _parsePrimaryThreshold(String source) {
-    final explicit =
-        _parseNamedNumber(source, 'THRESHOLD') ??
+    final explicit = _parseNamedNumber(source, 'THRESHOLD') ??
         _parseNamedNumber(source, 'DANGER_LEVEL');
     if (explicit != null) {
       return explicit > 1.0 ? (explicit / 100.0).clamp(0.01, 1.0) : explicit;
@@ -1582,7 +1644,8 @@ class VibeSandboxEvaluator {
   static int? _parseTopLimit(String source) {
     final explicit = _parseNamedNumber(source, 'TOP_LIMIT');
     if (explicit != null && explicit >= 1) return explicit.round();
-    final slice = RegExp(r'\.slice\(\s*0\s*,\s*([0-9]+)\s*\)').firstMatch(source);
+    final slice =
+        RegExp(r'\.slice\(\s*0\s*,\s*([0-9]+)\s*\)').firstMatch(source);
     if (slice != null) return int.tryParse(slice.group(1)!);
     return null;
   }
@@ -1590,7 +1653,8 @@ class VibeSandboxEvaluator {
   static int? _parseDurationMinutes(String source) {
     final explicit = _parseNamedNumber(source, 'DURATION_MIN');
     if (explicit != null && explicit >= 1) return explicit.round();
-    final prod = RegExp(r'DURATION\s*=\s*([0-9]+)\s*\*\s*60\s*\*\s*1000').firstMatch(source);
+    final prod = RegExp(r'DURATION\s*=\s*([0-9]+)\s*\*\s*60\s*\*\s*1000')
+        .firstMatch(source);
     if (prod != null) return int.tryParse(prod.group(1)!);
     return null;
   }
@@ -1629,15 +1693,18 @@ class VibeSandboxEvaluator {
         quote = ch;
         continue;
       }
-      if (ch == '{') braces++;
+      if (ch == '{')
+        braces++;
       else if (ch == '}') {
         braces--;
         if (braces < 0) return false;
-      } else if (ch == '(') parens++;
+      } else if (ch == '(')
+        parens++;
       else if (ch == ')') {
         parens--;
         if (parens < 0) return false;
-      } else if (ch == '[') brackets++;
+      } else if (ch == '[')
+        brackets++;
       else if (ch == ']') {
         brackets--;
         if (brackets < 0) return false;
@@ -1662,7 +1729,8 @@ class VibeSandboxEvaluator {
         continue;
       }
       if (quote != null) {
-        if (ch == r'\') escaped = true;
+        if (ch == r'\')
+          escaped = true;
         else if (ch == quote) quote = null;
         continue;
       }
@@ -1670,7 +1738,8 @@ class VibeSandboxEvaluator {
         quote = ch;
         continue;
       }
-      if (ch == '{') depth++;
+      if (ch == '{')
+        depth++;
       else if (ch == '}') {
         depth--;
         if (depth == 0) {
@@ -1732,7 +1801,11 @@ class VibeSandboxEvaluator {
         }
         final word = raw.substring(start, i);
         var look = i;
-        while (look < raw.length && (raw[look] == ' ' || raw[look] == '\t' || raw[look] == '\n' || raw[look] == '\r')) {
+        while (look < raw.length &&
+            (raw[look] == ' ' ||
+                raw[look] == '\t' ||
+                raw[look] == '\n' ||
+                raw[look] == '\r')) {
           look++;
         }
         if (look < raw.length && raw[look] == ':') {
@@ -1750,9 +1823,9 @@ class VibeSandboxEvaluator {
       i++;
     }
     return out.toString().replaceAllMapped(
-      RegExp(r',(\s*[}\]])'),
-      (m) => m[1]!,
-    );
+          RegExp(r',(\s*[}\]])'),
+          (m) => m[1]!,
+        );
   }
 
   static bool _isIdentStart(String ch) => RegExp(r'[A-Za-z_$]').hasMatch(ch);
@@ -1796,7 +1869,10 @@ class VibeWishRemixer {
     ).firstMatch(lower);
     if (pctMatch != null) {
       final pct = int.parse(pctMatch.group(1)!).clamp(1, 99);
-      final frac = (pct / 100.0).toStringAsFixed(2).replaceFirst(RegExp(r'0+$'), '').replaceFirst(RegExp(r'\.$'), '');
+      final frac = (pct / 100.0)
+          .toStringAsFixed(2)
+          .replaceFirst(RegExp(r'0+$'), '')
+          .replaceFirst(RegExp(r'\.$'), '');
       if (nextSource.trimLeft().startsWith('{')) {
         try {
           final decoded = jsonDecode(nextSource);
@@ -1815,7 +1891,8 @@ class VibeWishRemixer {
             (m) => '${m[1]}$frac',
           );
           changed = true;
-        } else if (RegExp(r'\bDANGER_LEVEL\s*=\s*[0-9.]+').hasMatch(nextSource)) {
+        } else if (RegExp(r'\bDANGER_LEVEL\s*=\s*[0-9.]+')
+            .hasMatch(nextSource)) {
           nextSource = nextSource.replaceFirstMapped(
             RegExp(r'(\bDANGER_LEVEL\s*=\s*)[0-9.]+'),
             (m) => '${m[1]}$frac',
@@ -1863,7 +1940,8 @@ class VibeWishRemixer {
             (m) => '${m[1]}$count',
           );
           changed = true;
-        } else if (RegExp(r'\.slice\(\s*0\s*,\s*\d+\s*\)').hasMatch(nextSource)) {
+        } else if (RegExp(r'\.slice\(\s*0\s*,\s*\d+\s*\)')
+            .hasMatch(nextSource)) {
           nextSource = nextSource.replaceFirstMapped(
             RegExp(r'(\.slice\(\s*0\s*,\s*)\d+(\s*\))'),
             (m) => '${m[1]}$count${m[2]}',
@@ -1921,7 +1999,8 @@ class VibeWishRemixer {
           (m) => '${m[1]}$mins',
         );
         changed = true;
-      } else if (RegExp(r'\bDURATION\s*=\s*\d+\s*\*\s*60\s*\*\s*1000').hasMatch(nextSource)) {
+      } else if (RegExp(r'\bDURATION\s*=\s*\d+\s*\*\s*60\s*\*\s*1000')
+          .hasMatch(nextSource)) {
         nextSource = nextSource.replaceFirstMapped(
           RegExp(r'(\bDURATION\s*=\s*)\d+(\s*\*\s*60\s*\*\s*1000)'),
           (m) => '${m[1]}$mins${m[2]}',
@@ -1934,7 +2013,8 @@ class VibeWishRemixer {
       return (
         ok: false,
         vibe: null,
-        message: 'Try specifying a threshold (e.g. "75%"), count (e.g. "worst 3"), or duration (e.g. "10 minutes"), or switch to Edit code.',
+        message:
+            'Try specifying a threshold (e.g. "75%"), count (e.g. "worst 3"), or duration (e.g. "10 minutes"), or switch to Edit code.',
       );
     }
 
@@ -2133,6 +2213,7 @@ class VibeProtocolHost {
       VibeSpec vibe,
       Map<String, Object?> input,
     )? customRunner,
+    this.wasmRunner,
   })  : _capabilities = List<VibeCapability>.unmodifiable(capabilities),
         _notOffered = List<String>.unmodifiable(notOffered),
         _storage = storage ?? InMemoryVibeStorage(),
@@ -2162,10 +2243,19 @@ class VibeProtocolHost {
     Map<String, Object?> input,
   )? _customRunner;
 
+  /// Optional host WebAssembly runner for `wasm` runtime configs.
+  final FutureOr<Map<String, Object?>> Function(
+    Uint8List wasmBytes,
+    Map<String, Object?> input,
+  )? wasmRunner;
+
   final Map<String, VibeCapability> _capByName = <String, VibeCapability>{};
+  final Map<String, VibeCapability> _streamCapByName =
+      <String, VibeCapability>{};
   final Map<String, String> _valueToHandle = <String, String>{};
   final Map<String, String> _handleToValue = <String, String>{};
   final Set<void Function()> _changeListeners = <void Function()>{};
+  final Set<void Function()> _sourceListeners = <void Function()>{};
   final Set<VibeRunController> _activeRuns = <VibeRunController>{};
   bool _disposed = false;
 
@@ -2173,7 +2263,22 @@ class VibeProtocolHost {
   String get _installsKey => 'vibekit:$id';
 
   List<VibeCapability> get capabilities => _capabilities;
+  List<VibeCapability> get streamCapabilities =>
+      List<VibeCapability>.unmodifiable(_streamCapByName.values);
   List<String> get notOffered => _notOffered;
+
+  VibeCapability? _lookupCap(String name) =>
+      _capByName[name] ?? _streamCapByName[name];
+
+  /// Registers an additional live capability stream (e.g. `terminal.agy`,
+  /// `terminal.git`) available to conditional vibes via `needs` without
+  /// mutating the core [capabilities] list.
+  void registerStreamCapability(VibeCapability capability) {
+    if (capability.name.trim().isEmpty) {
+      throw ArgumentError('Stream capability name must be non-empty');
+    }
+    _streamCapByName[capability.name] = capability;
+  }
 
   void _loadHandles() {
     final raw = _storage.read(_handlesKey);
@@ -2199,7 +2304,8 @@ class VibeProtocolHost {
 
   void _saveHandles() {
     final entries = <List<String>>[
-      for (final entry in _valueToHandle.entries) <String>[entry.key, entry.value],
+      for (final entry in _valueToHandle.entries)
+        <String>[entry.key, entry.value],
     ];
     _storage.write(
       _handlesKey,
@@ -2286,10 +2392,14 @@ class VibeProtocolHost {
 
   VibeCheckResult check(VibeSpec vibe) {
     vibe.validate();
+    return checkNeeds(vibe.needs);
+  }
+
+  VibeCheckResult checkNeeds(Iterable<String> needs) {
     final missing = <String>[];
     final seen = <String>{};
-    for (final capName in vibe.needs) {
-      if (!_capByName.containsKey(capName) && seen.add(capName)) {
+    for (final capName in needs) {
+      if (_lookupCap(capName) == null && seen.add(capName)) {
         missing.add(capName);
       }
     }
@@ -2298,15 +2408,22 @@ class VibeProtocolHost {
 
   VibePermissionLabel label(VibeSpec vibe) {
     vibe.validate();
+    return permissionLabelForNeeds(vibe.needs);
+  }
+
+  /// Computes the plain-language `Reads / Shows / Cannot` security label for
+  /// any Vibe config (`dom`, `wasm`, `js`, or `a2ui`) declaring [needs].
+  VibePermissionLabel permissionLabelForNeeds(Iterable<String> needs) {
+    final needList = needs.toList(growable: false);
     final reads = <String>[];
     final cannot = <String>[];
     final cannotSeen = <String>{};
 
-    if (vibe.needs.isEmpty) {
+    if (needList.isEmpty) {
       reads.add('Nothing from $name');
     } else {
-      for (final capName in vibe.needs) {
-        final cap = _capByName[capName];
+      for (final capName in needList) {
+        final cap = _lookupCap(capName);
         if (cap == null) {
           reads.add('Missing capability: $capName');
           continue;
@@ -2343,13 +2460,13 @@ class VibeProtocolHost {
 
   /// Inspects detailed source issues for [capNames] (or all host capabilities when omitted).
   List<VibeSourceIssue> inspectSources([List<String>? capNames]) {
-    final list = capNames ??
-        <String>[for (final cap in _capabilities) cap.name];
+    final list =
+        capNames ?? <String>[for (final cap in _capabilities) cap.name];
     final issues = <VibeSourceIssue>[];
     final seen = <String>{};
     for (final capName in list) {
       if (!seen.add(capName)) continue;
-      final cap = _capByName[capName];
+      final cap = _lookupCap(capName);
       if (cap == null) {
         issues.add(
           VibeSourceIssue(
@@ -2422,19 +2539,109 @@ class VibeProtocolHost {
     final issues = inspectSources(capNames);
     if (issues.isEmpty) return const VibeSourceStatus.live();
     final mode = _aggregateMode(issues);
-    final reason = issues
-        .map((i) => '${i.title}: ${i.reason}')
-        .join(' · ');
+    final reason = issues.map((i) => '${i.title}: ${i.reason}').join(' · ');
     return VibeSourceStatus(available: false, mode: mode, reason: reason);
   }
 
-  /// Immediately notifies every active mounted run on this host to re-evaluate
-  /// data sources without waiting for its refresh interval.
+  /// Immediately notifies every active mounted run and stream subscriber on
+  /// this host to re-evaluate data sources without waiting for refresh timers.
   void notifySourceChange() {
     final snapshot = List<VibeRunController>.from(_activeRuns);
     for (final run in snapshot) {
       run._onHostSourceChanged();
     }
+    for (final fn in List<void Function()>.from(_sourceListeners)) {
+      try {
+        fn();
+      } on Object {
+        // Isolate listener failures
+      }
+    }
+  }
+
+  /// Subscribes to live host data-source refresh notifications (`notifySourceChange`).
+  void Function() onSourceChange(void Function() listener) {
+    _sourceListeners.add(listener);
+    return () => _sourceListeners.remove(listener);
+  }
+
+  /// Reads and field-seals all capabilities listed in [needs] (`'live'` or
+  /// `'sample'` mode) for multi-runtime Vibe views (`dom`, `wasm`, `js`, `a2ui`).
+  FutureOr<Map<String, Object?>> readCapabilities(
+    Iterable<String> needs, {
+    String dataMode = 'live',
+  }) {
+    final uniqueNeeds = <String>{
+      for (final cap in needs)
+        if (cap.trim().isNotEmpty) cap.trim(),
+    };
+    if (uniqueNeeds.isEmpty) return const <String, Object?>{};
+
+    final syncOut = <String, Object?>{};
+    final asyncPending = <String, Future<Object?>>{};
+
+    for (final capName in uniqueNeeds) {
+      final cap = _lookupCap(capName);
+      if (cap == null) {
+        syncOut[capName] = const <Map<String, Object?>>[];
+        continue;
+      }
+      if (dataMode == 'sample') {
+        syncOut[capName] = _sealRows(cap.sample, cap.fields);
+        continue;
+      }
+      final statusFn = cap.status;
+      if (statusFn != null) {
+        try {
+          if (!statusFn().available) {
+            syncOut[capName] = const <Map<String, Object?>>[];
+            continue;
+          }
+        } on Object {
+          syncOut[capName] = const <Map<String, Object?>>[];
+          continue;
+        }
+      }
+      try {
+        final raw = cap.read();
+        if (raw is Future) {
+          asyncPending[capName] = raw.then<Object?>((v) => v);
+        } else if (raw is List) {
+          syncOut[capName] = _sealRows(raw, cap.fields);
+        } else if (raw is Map) {
+          final typed = raw.map((k, v) => MapEntry(k.toString(), v));
+          syncOut[capName] = _sealRow(typed, cap.fields);
+        } else {
+          syncOut[capName] = const <Map<String, Object?>>[];
+        }
+      } on Object {
+        syncOut[capName] = const <Map<String, Object?>>[];
+      }
+    }
+
+    if (asyncPending.isEmpty) {
+      return Map<String, Object?>.unmodifiable(syncOut);
+    }
+
+    return () async {
+      for (final entry in asyncPending.entries) {
+        final cap = _lookupCap(entry.key);
+        try {
+          final resolved = await entry.value;
+          if (cap != null && resolved is List) {
+            syncOut[entry.key] = _sealRows(resolved, cap.fields);
+          } else if (cap != null && resolved is Map) {
+            final typed = resolved.map((k, v) => MapEntry(k.toString(), v));
+            syncOut[entry.key] = _sealRow(typed, cap.fields);
+          } else {
+            syncOut[entry.key] = const <Map<String, Object?>>[];
+          }
+        } on Object {
+          syncOut[entry.key] = const <Map<String, Object?>>[];
+        }
+      }
+      return Map<String, Object?>.unmodifiable(syncOut);
+    }();
   }
 
   List<VibeInstalledRecord> _loadRecords() {
@@ -2557,11 +2764,14 @@ class VibeProtocolHost {
     String? note,
     String origin = 'yours',
     Map<String, Object?>? args,
+    VibeTriggerCondition? when,
+    bool? triggerEnabled,
     bool? pinned,
     bool? paused,
     bool? collapsed,
   }) {
     vibe.validate();
+    when?.validate();
     final capCheck = check(vibe);
     if (!capCheck.ok) {
       throw StateError(
@@ -2581,9 +2791,7 @@ class VibeProtocolHost {
     } else {
       final argsKey = _canonicalJsonString(cleanArgs);
       matchIdx = records.indexWhere(
-        (r) =>
-            r.vibe.id == vibe.id &&
-            _canonicalJsonString(r.args) == argsKey,
+        (r) => r.vibe.id == vibe.id && _canonicalJsonString(r.args) == argsKey,
       );
     }
 
@@ -2618,6 +2826,8 @@ class VibeProtocolHost {
         clearArgs: cleanArgs == null,
         title: nextTitle,
         note: nextNote,
+        when: when ?? prev.when,
+        triggerEnabled: triggerEnabled ?? prev.triggerEnabled,
         pinned: nextPinned,
         paused: paused ?? prev.paused,
         collapsed: collapsed ?? prev.collapsed,
@@ -2641,6 +2851,8 @@ class VibeProtocolHost {
         args: cleanArgs,
         title: _normalizeTitle(title, vibe.name),
         note: _normalizeNote(note),
+        when: when,
+        triggerEnabled: triggerEnabled ?? true,
         pinned: pinned ?? false,
         paused: paused ?? false,
         collapsed: collapsed ?? false,
@@ -2665,6 +2877,9 @@ class VibeProtocolHost {
     VibeSpec? vibe,
     Map<String, Object?>? args,
     bool clearArgs = false,
+    VibeTriggerCondition? when,
+    bool clearWhen = false,
+    bool? triggerEnabled,
     bool? pinned,
     bool? paused,
     bool? collapsed,
@@ -2675,6 +2890,7 @@ class VibeProtocolHost {
       throw StateError('Installed vibe record not found: $idOrInstanceId');
     }
 
+    when?.validate();
     final prev = records[idx];
     var nextVibe = prev.vibe;
     final nextHistory = List<VibeVersionSnapshot>.from(prev.history);
@@ -2727,6 +2943,9 @@ class VibeProtocolHost {
       note: nextNote,
       args: nextArgs,
       clearArgs: shouldClearArgs,
+      when: when,
+      clearWhen: clearWhen,
+      triggerEnabled: triggerEnabled ?? prev.triggerEnabled,
       pinned: nextPinned,
       paused: paused ?? prev.paused,
       collapsed: collapsed ?? prev.collapsed,
@@ -2875,7 +3094,8 @@ class VibeProtocolHost {
       throw StateError('Host $id is disposed');
     }
     if (dataMode != 'live' && dataMode != 'sample') {
-      throw ArgumentError.value(dataMode, 'dataMode', "Must be 'live' or 'sample'");
+      throw ArgumentError.value(
+          dataMode, 'dataMode', "Must be 'live' or 'sample'");
     }
     final cleanArgs =
         args != null ? (_deepCloneJson(args) as Map<String, Object?>) : null;
@@ -2900,6 +3120,7 @@ class VibeProtocolHost {
     }
     _activeRuns.clear();
     _changeListeners.clear();
+    _sourceListeners.clear();
   }
 }
 
@@ -3076,7 +3297,7 @@ class VibeRunController {
       }
       final data = <String, Object?>{};
       for (final capName in _vibe.needs) {
-        final cap = _host._capByName[capName]!;
+        final cap = _host._lookupCap(capName)!;
         _reads[capName] = (_reads[capName] ?? 0) + 1;
         data[capName] = _host._sealRows(cap.sample, cap.fields);
       }
@@ -3097,7 +3318,7 @@ class VibeRunController {
       if (rawByCap.containsKey(capName) || asyncReads.containsKey(capName)) {
         continue;
       }
-      final cap = _host._capByName[capName]!;
+      final cap = _host._lookupCap(capName)!;
       final hasSample = cap.sample.isNotEmpty;
       try {
         final res = cap.read();
@@ -3177,7 +3398,7 @@ class VibeRunController {
   ) async {
     final issues = <VibeSourceIssue>[];
     for (final entry in asyncReads.entries) {
-      final cap = _host._capByName[entry.key]!;
+      final cap = _host._lookupCap(entry.key)!;
       final hasSample = cap.sample.isNotEmpty;
       try {
         final resolved = await entry.value;
@@ -3228,7 +3449,7 @@ class VibeRunController {
   ) {
     final data = <String, Object?>{};
     for (final capName in _vibe.needs) {
-      final cap = _host._capByName[capName]!;
+      final cap = _host._lookupCap(capName)!;
       _reads[capName] = (_reads[capName] ?? 0) + 1;
       data[capName] = _host._sealRows(rawByCap[capName]!, cap.fields);
     }
@@ -3250,9 +3471,8 @@ class VibeRunController {
     } else {
       _showingLiveView = false;
       _view = null;
-      _unavailableReason = issues
-          .map((i) => '${i.title}: ${i.reason}')
-          .join(' · ');
+      _unavailableReason =
+          issues.map((i) => '${i.title}: ${i.reason}').join(' · ');
     }
   }
 

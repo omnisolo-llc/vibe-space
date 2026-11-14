@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'host.dart';
 import 'mcp_tool_catalog.dart';
+import 'vibe_trigger_condition.dart';
 
 /// Rendering tier supported by Vibe Canvas (`vibe.canvas` / `client.canvas.render`).
 enum VibeCanvasFormat {
@@ -64,6 +65,7 @@ class VibeCanvasPayload {
     this.jsGlue,
     this.layout = VibeCanvasLayout.splitRight,
     this.updatedAtIso = '',
+    this.when,
   });
 
   factory VibeCanvasPayload.fromJson(Map<String, dynamic> json) {
@@ -93,6 +95,7 @@ class VibeCanvasPayload {
       updatedAtIso: json['updatedAtIso']?.toString().trim().isNotEmpty == true
           ? json['updatedAtIso']!.toString().trim()
           : (json['updated_at_iso']?.toString().trim() ?? ''),
+      when: VibeTriggerCondition.tryParse(json['when'] ?? json['condition']),
     );
   }
 
@@ -105,6 +108,7 @@ class VibeCanvasPayload {
   final String? jsGlue;
   final VibeCanvasLayout layout;
   final String updatedAtIso;
+  final VibeTriggerCondition? when;
 
   /// Parses [content] as a declarative `VibeView` JSON map when [format] is [VibeCanvasFormat.vibeUi].
   Map<String, dynamic>? tryDecodeVibeUi() {
@@ -131,6 +135,8 @@ class VibeCanvasPayload {
     String? jsGlue,
     VibeCanvasLayout? layout,
     String? updatedAtIso,
+    VibeTriggerCondition? when,
+    bool clearWhen = false,
   }) {
     return VibeCanvasPayload(
       canvasId: canvasId ?? this.canvasId,
@@ -142,6 +148,7 @@ class VibeCanvasPayload {
       jsGlue: jsGlue ?? this.jsGlue,
       layout: layout ?? this.layout,
       updatedAtIso: updatedAtIso ?? this.updatedAtIso,
+      when: clearWhen ? null : (when ?? this.when),
     );
   }
 
@@ -155,6 +162,7 @@ class VibeCanvasPayload {
         if (jsGlue != null) 'jsGlue': jsGlue,
         'layout': layout.id,
         'updatedAtIso': updatedAtIso,
+        if (when != null) 'when': when!.toJson(),
       };
 
   static String? _optionalString(Object? raw) {
@@ -643,9 +651,7 @@ bool _hasSafeSingleBinaryFlags(String binary, List<String> args) {
     default:
       for (final arg in args) {
         final longLower = _longOptionLower(arg);
-        if (arg == '-c' ||
-            arg == '-o' ||
-            longLower.startsWith('--output')) {
+        if (arg == '-c' || arg == '-o' || longLower.startsWith('--output')) {
           return false;
         }
       }

@@ -10,6 +10,7 @@ use crate::{Error, MAX_MESSAGE_BYTES};
 
 const MAX_DEPTH: usize = 16;
 const MAX_NODES: usize = 1024;
+const MAX_CANVAS_COMMANDS: usize = 2000;
 const SPARK_BLOCKS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
 
 /// Localized UI copy for Vibe Space shells across human languages and scripts.
@@ -385,7 +386,8 @@ pub fn adapt_external_ui(raw: &Value) -> Result<Value, Error> {
     };
 
     let mut budget = MAX_NODES;
-    validate_canonical_node(&adapted, 0, &mut budget)?;
+    let mut canvas_budget = MAX_CANVAS_COMMANDS;
+    validate_canonical_node(&adapted, 0, &mut budget, &mut canvas_budget)?;
     Ok(adapted)
 }
 
@@ -1014,7 +1016,12 @@ fn normalize_canonical_node(raw: &Value, depth: usize) -> Result<Value, Error> {
     Ok(Value::Object(out))
 }
 
-fn validate_canonical_node(node: &Value, depth: usize, budget: &mut usize) -> Result<(), Error> {
+fn validate_canonical_node(
+    node: &Value,
+    depth: usize,
+    budget: &mut usize,
+    canvas_budget: &mut usize,
+) -> Result<(), Error> {
     if depth > MAX_DEPTH || *budget == 0 {
         return Err(Error::Package);
     }
@@ -1034,6 +1041,7 @@ fn validate_canonical_node(node: &Value, depth: usize, budget: &mut usize) -> Re
         "stat",
         "bar",
         "sparkline",
+        "canvas",
         "table",
         "divider",
         "button",
@@ -1045,10 +1053,34 @@ fn validate_canonical_node(node: &Value, depth: usize, budget: &mut usize) -> Re
     if !KNOWN.contains(&kind) {
         return Err(Error::Package);
     }
+    if kind == "canvas" {
+        const VALID_OPS: &[&str] = &[
+            "clear", "rect", "rrect", "circle", "arc", "line", "path", "polygon", "bars", "text",
+        ];
+        let cmds = obj
+            .get("commands")
+            .and_then(Value::as_array)
+            .ok_or(Error::Package)?;
+        if cmds.len() > *canvas_budget {
+            return Err(Error::Package);
+        }
+        *canvas_budget -= cmds.len();
+        for cmd in cmds {
+            let cmd_obj = cmd.as_object().ok_or(Error::Package)?;
+            let op = cmd_obj
+                .get("op")
+                .or_else(|| cmd_obj.get("type"))
+                .and_then(Value::as_str)
+                .ok_or(Error::Package)?;
+            if !VALID_OPS.contains(&op) {
+                return Err(Error::Package);
+            }
+        }
+    }
     if let Some(children) = obj.get("children") {
         let arr = children.as_array().ok_or(Error::Package)?;
         for child in arr {
-            validate_canonical_node(child, depth + 1, budget)?;
+            validate_canonical_node(child, depth + 1, budget, canvas_budget)?;
         }
     }
     Ok(())
@@ -1132,6 +1164,27 @@ fn resolve_node_recursive(
             }
         }
         out.insert("rows".into(), Value::Array(resolved_rows));
+    }
+
+    if kind == "canvas" {
+        if let Some(Value::Array(cmds)) = obj.get("commands") {
+            let mut resolved_cmds = Vec::with_capacity(cmds.len());
+            for cmd in cmds {
+                let mut cmd_out = cmd.clone();
+                if let Some(cmd_obj) = cmd_out.as_object_mut() {
+                    if let Some(txt_val) = cmd_obj.get("text").cloned() {
+                        let (txt, is_sealed, ok) = resolve_text_value(Some(&txt_val), resolve_sealed);
+                        if is_sealed {
+                            had_sealed = true;
+                            all_resolved &= ok;
+                        }
+                        cmd_obj.insert("text".into(), Value::String(txt));
+                    }
+                }
+                resolved_cmds.push(cmd_out);
+            }
+            out.insert("commands".into(), Value::Array(resolved_cmds));
+        }
     }
 
     if had_sealed {
@@ -1281,6 +1334,40 @@ fn render_terminal_node(
                 out.push(ansi_wrap(ansi, tone, &spark));
             }
         }
+        "canvas" => {
+            if let Some(cmds) = obj.get("commands").and_then(Value::as_array) {
+                let mut chunks = Vec::new();
+                for cmd in cmds {
+                    if let Some(co) = cmd.as_object() {
+                        let op = co
+                            .get("op")
+                            .or_else(|| co.get("type"))
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        if op == "bars" {
+                            if let Some(vals) = co.get("values").and_then(Value::as_array) {
+                                let spark = render_sparkline(vals);
+                                if !spark.is_empty() {
+                                    chunks.push(spark);
+                                }
+                            }
+                        } else if op == "text" {
+                            let txt = format_terminal_text(co.get("text"), resolve_sealed);
+                            if !txt.is_empty() {
+                                chunks.push(txt);
+                            }
+                        }
+                    }
+                }
+                if !chunks.is_empty() {
+                    out.push(ansi_wrap(ansi, tone, &chunks.join(" ")));
+                } else {
+                    let w = obj.get("width").and_then(Value::as_u64).unwrap_or(260);
+                    let h = obj.get("height").and_then(Value::as_u64).unwrap_or(56);
+                    out.push(format!("[canvas {w}x{h}]"));
+                }
+            }
+        }
         "table" => {
             if let Some(headers) = obj.get("headers").and_then(Value::as_array) {
                 let hdrs: Vec<String> = headers
@@ -1359,6 +1446,11 @@ fn render_markdown_node(
             if let Some(vals) = obj.get("values").and_then(Value::as_array) {
                 out.push(format!("`{}`", render_sparkline(vals)));
             }
+        }
+        "canvas" => {
+            let w = obj.get("width").and_then(Value::as_u64).unwrap_or(260);
+            let h = obj.get("height").and_then(Value::as_u64).unwrap_or(56);
+            out.push(format!("`[canvas {w}x{h}]`"));
         }
         "table" => {
             if let Some(headers) = obj.get("headers").and_then(Value::as_array) {
@@ -1501,5 +1593,34 @@ mod tests {
             assert_eq!(s.locale, code);
             assert!(!s.sealed_legend.is_empty());
         }
+    }
+
+    #[test]
+    fn canvas_primitive_validates_command_budget_and_renders_cleanly() {
+        let view = json!({
+            "type": "canvas",
+            "width": 260,
+            "height": 56,
+            "tone": "ok",
+            "commands": [
+                { "op": "clear", "fill": "#0F172A" },
+                { "op": "bars", "values": [24.0, 58.0, 94.2], "fill": "#38BDF8" },
+                { "op": "text", "text": { "sealed": "h_tps" }, "x": 8, "y": 10 }
+            ]
+        });
+        let resolver = |id: &str| (id == "h_tps").then(|| "94.2 tok/s".to_owned());
+        let resolved = resolve_view_tree(&view, resolver).unwrap();
+        assert_eq!(resolved["commands"][2]["text"], "94.2 tok/s");
+        assert_eq!(resolved["sealed_resolved"], true);
+
+        let term = render_terminal(&view, resolver, false, 60).unwrap();
+        assert!(term.contains("94.2 tok/s"));
+
+        // Over 2,000 commands across frame tree must fail validation.
+        let over: Vec<Value> = (0..2001)
+            .map(|i| json!({ "op": "rect", "x": i, "y": 0, "w": 1, "h": 1 }))
+            .collect();
+        let bad = json!({ "type": "canvas", "width": 260, "height": 56, "commands": over });
+        assert!(adapt_external_ui(&bad).is_err());
     }
 }
