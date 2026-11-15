@@ -1,13 +1,18 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
-import 'vibe_mini_program_parser.dart';
 import 'vibe_protocol.dart';
 import 'vibe_runtime_config.dart';
+import 'vibe_mini_program_parser.dart';
 import 'vibe_trigger_condition.dart';
 import 'vibe_vxml_template.dart';
 
-export 'vibe_mini_program_parser.dart' show validateMiniProgramSource;
+export 'vibe_mini_program_parser.dart'
+    show
+        parseMiniProgramDefinitionFromSource,
+        parseVibeSnippetDefinitionFromSource,
+        validateMiniProgramSource,
+        validateVibeSnippetSource;
 
 const Set<String> _kBlockedPatchSegments = <String>{
   '__proto__',
@@ -15,10 +20,62 @@ const Set<String> _kBlockedPatchSegments = <String>{
   'prototype',
 };
 
-/// Applies a WeChat Mini Program `setData(patch)` incremental state diff using
-/// dotted and bracket paths (e.g. `'quota.used': 0.8`, `'bars[0].v': 42`).
+/// Reserved Object/prototype property names forbidden as Vibe-Snippet event handlers.
+const Set<String> kForbiddenVibeMethodNames = <String>{
+  '__proto__',
+  'constructor',
+  'prototype',
+  'toString',
+  'toLocaleString',
+  'valueOf',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+};
+
+/// Valid identifier pattern for Vibe-Snippet event handler names (`bindtap`, etc.).
+final RegExp kValidVibeHandlerNameRe = RegExp(
+  r'^[a-zA-Z_$][a-zA-Z0-9_$]{0,63}$',
+);
+
+/// Returns `true` when [raw] is a safe, non-prototype Vibe-Snippet handler name.
+bool isValidMiniProgramHandlerName(String? raw) {
+  if (raw == null) return false;
+  final trimmed = raw.trim();
+  return trimmed.isNotEmpty &&
+      !kForbiddenVibeMethodNames.contains(trimmed) &&
+      kValidVibeHandlerNameRe.hasMatch(trimmed);
+}
+
+void _assertNoForbiddenNestedKeys(Object? value, [int depth = 0]) {
+  if (depth > 32) {
+    throw const FormatException('setData patch nesting limit exceeded');
+  }
+  if (value is List) {
+    for (final item in value) {
+      _assertNoForbiddenNestedKeys(item, depth + 1);
+    }
+  } else if (value is Map) {
+    for (final entry in value.entries) {
+      final key = entry.key.toString();
+      if (_kBlockedPatchSegments.contains(key)) {
+        throw FormatException('Forbidden setData key: "$key"');
+      }
+      _assertNoForbiddenNestedKeys(entry.value, depth + 1);
+    }
+  }
+}
+
+/// Applies an incremental `setData(patch)` state diff (following the WeChat
+/// dual-layer model) using dotted and bracket paths (e.g. `'quota.used': 0.8`,
+/// `'bars[0].v': 42`).
 ///
-/// Enforces serialized patch size `<= maxBytes` (`64 KiB` default) and preserves
+/// Enforces serialized patch size `<= maxBytes` (`64 KiB` default), rejects
+/// prototype keys (`__proto__`, `constructor`, `prototype`), and preserves
 /// sealed `{ 'sealed': 'h_...' }` handles intact.
 Map<String, Object?> applyVibeSetData(
   Map<String, Object?> state,
@@ -31,7 +88,8 @@ Map<String, Object?> applyVibeSetData(
       'setData patch exceeds ${maxBytes ~/ 1024} KiB limit ($encodedBytes bytes)',
     );
   }
-  var next = deepCloneVibeMap(state);
+  _assertNoForbiddenNestedKeys(patch);
+  var next = Map<String, Object?>.of(state);
   for (final entry in patch.entries) {
     final segments = _parsePatchPath(entry.key);
     if (segments.isEmpty) continue;
@@ -61,10 +119,10 @@ List<Object> _parsePatchPath(String rawPath) {
   }
 
   for (var i = 0; i < path.length; i++) {
-    final ch = path[i];
-    if (ch == '.') {
+    final cu = path.codeUnitAt(i);
+    if (cu == 46 /* '.' */) {
       flushKey();
-    } else if (ch == '[') {
+    } else if (cu == 91 /* '[' */) {
       flushKey();
       final end = path.indexOf(']', i + 1);
       if (end < 0) {
@@ -90,7 +148,7 @@ List<Object> _parsePatchPath(String rawPath) {
       }
       i = end;
     } else {
-      buf.write(ch);
+      buf.writeCharCode(cu);
     }
   }
   flushKey();
@@ -126,7 +184,9 @@ Object? _assignAtPath(
 /// Deep-clones a JSON-like map while preserving `{ 'sealed': 'h_...' }` handles.
 Map<String, Object?> deepCloneVibeMap(Map<dynamic, dynamic> src) {
   return <String, Object?>{
-    for (final e in src.entries) e.key.toString(): deepCloneVibeValue(e.value),
+    for (final e in src.entries)
+      if (!_kBlockedPatchSegments.contains(e.key.toString()))
+        e.key.toString(): deepCloneVibeValue(e.value),
   };
 }
 
@@ -136,8 +196,9 @@ Object? deepCloneVibeValue(Object? v) {
   if (VibeSealedHandle.tryParse(v) != null) {
     return <String, Object?>{'sealed': (v as Map)['sealed'].toString()};
   }
-  if (v is List)
+  if (v is List) {
     return <Object?>[for (final item in v) deepCloneVibeValue(item)];
+  }
   if (v is Map) return deepCloneVibeMap(v);
   return v.toString();
 }
@@ -179,11 +240,21 @@ class VibeMiniProgramEvent {
   final Map<String, Object?> dataset;
   final Map<String, Object?> detail;
 
+  static const List<String> _kEventPrefixes = <String>[
+    'vibe:tap:',
+    'vibe:input:',
+    'vibe:change:',
+    'mp:tap:',
+    'mp:input:',
+    'mp:change:',
+  ];
+
   static VibeMiniProgramEvent? tryFromCommand(
     String command,
     Map<String, Object?> args,
   ) {
-    if (args['__mpEvent'] == true && args['handler'] is String) {
+    if ((args['__vibeEvent'] == true || args['__mpEvent'] == true) &&
+        args['handler'] is String) {
       return VibeMiniProgramEvent(
         type: (args['type'] ?? 'tap').toString(),
         handler: args['handler'] as String,
@@ -200,9 +271,11 @@ class VibeMiniProgramEvent {
               },
       );
     }
-    for (final prefix in const <String>['mp:tap:', 'mp:input:', 'mp:change:']) {
+    for (final prefix in _kEventPrefixes) {
       if (command.startsWith(prefix) && command.length > prefix.length) {
-        final evType = prefix.split(':')[1];
+        final colon1 = prefix.indexOf(':');
+        final colon2 = prefix.indexOf(':', colon1 + 1);
+        final evType = prefix.substring(colon1 + 1, colon2);
         return VibeMiniProgramEvent(
           type: evType,
           handler: command.substring(prefix.length),
@@ -232,7 +305,7 @@ class VibeMiniProgramEvent {
       };
 }
 
-/// Execution context (`this`) exposed to Mini Program lifecycle hooks & methods.
+/// Execution context (`this`) exposed to Vibe-Snippet lifecycle hooks & methods.
 class VibeMiniProgramScope {
   VibeMiniProgramScope.internal(this._session);
 
@@ -259,7 +332,8 @@ typedef VibeMiniProgramMethodHook = void Function(
   VibeMiniProgramEvent event,
 );
 
-/// Declarative or JS-backed WeChat Mini Program (`AppService`) definition.
+/// Declarative or JS-backed Vibe-Snippet (`AppService`) definition following the
+/// WeChat Mini Program dual-layer isolation model.
 class VibeMiniProgramDefinition {
   const VibeMiniProgramDefinition({
     this.initialData = const <String, Object?>{},
@@ -272,7 +346,7 @@ class VibeMiniProgramDefinition {
     this.rawSource,
   });
 
-  /// Parses an air-gapped `defineMiniProgram({ data, template, onLoad, onShow,
+  /// Parses an air-gapped `defineVibeSnippet({ data, template, onLoad, onShow,
   /// onHide, onDataUpdate, methods })` script (or JSON object) into a safe
   /// pure-Dart [VibeMiniProgramDefinition].
   factory VibeMiniProgramDefinition.fromSource(
@@ -297,7 +371,7 @@ class VibeMiniProgramDefinition {
   final String? rawSource;
 }
 
-/// Stateful air-gapped Mini Program controller pairing Layer 1 (`AppService`
+/// Stateful air-gapped Vibe-Snippet controller pairing Layer 1 (`AppService`
 /// Dart/JS/Wasm logic + `setData`) with Layer 2 (`Skyline` VXML `template`).
 class VibeMiniProgramSession {
   VibeMiniProgramSession({
@@ -309,6 +383,11 @@ class VibeMiniProgramSession {
   })  : _template = template ?? definition.template,
         rateLimiter = rateLimiter ?? VibeSetDataRateLimiter(),
         _data = deepCloneVibeMap(definition.initialData) {
+    for (final key in definition.methods.keys) {
+      if (!isValidMiniProgramHandlerName(key)) {
+        throw FormatException('Forbidden Vibe-Snippet method name: "$key"');
+      }
+    }
     if (wasmBytes != null) {
       validateVibeWasmBytes(wasmBytes!);
     }
@@ -328,12 +407,14 @@ class VibeMiniProgramSession {
   VibeTriggerContext _triggerContext = const VibeTriggerContext();
   String _lifecycle = 'created';
   int _setDataCount = 0;
+  int _revision = 0;
 
   Map<String, Object?> get data => Map<String, Object?>.unmodifiable(_data);
   Map<String, Object?> get hostData => _hostData;
   VibeTriggerContext get triggerContext => _triggerContext;
   String get lifecycle => _lifecycle;
   int get setDataCount => _setDataCount;
+  int get revision => _revision;
   Map<String, Object?>? get template => _template;
 
   late final VibeMiniProgramScope _scope = VibeMiniProgramScope.internal(this);
@@ -342,6 +423,7 @@ class VibeMiniProgramSession {
     rateLimiter.record(nowMs: nowMs);
     _data = applyVibeSetData(_data, patch);
     _setDataCount++;
+    _revision++;
   }
 
   void load({
@@ -352,6 +434,7 @@ class VibeMiniProgramSession {
     _hostData = deepCloneVibeMap(hostData);
     _triggerContext = context;
     _lifecycle = 'loaded';
+    _revision++;
     definition.onLoad?.call(_scope);
     _invokeWasmHook('onLoad', nowMs: nowMs);
     show(context: context, nowMs: nowMs);
@@ -364,12 +447,14 @@ class VibeMiniProgramSession {
   void show({VibeTriggerContext? context, int? nowMs}) {
     if (context != null) _triggerContext = context;
     _lifecycle = 'shown';
+    _revision++;
     definition.onShow?.call(_scope);
     _invokeWasmHook('onShow', nowMs: nowMs);
   }
 
   void hide({int? nowMs}) {
     _lifecycle = 'hidden';
+    _revision++;
     definition.onHide?.call(_scope);
     _invokeWasmHook('onHide', nowMs: nowMs);
   }
@@ -381,18 +466,25 @@ class VibeMiniProgramSession {
   }) {
     _hostData = deepCloneVibeMap(nextHostData);
     _triggerContext = nextContext;
+    _revision++;
     definition.onDataUpdate?.call(_scope, _hostData, _triggerContext);
     _invokeWasmHook('onDataUpdate', nowMs: nowMs);
   }
 
   bool dispatchEvent(VibeMiniProgramEvent event, {int? nowMs}) {
-    final fn = definition.methods[event.handler];
-    if (fn != null) {
-      fn(_scope, event);
-      return true;
+    final handler = event.handler.trim();
+    if (!isValidMiniProgramHandlerName(handler)) {
+      return false;
+    }
+    if (definition.methods.containsKey(handler)) {
+      final fn = definition.methods[handler];
+      if (fn != null) {
+        fn(_scope, event);
+        return true;
+      }
     }
     if (wasmBytes != null) {
-      _invokeWasmHook(event.handler, event: event.toJson(), nowMs: nowMs);
+      _invokeWasmHook(handler, event: event.toJson(), nowMs: nowMs);
       return true;
     }
     return false;
@@ -447,3 +539,16 @@ class VibeMiniProgramSession {
     }
   }
 }
+
+/// Compatibility aliases for callers transitioning between `MiniProgram` and `VibeSnippet`.
+typedef VibeSnippetEvent = VibeMiniProgramEvent;
+typedef VibeSnippetScope = VibeMiniProgramScope;
+typedef VibeSnippetLifecycleHook = VibeMiniProgramLifecycleHook;
+typedef VibeSnippetDataHook = VibeMiniProgramDataHook;
+typedef VibeSnippetMethodHook = VibeMiniProgramMethodHook;
+typedef VibeSnippetDefinition = VibeMiniProgramDefinition;
+typedef VibeSnippetSession = VibeMiniProgramSession;
+
+/// Compatibility alias for [isValidMiniProgramHandlerName].
+bool isValidVibeSnippetHandlerName(String? raw) =>
+    isValidMiniProgramHandlerName(raw);

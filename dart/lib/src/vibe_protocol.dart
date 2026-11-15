@@ -4,6 +4,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'compatibility_adapter.dart';
+import 'vibe_prompt.dart';
 import 'vibe_trigger_condition.dart';
 
 /// Maximum UTF-8 byte length for a share token (`#vibe=...`).
@@ -23,6 +24,60 @@ const int kMaxVibeNoteLength = 280;
 
 final RegExp _kVibeIdRegex = RegExp(r'^[a-z0-9-]{1,40}$');
 final RegExp _kBase64UrlRegex = RegExp(r'^[A-Za-z0-9_-]+$');
+final RegExp _kThrowNewErrorRe = RegExp(
+  r'''throw\s+new\s+Error\(\s*['"]([^'"]+)['"]\s*\)''',
+);
+final RegExp _kUsedFractionThresholdRe = RegExp(
+  r'usedFraction\s*>=\s*(0\.[0-9]+)',
+);
+final RegExp _kSliceLimitRe = RegExp(r'\.slice\(\s*0\s*,\s*([0-9]+)\s*\)');
+final RegExp _kDurationProdRe = RegExp(
+  r'DURATION\s*=\s*([0-9]+)\s*\*\s*60\s*\*\s*1000',
+);
+final RegExp _kHeadingLiteralRe = RegExp(
+  r'''type\s*:\s*['"]heading['"]\s*,\s*text\s*:\s*(['"])((?:\\.|(?!\1).)*)\1''',
+);
+final RegExp _kTrailingJsonCommaRe = RegExp(r',(\s*[}\]])');
+final RegExp _kRemixPctRe = RegExp(
+  r'(?:red|warn|alert|above|over|threshold|阈值|超过|红色|警告|임계값|umbral|seuil|schwellenwert|حد)?\s*(\d{1,3})\s*[%％]',
+);
+final RegExp _kTrailingZeroRe = RegExp(r'0+$');
+final RegExp _kTrailingDotRe = RegExp(r'\.$');
+final RegExp _kThresholdAssignCheckRe = RegExp(r'\bTHRESHOLD\s*=\s*[0-9.]+');
+final RegExp _kThresholdAssignCaptureRe =
+    RegExp(r'(\bTHRESHOLD\s*=\s*)[0-9.]+');
+final RegExp _kDangerLevelCheckRe = RegExp(r'\bDANGER_LEVEL\s*=\s*[0-9.]+');
+final RegExp _kDangerLevelCaptureRe = RegExp(r'(\bDANGER_LEVEL\s*=\s*)[0-9.]+');
+final RegExp _kUsedFractionReplaceRe = RegExp(
+  r'(usedFraction\s*>=\s*)0\.(?:8|80|9|90|7|70|75|85|95)',
+);
+final RegExp _kAbovePctRe = RegExp(r'above \d{1,3}%');
+final RegExp _kRemixCountRe = RegExp(
+  r'(?:(?:top|worst|best|first|only(?:\s+the)?(?:\s+worst|\s+top)?|peores|primeros|mejores|pires|premiers|meilleurs|schlechtesten|ersten)\s+|(?:最差|前|最多|最悪|上位|상위|أسوأ|أول)\s*)(\d+|two|three|four|five|six|eight|ten|两|三|四|五|六|八|十)(?=\s|$|个|台|件|項目|개)',
+);
+final RegExp _kTopLimitCheckRe = RegExp(r'\bTOP_LIMIT\s*=\s*\d+');
+final RegExp _kTopLimitCaptureRe = RegExp(r'(\bTOP_LIMIT\s*=\s*)\d+');
+final RegExp _kSliceCheckRe = RegExp(r'\.slice\(\s*0\s*,\s*\d+\s*\)');
+final RegExp _kSliceCaptureRe = RegExp(r'(\.slice\(\s*0\s*,\s*)\d+(\s*\))');
+final RegExp _kRemixDaysRe = RegExp(
+  r'(?:^|[^\d])(\d{1,3})\s*(?:days?|d[ií]as?|jours?|tage?|天|日|일|أيام|يوم)(?=$|\s|[.,!?，。])',
+);
+final RegExp _kWindowDaysCheckRe = RegExp(r'\bWINDOW_DAYS\s*=\s*\d+');
+final RegExp _kWindowDaysCaptureRe = RegExp(r'(\bWINDOW_DAYS\s*=\s*)\d+');
+final RegExp _kDayMsCheckRe = RegExp(r'\b\d+\s*\*\s*dayMs\b');
+final RegExp _kDayMsCaptureRe = RegExp(r'\b\d+(\s*\*\s*dayMs\b)');
+final RegExp _kRemixMinRe = RegExp(
+  r'(?:^|[^\d])(\d{1,3})[\s-]*(?:minutes?|mins?|minutos?|minuten?|分钟|分|분|دقائق|دقيقة)(?=$|\s|[.,!?，。])',
+);
+final RegExp _kDurationMinCheckRe = RegExp(r'\bDURATION_MIN\s*=\s*\d+');
+final RegExp _kDurationMinCaptureRe = RegExp(r'(\bDURATION_MIN\s*=\s*)\d+');
+final RegExp _kDurationProdCheckRe = RegExp(
+  r'\bDURATION\s*=\s*\d+\s*\*\s*60\s*\*\s*1000',
+);
+final RegExp _kDurationProdCaptureRe = RegExp(
+  r'(\bDURATION\s*=\s*)\d+(\s*\*\s*60\s*\*\s*1000)',
+);
+final Map<String, RegExp> _kNamedNumberRegexCache = <String, RegExp>{};
 final Random _secureRandom = Random.secure();
 
 String _randomHex(int byteCount) {
@@ -447,7 +502,7 @@ class VibeSpec {
           other.name == name &&
           other.wish == wish &&
           other.version == version &&
-          _canonicalJsonString(other.needs) == _canonicalJsonString(needs) &&
+          vibeDeepEquals(other.needs, needs) &&
           other.refreshMs == refreshMs &&
           other.when == when &&
           other.source == source;
@@ -458,7 +513,7 @@ class VibeSpec {
         name,
         wish,
         version,
-        _canonicalJsonString(needs),
+        vibeDeepHash(needs),
         refreshMs,
         when,
         source,
@@ -978,9 +1033,7 @@ class VibeSandboxEvaluator {
     if (!_hasBalancedDelimiters(trimmed)) {
       throw const FormatException('SyntaxError in vibe source');
     }
-    final throwMatch =
-        RegExp(r'''throw\s+new\s+Error\(\s*['"]([^'"]+)['"]\s*\)''')
-            .firstMatch(trimmed);
+    final throwMatch = _kThrowNewErrorRe.firstMatch(trimmed);
     if (throwMatch != null && !trimmed.contains('try')) {
       throw FormatException(throwMatch.group(1) ?? 'Vibe threw an error');
     }
@@ -1625,8 +1678,11 @@ class VibeSandboxEvaluator {
   }
 
   static double? _parseNamedNumber(String source, String name) {
-    final m =
-        RegExp('\\b$name\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)').firstMatch(source);
+    final re = _kNamedNumberRegexCache.putIfAbsent(
+      name,
+      () => RegExp('\\b$name\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)'),
+    );
+    final m = re.firstMatch(source);
     return m != null ? double.tryParse(m.group(1)!) : null;
   }
 
@@ -1636,7 +1692,7 @@ class VibeSandboxEvaluator {
     if (explicit != null) {
       return explicit > 1.0 ? (explicit / 100.0).clamp(0.01, 1.0) : explicit;
     }
-    final cmp = RegExp(r'usedFraction\s*>=\s*(0\.[0-9]+)').firstMatch(source);
+    final cmp = _kUsedFractionThresholdRe.firstMatch(source);
     if (cmp != null) return double.tryParse(cmp.group(1)!);
     return null;
   }
@@ -1644,8 +1700,7 @@ class VibeSandboxEvaluator {
   static int? _parseTopLimit(String source) {
     final explicit = _parseNamedNumber(source, 'TOP_LIMIT');
     if (explicit != null && explicit >= 1) return explicit.round();
-    final slice =
-        RegExp(r'\.slice\(\s*0\s*,\s*([0-9]+)\s*\)').firstMatch(source);
+    final slice = _kSliceLimitRe.firstMatch(source);
     if (slice != null) return int.tryParse(slice.group(1)!);
     return null;
   }
@@ -1653,16 +1708,13 @@ class VibeSandboxEvaluator {
   static int? _parseDurationMinutes(String source) {
     final explicit = _parseNamedNumber(source, 'DURATION_MIN');
     if (explicit != null && explicit >= 1) return explicit.round();
-    final prod = RegExp(r'DURATION\s*=\s*([0-9]+)\s*\*\s*60\s*\*\s*1000')
-        .firstMatch(source);
+    final prod = _kDurationProdRe.firstMatch(source);
     if (prod != null) return int.tryParse(prod.group(1)!);
     return null;
   }
 
   static String? _parseHeadingLiteral(String source) {
-    final m = RegExp(
-      r'''type\s*:\s*['"]heading['"]\s*,\s*text\s*:\s*(['"])((?:\\.|(?!\1).)*)\1''',
-    ).firstMatch(source);
+    final m = _kHeadingLiteralRe.firstMatch(source);
     if (m != null) {
       return m.group(2)?.replaceAll(r'\u00b7', '·');
     }
@@ -1823,13 +1875,24 @@ class VibeSandboxEvaluator {
       i++;
     }
     return out.toString().replaceAllMapped(
-          RegExp(r',(\s*[}\]])'),
+          _kTrailingJsonCommaRe,
           (m) => m[1]!,
         );
   }
 
-  static bool _isIdentStart(String ch) => RegExp(r'[A-Za-z_$]').hasMatch(ch);
-  static bool _isIdentPart(String ch) => RegExp(r'[A-Za-z0-9_$]').hasMatch(ch);
+  static bool _isIdentStart(String ch) {
+    final u = ch.codeUnitAt(0);
+    return (u >= 65 && u <= 90) || (u >= 97 && u <= 122) || u == 95 || u == 36;
+  }
+
+  static bool _isIdentPart(String ch) {
+    final u = ch.codeUnitAt(0);
+    return (u >= 65 && u <= 90) ||
+        (u >= 97 && u <= 122) ||
+        (u >= 48 && u <= 57) ||
+        u == 95 ||
+        u == 36;
+  }
 }
 
 /// Applies wish-based parameter remixes to an existing [VibeSpec].
@@ -1864,15 +1927,13 @@ class VibeWishRemixer {
     var nextSource = base.source;
     var changed = false;
 
-    final pctMatch = RegExp(
-      r'(?:red|warn|alert|above|over|threshold|阈值|超过|红色|警告|임계값|umbral|seuil|schwellenwert|حد)?\s*(\d{1,3})\s*[%％]',
-    ).firstMatch(lower);
+    final pctMatch = _kRemixPctRe.firstMatch(lower);
     if (pctMatch != null) {
       final pct = int.parse(pctMatch.group(1)!).clamp(1, 99);
       final frac = (pct / 100.0)
           .toStringAsFixed(2)
-          .replaceFirst(RegExp(r'0+$'), '')
-          .replaceFirst(RegExp(r'\.$'), '');
+          .replaceFirst(_kTrailingZeroRe, '')
+          .replaceFirst(_kTrailingDotRe, '');
       if (nextSource.trimLeft().startsWith('{')) {
         try {
           final decoded = jsonDecode(nextSource);
@@ -1885,31 +1946,30 @@ class VibeWishRemixer {
           // ignore
         }
       } else {
-        if (RegExp(r'\bTHRESHOLD\s*=\s*[0-9.]+').hasMatch(nextSource)) {
+        if (_kThresholdAssignCheckRe.hasMatch(nextSource)) {
           nextSource = nextSource.replaceFirstMapped(
-            RegExp(r'(\bTHRESHOLD\s*=\s*)[0-9.]+'),
+            _kThresholdAssignCaptureRe,
             (m) => '${m[1]}$frac',
           );
           changed = true;
-        } else if (RegExp(r'\bDANGER_LEVEL\s*=\s*[0-9.]+')
-            .hasMatch(nextSource)) {
+        } else if (_kDangerLevelCheckRe.hasMatch(nextSource)) {
           nextSource = nextSource.replaceFirstMapped(
-            RegExp(r'(\bDANGER_LEVEL\s*=\s*)[0-9.]+'),
+            _kDangerLevelCaptureRe,
             (m) => '${m[1]}$frac',
           );
           changed = true;
         } else if (nextSource.contains('usedFraction')) {
           nextSource = nextSource
               .replaceFirstMapped(
-                RegExp(r'(usedFraction\s*>=\s*)0\.(?:8|80|9|90|7|70|75|85|95)'),
+                _kUsedFractionReplaceRe,
                 (m) => '${m[1]}$frac',
               )
               .replaceFirstMapped(
-                RegExp(r'(usedFraction\s*>=\s*)0\.(?:8|80|9|90|7|70|75|85|95)'),
+                _kUsedFractionReplaceRe,
                 (m) => '${m[1]}$frac',
               )
               .replaceAll(
-                RegExp(r'above \d{1,3}%'),
+                _kAbovePctRe,
                 'above $pct%',
               );
           changed = true;
@@ -1917,9 +1977,7 @@ class VibeWishRemixer {
       }
     }
 
-    final countMatch = RegExp(
-      r'(?:(?:top|worst|best|first|only(?:\s+the)?(?:\s+worst|\s+top)?|peores|primeros|mejores|pires|premiers|meilleurs|schlechtesten|ersten)\s+|(?:最差|前|最多|最悪|上位|상위|أسوأ|أول)\s*)(\d+|two|three|four|five|six|eight|ten|两|三|四|五|六|八|十)(?=\s|$|个|台|件|項目|개)',
-    ).firstMatch(lower);
+    final countMatch = _kRemixCountRe.firstMatch(lower);
     if (countMatch != null) {
       final count = _parseWordOrInt(countMatch.group(1)!);
       if (count != null && count >= 1 && count <= 50) {
@@ -1934,16 +1992,15 @@ class VibeWishRemixer {
           } on Object {
             // ignore
           }
-        } else if (RegExp(r'\bTOP_LIMIT\s*=\s*\d+').hasMatch(nextSource)) {
+        } else if (_kTopLimitCheckRe.hasMatch(nextSource)) {
           nextSource = nextSource.replaceFirstMapped(
-            RegExp(r'(\bTOP_LIMIT\s*=\s*)\d+'),
+            _kTopLimitCaptureRe,
             (m) => '${m[1]}$count',
           );
           changed = true;
-        } else if (RegExp(r'\.slice\(\s*0\s*,\s*\d+\s*\)')
-            .hasMatch(nextSource)) {
+        } else if (_kSliceCheckRe.hasMatch(nextSource)) {
           nextSource = nextSource.replaceFirstMapped(
-            RegExp(r'(\.slice\(\s*0\s*,\s*)\d+(\s*\))'),
+            _kSliceCaptureRe,
             (m) => '${m[1]}$count${m[2]}',
           );
           changed = true;
@@ -1957,29 +2014,25 @@ class VibeWishRemixer {
       }
     }
 
-    final daysMatch = RegExp(
-      r'(?:^|[^\d])(\d{1,3})\s*(?:days?|d[ií]as?|jours?|tage?|天|日|일|أيام|يوم)(?=$|\s|[.,!?，。])',
-    ).firstMatch(lower);
+    final daysMatch = _kRemixDaysRe.firstMatch(lower);
     if (daysMatch != null) {
       final days = int.parse(daysMatch.group(1)!).clamp(1, 365);
-      if (RegExp(r'\bWINDOW_DAYS\s*=\s*\d+').hasMatch(nextSource)) {
+      if (_kWindowDaysCheckRe.hasMatch(nextSource)) {
         nextSource = nextSource.replaceFirstMapped(
-          RegExp(r'(\bWINDOW_DAYS\s*=\s*)\d+'),
+          _kWindowDaysCaptureRe,
           (m) => '${m[1]}$days',
         );
         changed = true;
-      } else if (RegExp(r'\b\d+\s*\*\s*dayMs\b').hasMatch(nextSource)) {
+      } else if (_kDayMsCheckRe.hasMatch(nextSource)) {
         nextSource = nextSource.replaceFirstMapped(
-          RegExp(r'\b\d+(\s*\*\s*dayMs\b)'),
+          _kDayMsCaptureRe,
           (m) => '$days${m[1]}',
         );
         changed = true;
       }
     }
 
-    final minMatch = RegExp(
-      r'(?:^|[^\d])(\d{1,3})[\s-]*(?:minutes?|mins?|minutos?|minuten?|分钟|分|분|دقائق|دقيقة)(?=$|\s|[.,!?，。])',
-    ).firstMatch(lower);
+    final minMatch = _kRemixMinRe.firstMatch(lower);
     if (minMatch != null) {
       final mins = int.parse(minMatch.group(1)!).clamp(1, 240);
       if (nextSource.trimLeft().startsWith('{')) {
@@ -1993,16 +2046,15 @@ class VibeWishRemixer {
         } on Object {
           // ignore
         }
-      } else if (RegExp(r'\bDURATION_MIN\s*=\s*\d+').hasMatch(nextSource)) {
+      } else if (_kDurationMinCheckRe.hasMatch(nextSource)) {
         nextSource = nextSource.replaceFirstMapped(
-          RegExp(r'(\bDURATION_MIN\s*=\s*)\d+'),
+          _kDurationMinCaptureRe,
           (m) => '${m[1]}$mins',
         );
         changed = true;
-      } else if (RegExp(r'\bDURATION\s*=\s*\d+\s*\*\s*60\s*\*\s*1000')
-          .hasMatch(nextSource)) {
+      } else if (_kDurationProdCheckRe.hasMatch(nextSource)) {
         nextSource = nextSource.replaceFirstMapped(
-          RegExp(r'(\bDURATION\s*=\s*)\d+(\s*\*\s*60\s*\*\s*1000)'),
+          _kDurationProdCaptureRe,
           (m) => '${m[1]}$mins${m[2]}',
         );
         changed = true;
@@ -2257,7 +2309,13 @@ class VibeProtocolHost {
   final Set<void Function()> _changeListeners = <void Function()>{};
   final Set<void Function()> _sourceListeners = <void Function()>{};
   final Set<VibeRunController> _activeRuns = <VibeRunController>{};
+  String? _lastHandlesRaw;
+  String? _lastRecordsRaw;
+  List<VibeInstalledRecord>? _cachedRecords;
   bool _disposed = false;
+
+  static const int _kMaxSealedHandles = 4096;
+  static const int _kMaxInstallsStorageBytes = 2 * 1024 * 1024;
 
   String get _handlesKey => 'vibekit:$id:handles';
   String get _installsKey => 'vibekit:$id';
@@ -2270,8 +2328,8 @@ class VibeProtocolHost {
   VibeCapability? _lookupCap(String name) =>
       _capByName[name] ?? _streamCapByName[name];
 
-  /// Registers an additional live capability stream (e.g. `terminal.agy`,
-  /// `terminal.git`) available to conditional vibes via `needs` without
+  /// Registers an additional live capability stream (e.g. `metrics.cluster`,
+  /// `vcs.git`) available to conditional vibes via `needs` without
   /// mutating the core [capabilities] list.
   void registerStreamCapability(VibeCapability capability) {
     if (capability.name.trim().isEmpty) {
@@ -2282,7 +2340,8 @@ class VibeProtocolHost {
 
   void _loadHandles() {
     final raw = _storage.read(_handlesKey);
-    if (raw == null || raw.isEmpty) return;
+    if (raw == null || raw.isEmpty || raw == _lastHandlesRaw) return;
+    _lastHandlesRaw = raw;
     try {
       final parsed = jsonDecode(raw);
       if (parsed is Map && parsed['entries'] is List) {
@@ -2307,10 +2366,9 @@ class VibeProtocolHost {
       for (final entry in _valueToHandle.entries)
         <String>[entry.key, entry.value],
     ];
-    _storage.write(
-      _handlesKey,
-      jsonEncode(<String, Object?>{'v': 1, 'entries': entries}),
-    );
+    final encoded = jsonEncode(<String, Object?>{'v': 1, 'entries': entries});
+    _storage.write(_handlesKey, encoded);
+    _lastHandlesRaw = encoded;
   }
 
   /// Deterministically seals [realValue] to a host-specific opaque handle
@@ -2327,6 +2385,15 @@ class VibeProtocolHost {
     do {
       handle = 'h_${_randomHex(8)}';
     } while (_handleToValue.containsKey(handle));
+
+    while (_valueToHandle.length >= _kMaxSealedHandles &&
+        _valueToHandle.isNotEmpty) {
+      final oldestReal = _valueToHandle.keys.first;
+      final oldestHandle = _valueToHandle.remove(oldestReal);
+      if (oldestHandle != null) {
+        _handleToValue.remove(oldestHandle);
+      }
+    }
 
     _valueToHandle[realValue] = handle;
     _handleToValue[handle] = realValue;
@@ -2381,14 +2448,43 @@ class VibeProtocolHost {
     return out;
   }
 
-  Map<String, Object?> manifest() => <String, Object?>{
+  Map<String, Object?> manifest({bool includeStreamCapabilities = false}) =>
+      <String, Object?>{
         'protocol': 'vibeprotocol-demo/0',
         'host': <String, Object?>{'id': id, 'name': name},
         'capabilities': <Map<String, Object?>>[
           for (final c in _capabilities) c.toManifestJson(),
+          if (includeStreamCapabilities)
+            for (final sc in _streamCapByName.values)
+              if (!_capByName.containsKey(sc.name)) sc.toManifestJson(),
         ],
         'notOffered': List<String>.from(_notOffered),
       };
+
+  /// Builds a security-hardened LLM guidance system prompt for generating or
+  /// remixing a Vibe against this host's manifest (`sample` metadata only;
+  /// never calls `read()` or touches live sealed values).
+  String buildGenerationSystemPrompt({
+    String? userWish,
+    VibeSpec? existingVibe,
+    VibeGenerationTarget target = VibeGenerationTarget.auto,
+    bool includeStreamCapabilities = false,
+    bool includeTriggerGuidance = true,
+    bool includeCanvasGuidance = true,
+    List<String> extraConstraints = const <String>[],
+  }) {
+    return buildVibeGenerationSystemPrompt(
+      manifest(includeStreamCapabilities: includeStreamCapabilities),
+      options: VibeGenerationPromptOptions(
+        userWish: userWish,
+        existingVibe: existingVibe,
+        target: target,
+        includeTriggerGuidance: includeTriggerGuidance,
+        includeCanvasGuidance: includeCanvasGuidance,
+        extraConstraints: extraConstraints,
+      ),
+    );
+  }
 
   VibeCheckResult check(VibeSpec vibe) {
     vibe.validate();
@@ -2646,7 +2742,14 @@ class VibeProtocolHost {
 
   List<VibeInstalledRecord> _loadRecords() {
     final raw = _storage.read(_installsKey);
-    if (raw == null || raw.isEmpty) return <VibeInstalledRecord>[];
+    if (raw == null || raw.isEmpty) {
+      _lastRecordsRaw = raw;
+      _cachedRecords = null;
+      return <VibeInstalledRecord>[];
+    }
+    if (raw == _lastRecordsRaw && _cachedRecords != null) {
+      return List<VibeInstalledRecord>.from(_cachedRecords!);
+    }
     try {
       final parsed = jsonDecode(raw);
       if (parsed is! List) return <VibeInstalledRecord>[];
@@ -2677,6 +2780,9 @@ class VibeProtocolHost {
       final ordered = _normalizeOrder(out);
       if (migrated) {
         _saveRecords(ordered);
+      } else {
+        _lastRecordsRaw = raw;
+        _cachedRecords = List<VibeInstalledRecord>.unmodifiable(ordered);
       }
       return ordered;
     } on Object {
@@ -2685,10 +2791,15 @@ class VibeProtocolHost {
   }
 
   void _saveRecords(List<VibeInstalledRecord> records) {
-    _storage.write(
-      _installsKey,
-      jsonEncode(<Map<String, Object?>>[for (final r in records) r.toJson()]),
+    final encoded = jsonEncode(
+      <Map<String, Object?>>[for (final r in records) r.toJson()],
     );
+    if (utf8.encode(encoded).length > _kMaxInstallsStorageBytes) {
+      throw StateError('Installed Vibes storage quota (2 MiB) exceeded');
+    }
+    _storage.write(_installsKey, encoded);
+    _lastRecordsRaw = encoded;
+    _cachedRecords = List<VibeInstalledRecord>.unmodifiable(records);
   }
 
   List<VibeInstalledRecord> _normalizeOrder(List<VibeInstalledRecord> records) {
@@ -2754,7 +2865,7 @@ class VibeProtocolHost {
   bool _vibeChangedForHistory(VibeSpec prev, VibeSpec next) {
     return prev.version != next.version ||
         prev.source != next.source ||
-        _canonicalJsonString(prev.needs) != _canonicalJsonString(next.needs);
+        !vibeDeepEquals(prev.needs, next.needs);
   }
 
   VibeInstalledRecord install(

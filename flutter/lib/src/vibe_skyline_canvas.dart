@@ -2,9 +2,38 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
-import 'package:vibe_space/vibe_space.dart' show kMaxVibeCanvasCommands;
+import 'package:vibe_space/vibe_space.dart'
+    show isValidMiniProgramHandlerName, kMaxVibeCanvasCommands, vibeDeepEquals;
 
 import 'view.dart' show VibeViewToneScope;
+
+int? _hexNibble(int cu) {
+  if (cu >= 48 && cu <= 57) return cu - 48;
+  if (cu >= 65 && cu <= 70) return cu - 55;
+  if (cu >= 97 && cu <= 102) return cu - 87;
+  return null;
+}
+
+Color? _parseHexColorFast(String s) {
+  final len = s.length;
+  if (len == 4) {
+    final r = _hexNibble(s.codeUnitAt(1));
+    final g = _hexNibble(s.codeUnitAt(2));
+    final b = _hexNibble(s.codeUnitAt(3));
+    if (r == null || g == null || b == null) return null;
+    return Color.fromARGB(255, (r << 4) | r, (g << 4) | g, (b << 4) | b);
+  }
+  if (len == 7 || len == 9) {
+    var argb = len == 7 ? 0xFF : 0;
+    for (var i = 1; i < len; i++) {
+      final nib = _hexNibble(s.codeUnitAt(i));
+      if (nib == null) return null;
+      argb = (argb << 4) | nib;
+    }
+    return Color(argb);
+  }
+  return null;
+}
 
 /// Resolves a hex color (`#RGB`, `#RRGGBB`, `#AARRGGBB`) or semantic token
 /// (`accent`, `ok`, `warn`, `danger`, `surface`, `border`, `text`, `muted`).
@@ -18,18 +47,8 @@ Color? resolveVibeSkylineColor(
   if (raw is String && raw.trim().isNotEmpty) {
     final s = raw.trim();
     if (s.startsWith('#')) {
-      final hex = s.substring(1);
-      if (hex.length == 3) {
-        final r = hex[0] * 2, g = hex[1] * 2, b = hex[2] * 2;
-        final v = int.tryParse('FF$r$g$b', radix: 16);
-        if (v != null) return Color(v);
-      } else if (hex.length == 6) {
-        final v = int.tryParse('FF$hex', radix: 16);
-        if (v != null) return Color(v);
-      } else if (hex.length == 8) {
-        final v = int.tryParse(hex, radix: 16);
-        if (v != null) return Color(v);
-      }
+      final c = _parseHexColorFast(s);
+      if (c != null) return c;
     }
     return switch (s) {
       'accent' => scope?.accent ?? cs.primary,
@@ -89,12 +108,7 @@ class VibeSkylineCanvas extends StatelessWidget {
       text: scope?.text ?? cs.onSurface,
       muted: scope?.mutedText ?? cs.onSurfaceVariant,
     );
-    final defaultColor = resolveVibeSkylineColor(
-          context,
-          null,
-          fallbackTone: tone ?? 'default',
-        ) ??
-        palette.accent;
+    final defaultColor = palette.toneColor(tone ?? 'default') ?? palette.accent;
 
     Widget painted = RepaintBoundary(
       child: SizedBox(
@@ -158,22 +172,20 @@ class VibeSkylinePalette {
   final Color text;
   final Color muted;
 
+  Color? toneColor(String? fallbackTone) => switch (fallbackTone) {
+        'ok' => ok,
+        'warn' => warn,
+        'danger' => danger,
+        'default' => accent,
+        _ => null,
+      };
+
   Color? parseColor(Object? raw) {
     if (raw is! String || raw.trim().isEmpty) return null;
     final s = raw.trim();
     if (s.startsWith('#')) {
-      final hex = s.substring(1);
-      if (hex.length == 3) {
-        final v = int.tryParse('FF${hex[0] * 2}${hex[1] * 2}${hex[2] * 2}',
-            radix: 16);
-        if (v != null) return Color(v);
-      } else if (hex.length == 6) {
-        final v = int.tryParse('FF$hex', radix: 16);
-        if (v != null) return Color(v);
-      } else if (hex.length == 8) {
-        final v = int.tryParse(hex, radix: 16);
-        if (v != null) return Color(v);
-      }
+      final c = _parseHexColorFast(s);
+      if (c != null) return c;
     }
     return switch (s) {
       'accent' => accent,
@@ -188,6 +200,23 @@ class VibeSkylinePalette {
       _ => null,
     };
   }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is VibeSkylinePalette &&
+          other.accent == accent &&
+          other.ok == ok &&
+          other.warn == warn &&
+          other.danger == danger &&
+          other.surface == surface &&
+          other.border == border &&
+          other.text == text &&
+          other.muted == muted;
+
+  @override
+  int get hashCode =>
+      Object.hash(accent, ok, warn, danger, surface, border, text, muted);
 }
 
 /// `CustomPainter` executing bounded Skyline 2D draw commands on Skia/Impeller.
@@ -261,6 +290,8 @@ class VibeSkylineCanvasPainter extends CustomPainter {
 
     final fullBounds = Rect.fromLTWH(0, 0, logicalWidth, logicalHeight);
     final limit = math.min(commands.length, kMaxVibeCanvasCommands);
+    final fillPaint = Paint()..style = PaintingStyle.fill;
+    final strokePaint = Paint()..style = PaintingStyle.stroke;
 
     for (var i = 0; i < limit; i++) {
       final cmd = commands[i];
@@ -269,13 +300,14 @@ class VibeSkylineCanvasPainter extends CustomPainter {
         case 'clear':
           final shader = _buildShader(cmd['linearGradient'], fullBounds);
           final fill = _cmdFill(cmd) ?? palette.surface;
-          final p = Paint()..style = PaintingStyle.fill;
           if (shader != null) {
-            p.shader = shader;
+            fillPaint.shader = shader;
           } else {
-            p.color = fill;
+            fillPaint
+              ..shader = null
+              ..color = fill;
           }
-          canvas.drawRect(fullBounds, p);
+          canvas.drawRect(fullBounds, fillPaint);
 
         case 'rect':
         case 'rrect':
@@ -289,34 +321,37 @@ class VibeSkylineCanvasPainter extends CustomPainter {
           final shader = _buildShader(cmd['linearGradient'], rect);
           final fill = _cmdFill(cmd);
           if (shader != null || fill != null) {
-            final p = Paint()..style = PaintingStyle.fill;
             if (shader != null) {
-              p.shader = shader;
+              fillPaint.shader = shader;
             } else {
-              p.color = fill!;
+              fillPaint
+                ..shader = null
+                ..color = fill!;
             }
             if (rad > 0 || op == 'rrect') {
               canvas.drawRRect(
                 RRect.fromRectAndRadius(rect, Radius.circular(rad)),
-                p,
+                fillPaint,
               );
             } else {
-              canvas.drawRect(rect, p);
+              canvas.drawRect(rect, fillPaint);
             }
           }
           final stroke = _cmdStroke(cmd);
           if (stroke != null) {
-            final sp = Paint()
-              ..style = PaintingStyle.stroke
+            strokePaint
+              ..shader = null
               ..color = stroke
-              ..strokeWidth = _num(cmd['strokeWidth'], 1.0);
+              ..strokeWidth = _num(cmd['strokeWidth'], 1.0)
+              ..strokeCap = StrokeCap.butt
+              ..strokeJoin = StrokeJoin.miter;
             if (rad > 0 || op == 'rrect') {
               canvas.drawRRect(
                 RRect.fromRectAndRadius(rect, Radius.circular(rad)),
-                sp,
+                strokePaint,
               );
             } else {
-              canvas.drawRect(rect, sp);
+              canvas.drawRect(rect, strokePaint);
             }
           }
 
@@ -328,18 +363,20 @@ class VibeSkylineCanvasPainter extends CustomPainter {
           final r = _num(cmd['r'] ?? cmd['radius'], 4.0);
           final fill = _cmdFill(cmd);
           if (fill != null) {
-            canvas.drawCircle(center, r, Paint()..color = fill);
+            fillPaint
+              ..shader = null
+              ..color = fill;
+            canvas.drawCircle(center, r, fillPaint);
           }
           final stroke = _cmdStroke(cmd);
           if (stroke != null) {
-            canvas.drawCircle(
-              center,
-              r,
-              Paint()
-                ..style = PaintingStyle.stroke
-                ..color = stroke
-                ..strokeWidth = _num(cmd['strokeWidth'], 1.2),
-            );
+            strokePaint
+              ..shader = null
+              ..color = stroke
+              ..strokeWidth = _num(cmd['strokeWidth'], 1.2)
+              ..strokeCap = StrokeCap.butt
+              ..strokeJoin = StrokeJoin.miter;
+            canvas.drawCircle(center, r, strokePaint);
           }
 
         case 'arc':
@@ -353,24 +390,27 @@ class VibeSkylineCanvasPainter extends CustomPainter {
           final sweep = _num(cmd['sweepAngle'], math.pi);
           final useCenter = cmd['useCenter'] == true;
           final stroke = _cmdStroke(cmd) ?? _cmdFill(cmd) ?? defaultColor;
-          final p = Paint()
+          final isFilled = cmd['fill'] != null;
+          final arcPaint = isFilled ? fillPaint : strokePaint;
+          arcPaint
+            ..shader = null
             ..color = stroke
-            ..style =
-                cmd['fill'] != null ? PaintingStyle.fill : PaintingStyle.stroke
             ..strokeWidth = _num(cmd['strokeWidth'], 2.0)
-            ..strokeCap = StrokeCap.round;
-          canvas.drawArc(rect, start, sweep, useCenter, p);
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.miter;
+          canvas.drawArc(rect, start, sweep, useCenter, arcPaint);
 
         case 'line':
-          final p = Paint()
-            ..style = PaintingStyle.stroke
+          strokePaint
+            ..shader = null
             ..color = _cmdStroke(cmd) ?? _cmdFill(cmd) ?? defaultColor
             ..strokeWidth = _num(cmd['strokeWidth'], 1.5)
-            ..strokeCap = StrokeCap.round;
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.miter;
           canvas.drawLine(
             Offset(_num(cmd['x1']), _num(cmd['y1'])),
             Offset(_num(cmd['x2']), _num(cmd['y2'])),
-            p,
+            strokePaint,
           );
 
         case 'path':
@@ -397,44 +437,47 @@ class VibeSkylineCanvasPainter extends CustomPainter {
               ? palette.parseColor(cmd['fill'])
               : (op == 'polygon' ? _cmdFill(cmd) : null);
           if (shader != null || fill != null) {
-            final fp = Paint()..style = PaintingStyle.fill;
             if (shader != null) {
-              fp.shader = shader;
+              fillPaint.shader = shader;
             } else {
-              fp.color = fill!;
+              fillPaint
+                ..shader = null
+                ..color = fill!;
             }
-            canvas.drawPath(path, fp);
+            canvas.drawPath(path, fillPaint);
           }
           final stroke = _cmdStroke(cmd) ??
               (op == 'path' && fill == null && shader == null
                   ? (_cmdFill(cmd) ?? defaultColor)
                   : null);
           if (stroke != null) {
-            canvas.drawPath(
-              path,
-              Paint()
-                ..style = PaintingStyle.stroke
-                ..color = stroke
-                ..strokeWidth = _num(cmd['strokeWidth'], 1.75)
-                ..strokeCap = StrokeCap.round
-                ..strokeJoin = StrokeJoin.round,
-            );
+            strokePaint
+              ..shader = null
+              ..color = stroke
+              ..strokeWidth = _num(cmd['strokeWidth'], 1.75)
+              ..strokeCap = StrokeCap.round
+              ..strokeJoin = StrokeJoin.round;
+            canvas.drawPath(path, strokePaint);
           }
 
         case 'bars':
           final rawVals = cmd['values'];
           if (rawVals is! List || rawVals.isEmpty) continue;
-          final vals = <double>[
-            for (final v in rawVals)
-              if (v is num && v.isFinite) v.toDouble(),
-          ];
-          if (vals.isEmpty) continue;
+          var numCount = 0;
+          var maxCandidate = double.negativeInfinity;
+          for (final v in rawVals) {
+            if (v is num && v.isFinite) {
+              numCount++;
+              final d = v.toDouble();
+              if (d > maxCandidate) maxCandidate = d;
+            }
+          }
+          if (numCount == 0) continue;
           final bx = _num(cmd['x'], 0.0);
           final by = _num(cmd['y'], 0.0);
           final bw = _num(cmd['w'] ?? cmd['width'], logicalWidth - bx);
           final bh = _num(cmd['h'] ?? cmd['height'], logicalHeight - by);
           final minV = cmd['min'] is num ? _num(cmd['min']) : 0.0;
-          final maxCandidate = vals.reduce(math.max);
           final maxV = cmd['max'] is num
               ? _num(cmd['max'], 1.0)
               : (maxCandidate > minV ? maxCandidate : minV + 1.0);
@@ -443,19 +486,22 @@ class VibeSkylineCanvasPainter extends CustomPainter {
           final rad = _num(cmd['radius'], 2.0);
           final barW = math.max(
             1.0,
-            (bw - gap * (vals.length - 1)) / vals.length,
+            (bw - gap * (numCount - 1)) / numCount,
           );
           final bounds = Rect.fromLTWH(bx, by, bw, bh);
           final shader = _buildShader(cmd['linearGradient'], bounds);
           final fill = _cmdFill(cmd) ?? defaultColor;
-          final p = Paint()..style = PaintingStyle.fill;
           if (shader != null) {
-            p.shader = shader;
+            fillPaint.shader = shader;
           } else {
-            p.color = fill;
+            fillPaint
+              ..shader = null
+              ..color = fill;
           }
-          for (var j = 0; j < vals.length; j++) {
-            final ratio = ((vals[j] - minV) / span).clamp(0.0, 1.0);
+          var j = 0;
+          for (final v in rawVals) {
+            if (v is! num || !v.isFinite) continue;
+            final ratio = ((v.toDouble() - minV) / span).clamp(0.0, 1.0);
             final barH = math.max(1.5, ratio * bh);
             final rRect = RRect.fromRectAndRadius(
               Rect.fromLTWH(
@@ -466,7 +512,8 @@ class VibeSkylineCanvasPainter extends CustomPainter {
               ),
               Radius.circular(rad),
             );
-            canvas.drawRRect(rRect, p);
+            canvas.drawRRect(rRect, fillPaint);
+            j++;
           }
 
         case 'text':
@@ -491,14 +538,18 @@ class VibeSkylineCanvasPainter extends CustomPainter {
             textDirection: TextDirection.ltr,
             maxLines: 1,
           )..layout(maxWidth: logicalWidth);
-          var tx = _num(cmd['x']);
-          final align = cmd['align']?.toString();
-          if (align == 'right' || align == 'end') {
-            tx -= tp.width;
-          } else if (align == 'center') {
-            tx -= tp.width / 2;
+          try {
+            var tx = _num(cmd['x']);
+            final align = cmd['align']?.toString();
+            if (align == 'right' || align == 'end') {
+              tx -= tp.width;
+            } else if (align == 'center') {
+              tx -= tp.width / 2;
+            }
+            tp.paint(canvas, Offset(tx, _num(cmd['y'])));
+          } finally {
+            tp.dispose();
           }
-          tp.paint(canvas, Offset(tx, _num(cmd['y'])));
       }
     }
     canvas.restore();
@@ -509,7 +560,8 @@ class VibeSkylineCanvasPainter extends CustomPainter {
     return logicalWidth != oldDelegate.logicalWidth ||
         logicalHeight != oldDelegate.logicalHeight ||
         defaultColor != oldDelegate.defaultColor ||
-        !identical(commands, oldDelegate.commands);
+        palette != oldDelegate.palette ||
+        !vibeDeepEquals(commands, oldDelegate.commands);
   }
 }
 
@@ -576,9 +628,9 @@ Widget applyVibeSkylineNodeStyle(
   }
 
   final type = node['type']?.toString();
-  final bindTap = node['bindtap']?.toString();
+  final bindTap = node['bindtap']?.toString().trim();
   if (bindTap != null &&
-      bindTap.isNotEmpty &&
+      isValidMiniProgramHandlerName(bindTap) &&
       onCommand != null &&
       type != 'button' &&
       type != 'action' &&
@@ -587,8 +639,8 @@ Widget applyVibeSkylineNodeStyle(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onTap: () => onCommand('mp:tap:$bindTap', <String, dynamic>{
-          '__mpEvent': true,
+        onTap: () => onCommand('vibe:tap:$bindTap', <String, dynamic>{
+          '__vibeEvent': true,
           'type': 'tap',
           'handler': bindTap,
           if (node['id'] != null) 'id': node['id'],

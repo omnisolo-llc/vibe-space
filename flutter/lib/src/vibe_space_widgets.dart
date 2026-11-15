@@ -8,6 +8,13 @@ import 'package:vibe_space/vibe_space.dart';
 import 'vibe_widget_adapter.dart';
 import 'view.dart';
 
+final RegExp _kSealedInlineRe = RegExp(r'\{\s*"sealed":\s*"[^"]*"\s*\}');
+final RegExp _kInspectWhitespaceRe = RegExp(r'\s+');
+final RegExp _kPrettySealedCollapseRe = RegExp(
+  r'\{\s*\n\s*("sealed":\s*"(?:[^"\\]|\\.)*")\s*\n\s*\}',
+);
+const JsonEncoder _kPrettyJsonEncoder = JsonEncoder.withIndent('  ');
+
 /// Theme palette for [VibeSpacePanel] and [VibeEmbedCard].
 @immutable
 class VibeSpaceThemeData {
@@ -71,7 +78,8 @@ class VibeSpaceThemeData {
 
   factory VibeSpaceThemeData.fromTheme(ThemeData theme) {
     final isDark = theme.brightness == Brightness.dark;
-    final base = isDark ? VibeSpaceThemeData.dark() : VibeSpaceThemeData.light();
+    final base =
+        isDark ? VibeSpaceThemeData.dark() : VibeSpaceThemeData.light();
     final scheme = theme.colorScheme;
     return VibeSpaceThemeData(
       background: scheme.surfaceContainerLowest,
@@ -152,9 +160,8 @@ VibeInstalledRecord? _findMatchingRecord(
   String vibeId,
   Map<String, Object?>? args,
 ) {
-  final argsKey = jsonEncode(args);
   for (final r in host.installed()) {
-    if (r.vibe.id == vibeId && jsonEncode(r.args) == argsKey) {
+    if (r.vibe.id == vibeId && vibeDeepEquals(r.args, args)) {
       return r;
     }
   }
@@ -216,7 +223,8 @@ Future<void> showVibeOfferDialog(
                           crossAxisAlignment: WrapCrossAlignment.center,
                           children: <Widget>[
                             Text(
-                              (rawCap['title'] ?? rawCap['name'] ?? '').toString(),
+                              (rawCap['title'] ?? rawCap['name'] ?? '')
+                                  .toString(),
                               style: TextStyle(
                                 fontWeight: FontWeight.w600,
                                 color: t.text,
@@ -238,7 +246,8 @@ Future<void> showVibeOfferDialog(
                             spacing: 6,
                             runSpacing: 6,
                             children: <Widget>[
-                              for (final entry in (rawCap['fields'] as Map).entries)
+                              for (final entry
+                                  in (rawCap['fields'] as Map).entries)
                                 _FieldModeChip(
                                   fieldName: entry.key.toString(),
                                   mode: entry.value.toString(),
@@ -492,11 +501,23 @@ class _PermissionLabelCardState extends State<_PermissionLabelCard> {
           ],
           const SizedBox(height: 10),
           Divider(height: 1, color: t.border),
-          _LabelRow(title: widget.strings.readsLabel, items: label.reads, accentColor: t.accent, theme: t),
+          _LabelRow(
+              title: widget.strings.readsLabel,
+              items: label.reads,
+              accentColor: t.accent,
+              theme: t),
           Divider(height: 1, color: t.border),
-          _LabelRow(title: widget.strings.showsLabel, items: label.shows, accentColor: t.mutedText, theme: t),
+          _LabelRow(
+              title: widget.strings.showsLabel,
+              items: label.shows,
+              accentColor: t.mutedText,
+              theme: t),
           Divider(height: 1, color: t.border),
-          _LabelRow(title: widget.strings.cannotLabel, items: label.cannot, accentColor: t.mutedText, theme: t),
+          _LabelRow(
+              title: widget.strings.cannotLabel,
+              items: label.cannot,
+              accentColor: t.mutedText,
+              theme: t),
           Divider(height: 1, color: t.border),
           const SizedBox(height: 10),
           TextField(
@@ -665,10 +686,9 @@ class _InspectPaneState extends State<_InspectPane> {
       backgroundColor: t.accent.withValues(alpha: 0.16),
       fontWeight: FontWeight.w600,
     );
-    final regex = RegExp(r'\{\s*"sealed":\s*"[^"]*"\s*\}');
     final spans = <TextSpan>[];
     var lastEnd = 0;
-    for (final match in regex.allMatches(jsonText)) {
+    for (final match in _kSealedInlineRe.allMatches(jsonText)) {
       if (match.start > lastEnd) {
         spans.add(
           TextSpan(
@@ -677,7 +697,7 @@ class _InspectPaneState extends State<_InspectPane> {
           ),
         );
       }
-      final collapsed = match.group(0)!.replaceAll(RegExp(r'\s+'), ' ');
+      final collapsed = match.group(0)!.replaceAll(_kInspectWhitespaceRe, ' ');
       spans.add(TextSpan(text: collapsed, style: sealedStyle));
       lastEnd = match.end;
     }
@@ -710,9 +730,9 @@ class _InspectPaneState extends State<_InspectPane> {
 
     final snap = run.inspect();
     final inputData = snap.input['data'] ?? const <String, Object?>{};
-    final rawJson = const JsonEncoder.withIndent('  ').convert(inputData);
+    final rawJson = _kPrettyJsonEncoder.convert(inputData);
     final collapsedJson = rawJson.replaceAllMapped(
-      RegExp(r'\{\s*\n\s*("sealed":\s*"(?:[^"\\]|\\.)*")\s*\n\s*\}'),
+      _kPrettySealedCollapseRe,
       (m) => '{ ${m.group(1)} }',
     );
     final led = snap.ledger;
@@ -972,9 +992,9 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
     _startPreviewDraft(compiled, origin: 'yours', wishText: text);
   }
 
-  List<VibeWishPreset> _visibleWishes() {
+  List<VibeWishPreset> _visibleWishes(List<VibeInstalledRecord> records) {
     final byId = <String, VibeInstalledRecord>{
-      for (final rec in widget.host.installed()) rec.vibe.id: rec,
+      for (final rec in records) rec.vibe.id: rec,
     };
     return <VibeWishPreset>[
       for (final w in widget.wishes)
@@ -1024,7 +1044,8 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                 ),
                 if (errorMsg != null) ...<Widget>[
                   const SizedBox(height: 8),
-                  Text(errorMsg!, style: TextStyle(color: t.danger, fontSize: 12.5)),
+                  Text(errorMsg!,
+                      style: TextStyle(color: t.danger, fontSize: 12.5)),
                 ],
               ],
             ),
@@ -1143,10 +1164,16 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
 
     final pinnedIds = record.pinned
         ? group
-        : <String>[for (final r in all) if (r.pinned) r.instanceId];
+        : <String>[
+            for (final r in all)
+              if (r.pinned) r.instanceId
+          ];
     final unpinnedIds = !record.pinned
         ? group
-        : <String>[for (final r in all) if (!r.pinned) r.instanceId];
+        : <String>[
+            for (final r in all)
+              if (!r.pinned) r.instanceId
+          ];
     widget.host.reorder(<String>[...pinnedIds, ...unpinnedIds]);
   }
 
@@ -1168,436 +1195,299 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
             return hay.contains(query);
           }).toList(growable: false);
 
-    final pinnedList = <VibeInstalledRecord>[
-      for (final r in records)
-        if (r.pinned) r,
-    ];
-    final unpinnedList = <VibeInstalledRecord>[
-      for (final r in records)
-        if (!r.pinned) r,
-    ];
+    var pinnedCount = 0;
+    var unpinnedCount = 0;
+    final globalIndexById = <String, int>{};
+    final groupIndexById = <String, int>{};
+    for (var i = 0; i < records.length; i++) {
+      final r = records[i];
+      globalIndexById[r.instanceId] = i;
+      if (r.pinned) {
+        groupIndexById[r.instanceId] = pinnedCount++;
+      } else {
+        groupIndexById[r.instanceId] = unpinnedCount++;
+      }
+    }
 
-    final visibleWishes = _visibleWishes();
+    final visibleWishes = _visibleWishes(records);
     final s = widget.strings ?? VibeStrings.forLocale(widget.locale);
 
     return Directionality(
       textDirection: s.isRtl ? TextDirection.rtl : TextDirection.ltr,
       child: _wrapToneScope(
-      t,
-      Container(
-        decoration: BoxDecoration(
-          color: t.surface,
-          borderRadius: BorderRadius.circular(t.radius),
-          border: Border.all(color: t.border),
-        ),
-        padding: const EdgeInsets.all(14),
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              // Top bar
-              Wrap(
-                alignment: WrapAlignment.spaceBetween,
-                crossAxisAlignment: WrapCrossAlignment.center,
-                spacing: 8,
-                runSpacing: 6,
-                children: <Widget>[
-                  Text(
-                    s.panelTitle,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w700,
-                      color: t.text,
-                    ),
-                  ),
-                  Wrap(
-                    spacing: 4,
-                    crossAxisAlignment: WrapCrossAlignment.center,
-                    children: <Widget>[
-                      TextButton(
-                        onPressed: () =>
-                            showVibeOfferDialog(context, widget.host, theme: t),
-                        child: Text(
-                          s.format(s.whatHostOffers, <String, String>{
-                            'host': widget.host.name,
-                          }),
-                          style: TextStyle(color: t.accent, fontSize: 12.5),
-                        ),
-                      ),
-                      IconButton(
-                        tooltip: 'Import link',
-                        icon: Icon(Icons.link, size: 18, color: t.mutedText),
-                        onPressed: () => _openImportDialog(t),
-                      ),
-                      if (widget.headerTrailing != null) widget.headerTrailing!,
-                    ],
-                  ),
-                ],
-              ),
-              Divider(height: 16, color: t.border),
-
-              // Wish box
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: TextField(
-                      key: const Key('vs-wish-input'),
-                      controller: _wishCtrl,
-                      onChanged: (_) {
-                        if (_wishProminentNote) {
-                          setState(() => _wishProminentNote = false);
-                        }
-                      },
-                      onSubmitted: _submitWish,
-                      decoration: InputDecoration(
-                        hintText: s.format(s.wishPlaceholder, <String, String>{
-                          'host': widget.host.name,
-                        }),
-                        isDense: true,
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    key: const Key('vs-wish-send'),
-                    style: FilledButton.styleFrom(backgroundColor: t.accent),
-                    onPressed: () => _submitWish(_wishCtrl.text),
-                    child: Text(s.sendLabel),
-                  ),
-                ],
-              ),
-              if (visibleWishes.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 8),
+        t,
+        Container(
+          decoration: BoxDecoration(
+            color: t.surface,
+            borderRadius: BorderRadius.circular(t.radius),
+            border: Border.all(color: t.border),
+          ),
+          padding: const EdgeInsets.all(14),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                // Top bar
                 Wrap(
-                  spacing: 6,
+                  alignment: WrapAlignment.spaceBetween,
+                  crossAxisAlignment: WrapCrossAlignment.center,
+                  spacing: 8,
                   runSpacing: 6,
                   children: <Widget>[
-                    for (final wish in visibleWishes)
-                      ActionChip(
-                        label: Text(
-                          wish.text,
-                          style: TextStyle(fontSize: 12, color: t.text),
-                        ),
-                        backgroundColor: t.cardBackground,
-                        side: BorderSide(color: t.border),
-                        onPressed: () {
-                          _wishCtrl.text = wish.text;
-                          _startPreviewDraft(
-                            wish.vibe,
-                            origin: 'yours',
-                            wishText: wish.text,
-                          );
-                        },
+                    Text(
+                      s.panelTitle,
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700,
+                        color: t.text,
                       ),
+                    ),
+                    Wrap(
+                      spacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
+                      children: <Widget>[
+                        TextButton(
+                          onPressed: () => showVibeOfferDialog(
+                              context, widget.host,
+                              theme: t),
+                          child: Text(
+                            s.format(s.whatHostOffers, <String, String>{
+                              'host': widget.host.name,
+                            }),
+                            style: TextStyle(color: t.accent, fontSize: 12.5),
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Import link',
+                          icon: Icon(Icons.link, size: 18, color: t.mutedText),
+                          onPressed: () => _openImportDialog(t),
+                        ),
+                        if (widget.headerTrailing != null)
+                          widget.headerTrailing!,
+                      ],
+                    ),
                   ],
                 ),
-              ],
-              const SizedBox(height: 6),
-              Container(
-                padding: _wishProminentNote
-                    ? const EdgeInsets.symmetric(horizontal: 10, vertical: 6)
-                    : EdgeInsets.zero,
-                decoration: _wishProminentNote
-                    ? BoxDecoration(
-                        color: t.warn.withValues(alpha: 0.14),
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: t.warn.withValues(alpha: 0.5)),
-                      )
-                    : null,
-                child: Text(
-                  'Pick a wish or describe what you want to see.',
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: _wishProminentNote ? FontWeight.w600 : FontWeight.w400,
-                    color: _wishProminentNote ? t.text : t.mutedText,
-                  ),
-                ),
-              ),
+                Divider(height: 16, color: t.border),
 
-              // Blocked shared vibe card
-              if (_blockedSharedName != null) ...<Widget>[
-                const SizedBox(height: 12),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: t.warn.withValues(alpha: 0.10),
-                    borderRadius: BorderRadius.circular(t.radius),
-                    border: Border.all(color: t.warn.withValues(alpha: 0.5)),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        'Shared vibe: $_blockedSharedName',
-                        style: TextStyle(
-                          fontWeight: FontWeight.w700,
-                          color: t.text,
+                // Wish box
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: TextField(
+                        key: const Key('vs-wish-input'),
+                        controller: _wishCtrl,
+                        onChanged: (_) {
+                          if (_wishProminentNote) {
+                            setState(() => _wishProminentNote = false);
+                          }
+                        },
+                        onSubmitted: _submitWish,
+                        decoration: InputDecoration(
+                          hintText:
+                              s.format(s.wishPlaceholder, <String, String>{
+                            'host': widget.host.name,
+                          }),
+                          isDense: true,
+                          border: const OutlineInputBorder(),
                         ),
                       ),
-                      const SizedBox(height: 4),
-                      Text(
-                        'It needs ${_blockedMissing.join(', ')}, which ${widget.host.name} does not offer. It cannot run here.',
-                        style: TextStyle(fontSize: 12.5, color: t.text),
-                      ),
-                      const SizedBox(height: 8),
-                      OutlinedButton(
-                        onPressed: () => setState(_clearDraft),
-                        child: const Text('Dismiss'),
-                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    FilledButton(
+                      key: const Key('vs-wish-send'),
+                      style: FilledButton.styleFrom(backgroundColor: t.accent),
+                      onPressed: () => _submitWish(_wishCtrl.text),
+                      child: Text(s.sendLabel),
+                    ),
+                  ],
+                ),
+                if (visibleWishes.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: <Widget>[
+                      for (final wish in visibleWishes)
+                        ActionChip(
+                          label: Text(
+                            wish.text,
+                            style: TextStyle(fontSize: 12, color: t.text),
+                          ),
+                          backgroundColor: t.cardBackground,
+                          side: BorderSide(color: t.border),
+                          onPressed: () {
+                            _wishCtrl.text = wish.text;
+                            _startPreviewDraft(
+                              wish.vibe,
+                              origin: 'yours',
+                              wishText: wish.text,
+                            );
+                          },
+                        ),
                     ],
                   ),
+                ],
+                const SizedBox(height: 6),
+                Container(
+                  padding: _wishProminentNote
+                      ? const EdgeInsets.symmetric(horizontal: 10, vertical: 6)
+                      : EdgeInsets.zero,
+                  decoration: _wishProminentNote
+                      ? BoxDecoration(
+                          color: t.warn.withValues(alpha: 0.14),
+                          borderRadius: BorderRadius.circular(8),
+                          border:
+                              Border.all(color: t.warn.withValues(alpha: 0.5)),
+                        )
+                      : null,
+                  child: Text(
+                    'Pick a wish or describe what you want to see.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: _wishProminentNote
+                          ? FontWeight.w600
+                          : FontWeight.w400,
+                      color: _wishProminentNote ? t.text : t.mutedText,
+                    ),
+                  ),
                 ),
-              ],
 
-              // Draft preview + code + label
-              if (_draftVibe != null) ...<Widget>[
-                const SizedBox(height: 12),
-                if (_draftPreviewRun != null) ...<Widget>[
+                // Blocked shared vibe card
+                if (_blockedSharedName != null) ...<Widget>[
+                  const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: t.cardBackground,
+                      color: t.warn.withValues(alpha: 0.10),
                       borderRadius: BorderRadius.circular(t.radius),
-                      border: Border.all(color: t.accent.withValues(alpha: 0.45)),
+                      border: Border.all(color: t.warn.withValues(alpha: 0.5)),
                     ),
                     child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
                         Text(
-                          s.previewTitle.toUpperCase(),
+                          'Shared vibe: $_blockedSharedName',
                           style: TextStyle(
-                            fontSize: 11,
                             fontWeight: FontWeight.w700,
-                            letterSpacing: 0.5,
-                            color: t.mutedText,
+                            color: t.text,
                           ),
                         ),
+                        const SizedBox(height: 4),
+                        Text(
+                          'It needs ${_blockedMissing.join(', ')}, which ${widget.host.name} does not offer. It cannot run here.',
+                          style: TextStyle(fontSize: 12.5, color: t.text),
+                        ),
                         const SizedBox(height: 8),
-                        if (_draftPreviewRun!.view != null)
-                          VibeView(
-                            value: _draftPreviewRun!.view!,
-                            resolveSealed: widget.host.resolveSealed,
-                            adapter: widget.adapter,
-                            onCommand: (cmd, args) =>
-                                _draftPreviewRun!.dispatch(cmd, args),
-                          )
-                        else if (_draftPreviewRun!.lastError != null)
-                          Text(
-                            _draftPreviewRun!.lastError!,
-                            style: TextStyle(color: t.danger, fontSize: 12.5),
-                          ),
+                        OutlinedButton(
+                          onPressed: () => setState(_clearDraft),
+                          child: const Text('Dismiss'),
+                        ),
                       ],
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  Align(
-                    alignment: Alignment.centerLeft,
-                    child: TextButton(
-                      onPressed: () => setState(() => _showCode = !_showCode),
-                      child: Text(_showCode ? s.hideCode : s.showCode),
-                    ),
-                  ),
-                  if (_showCode) ...<Widget>[
-                    Text(
-                      'Your wish: “${_draftWishText ?? _draftVibe!.wish}”',
-                      style: TextStyle(fontSize: 12, color: t.mutedText),
-                    ),
-                    const SizedBox(height: 4),
+                ],
+
+                // Draft preview + code + label
+                if (_draftVibe != null) ...<Widget>[
+                  const SizedBox(height: 12),
+                  if (_draftPreviewRun != null) ...<Widget>[
                     Container(
-                      padding: const EdgeInsets.all(10),
+                      padding: const EdgeInsets.all(12),
                       decoration: BoxDecoration(
                         color: t.cardBackground,
-                        borderRadius: BorderRadius.circular(8),
-                        border: Border.all(color: t.border),
+                        borderRadius: BorderRadius.circular(t.radius),
+                        border:
+                            Border.all(color: t.accent.withValues(alpha: 0.45)),
                       ),
-                      child: SelectableText(
-                        _draftVibe!.source,
-                        style: TextStyle(
-                          fontFamily: 'monospace',
-                          fontSize: 11.5,
-                          color: t.text,
-                        ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: <Widget>[
+                          Text(
+                            s.previewTitle.toUpperCase(),
+                            style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w700,
+                              letterSpacing: 0.5,
+                              color: t.mutedText,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          if (_draftPreviewRun!.view != null)
+                            VibeView(
+                              value: _draftPreviewRun!.view!,
+                              resolveSealed: widget.host.resolveSealed,
+                              adapter: widget.adapter,
+                              onCommand: (cmd, args) =>
+                                  _draftPreviewRun!.dispatch(cmd, args),
+                            )
+                          else if (_draftPreviewRun!.lastError != null)
+                            Text(
+                              _draftPreviewRun!.lastError!,
+                              style: TextStyle(color: t.danger, fontSize: 12.5),
+                            ),
+                        ],
                       ),
                     ),
                     const SizedBox(height: 8),
-                  ],
-                ],
-                _PermissionLabelCard(
-                  host: widget.host,
-                  vibe: _draftVibe!,
-                  origin: _draftOrigin,
-                  theme: t,
-                  strings: s,
-                  onAllow: (title, note) {
-                    widget.host.install(
-                      _draftVibe!,
-                      origin: _draftOrigin,
-                      title: title,
-                      note: note,
-                    );
-                    _wishCtrl.clear();
-                    setState(_clearDraft);
-                  },
-                  onCancel: () => setState(_clearDraft),
-                ),
-              ],
-
-              const SizedBox(height: 16),
-
-              // Installed header
-              Text(
-                '${s.installedHeading.toUpperCase()} \u00b7 ${records.length}',
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  letterSpacing: 0.6,
-                  color: t.mutedText,
-                ),
-              ),
-              if (records.length >= 2) ...<Widget>[
-                const SizedBox(height: 8),
-                TextField(
-                  key: const Key('vs-filter-input'),
-                  controller: _filterCtrl,
-                  onChanged: (v) => setState(() => _filterQuery = v),
-                  decoration: InputDecoration(
-                    hintText: s.filterPlaceholder,
-                    isDense: true,
-                    prefixIcon: const Icon(Icons.search, size: 18),
-                    border: const OutlineInputBorder(),
-                  ),
-                ),
-              ],
-              if (records.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 6),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Padding(
-                      padding: const EdgeInsets.only(top: 2),
-                      child: Icon(Icons.lock_outline, size: 13, color: t.accent),
+                    Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton(
+                        onPressed: () => setState(() => _showCode = !_showCode),
+                        child: Text(_showCode ? s.hideCode : s.showCode),
+                      ),
                     ),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        s.format(s.sealedLegend, <String, String>{
-                          'host': widget.host.name,
-                        }),
+                    if (_showCode) ...<Widget>[
+                      Text(
+                        'Your wish: “${_draftWishText ?? _draftVibe!.wish}”',
                         style: TextStyle(fontSize: 12, color: t.mutedText),
                       ),
-                    ),
-                  ],
-                ),
-              ],
-
-              // Undo delete banner
-              if (_deletedSnapshot != null) ...<Widget>[
-                const SizedBox(height: 8),
-                Container(
-                  key: const Key('vs-undo-banner'),
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                  decoration: BoxDecoration(
-                    color: t.accent.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: t.accent.withValues(alpha: 0.45)),
-                  ),
-                  child: Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Text(
-                          'Deleted \u201c${_deletedSnapshot!.title}\u201d',
-                          style: TextStyle(fontSize: 12.5, color: t.text),
+                      const SizedBox(height: 4),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        decoration: BoxDecoration(
+                          color: t.cardBackground,
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(color: t.border),
+                        ),
+                        child: SelectableText(
+                          _draftVibe!.source,
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 11.5,
+                            color: t.text,
+                          ),
                         ),
                       ),
-                      TextButton(
-                        key: const Key('vs-undo-delete'),
-                        onPressed: () {
-                          final snap = _deletedSnapshot;
-                          final idx = _deletedIndex;
-                          _undoTimer?.cancel();
-                          setState(() => _deletedSnapshot = null);
-                          if (snap != null) {
-                            widget.host.restoreRecord(snap, idx);
-                          }
-                        },
-                        child: Text(s.undoLabel),
-                      ),
+                      const SizedBox(height: 8),
                     ],
-                  ),
-                ),
-              ],
-
-              const SizedBox(height: 10),
-
-              if (records.isEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
-                  decoration: BoxDecoration(
-                    color: t.cardBackground,
-                    borderRadius: BorderRadius.circular(t.radius),
-                    border: Border.all(color: t.border),
-                  ),
-                  child: Text(
-                    s.emptyInstalled,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13, color: t.mutedText),
-                  ),
-                )
-              else if (filtered.isEmpty)
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
-                  decoration: BoxDecoration(
-                    color: t.cardBackground,
-                    borderRadius: BorderRadius.circular(t.radius),
-                    border: Border.all(color: t.border),
-                  ),
-                  child: Text(
-                    'No matching vibes.',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(fontSize: 13, color: t.mutedText),
-                  ),
-                )
-              else
-                for (final rec in filtered) ...<Widget>[
-                  Builder(
-                    builder: (context) {
-                      final grp = rec.pinned ? pinnedList : unpinnedList;
-                      final grpIdx = grp.indexWhere(
-                        (x) => x.instanceId == rec.instanceId,
+                  ],
+                  _PermissionLabelCard(
+                    host: widget.host,
+                    vibe: _draftVibe!,
+                    origin: _draftOrigin,
+                    theme: t,
+                    strings: s,
+                    onAllow: (title, note) {
+                      widget.host.install(
+                        _draftVibe!,
+                        origin: _draftOrigin,
+                        title: title,
+                        note: note,
                       );
-                      final globalIdx = records.indexWhere(
-                        (x) => x.instanceId == rec.instanceId,
-                      );
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 10),
-                        child: _InstalledVibeCard(
-                          key: ValueKey<String>(rec.instanceId),
-                          host: widget.host,
-                          record: rec,
-                          theme: t,
-                          strings: s,
-                          adapter: widget.adapter,
-                          canMoveUp: grpIdx > 0,
-                          canMoveDown: grpIdx >= 0 && grpIdx < grp.length - 1,
-                          onEdit: () => _openEditDialog(rec, t),
-                          onShare: () => _openShareDialog(rec.vibe, t),
-                          onMoveUp: () => _moveWithinGroup(rec, -1),
-                          onMoveDown: () => _moveWithinGroup(rec, 1),
-                          onDelete: () =>
-                              _deleteWithUndo(rec, globalIdx >= 0 ? globalIdx : 0),
-                        ),
-                      );
+                      _wishCtrl.clear();
+                      setState(_clearDraft);
                     },
+                    onCancel: () => setState(_clearDraft),
                   ),
                 ],
 
-              // Portable vibes gallery
-              if (widget.gallery.isNotEmpty) ...<Widget>[
-                const SizedBox(height: 10),
+                const SizedBox(height: 16),
+
+                // Installed header
                 Text(
-                  s.portableGalleryTitle.toUpperCase(),
+                  '${s.installedHeading.toUpperCase()} \u00b7 ${records.length}',
                   style: TextStyle(
                     fontSize: 11.5,
                     fontWeight: FontWeight.w700,
@@ -1605,63 +1495,213 @@ class _VibeSpacePanelState extends State<VibeSpacePanel> {
                     color: t.mutedText,
                   ),
                 ),
-                const SizedBox(height: 2),
-                Text(
-                  s.portableGallerySubtitle,
-                  style: TextStyle(fontSize: 12, color: t.mutedText),
-                ),
-                const SizedBox(height: 8),
-                for (final gv in widget.gallery)
-                  Container(
-                    margin: const EdgeInsets.only(bottom: 8),
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 12,
-                      vertical: 10,
+                if (records.length >= 2) ...<Widget>[
+                  const SizedBox(height: 8),
+                  TextField(
+                    key: const Key('vs-filter-input'),
+                    controller: _filterCtrl,
+                    onChanged: (v) => setState(() => _filterQuery = v),
+                    decoration: InputDecoration(
+                      hintText: s.filterPlaceholder,
+                      isDense: true,
+                      prefixIcon: const Icon(Icons.search, size: 18),
+                      border: const OutlineInputBorder(),
                     ),
+                  ),
+                ],
+                if (records.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 6),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child:
+                            Icon(Icons.lock_outline, size: 13, color: t.accent),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          s.format(s.sealedLegend, <String, String>{
+                            'host': widget.host.name,
+                          }),
+                          style: TextStyle(fontSize: 12, color: t.mutedText),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+
+                // Undo delete banner
+                if (_deletedSnapshot != null) ...<Widget>[
+                  const SizedBox(height: 8),
+                  Container(
+                    key: const Key('vs-undo-banner'),
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: t.accent.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border:
+                          Border.all(color: t.accent.withValues(alpha: 0.45)),
+                    ),
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            'Deleted \u201c${_deletedSnapshot!.title}\u201d',
+                            style: TextStyle(fontSize: 12.5, color: t.text),
+                          ),
+                        ),
+                        TextButton(
+                          key: const Key('vs-undo-delete'),
+                          onPressed: () {
+                            final snap = _deletedSnapshot;
+                            final idx = _deletedIndex;
+                            _undoTimer?.cancel();
+                            setState(() => _deletedSnapshot = null);
+                            if (snap != null) {
+                              widget.host.restoreRecord(snap, idx);
+                            }
+                          },
+                          child: Text(s.undoLabel),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+
+                const SizedBox(height: 10),
+
+                if (records.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 20),
                     decoration: BoxDecoration(
                       color: t.cardBackground,
                       borderRadius: BorderRadius.circular(t.radius),
                       border: Border.all(color: t.border),
                     ),
-                    child: Row(
-                      children: <Widget>[
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: <Widget>[
-                              Text(
-                                gv.name,
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w600,
-                                  color: t.text,
-                                ),
-                              ),
-                              if (gv.wish.isNotEmpty)
-                                Text(
-                                  gv.wish,
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: t.mutedText,
-                                  ),
-                                ),
-                            ],
+                    child: Text(
+                      s.emptyInstalled,
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: t.mutedText),
+                    ),
+                  )
+                else if (filtered.isEmpty)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 18),
+                    decoration: BoxDecoration(
+                      color: t.cardBackground,
+                      borderRadius: BorderRadius.circular(t.radius),
+                      border: Border.all(color: t.border),
+                    ),
+                    child: Text(
+                      'No matching vibes.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 13, color: t.mutedText),
+                    ),
+                  )
+                else
+                  for (final rec in filtered)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: RepaintBoundary(
+                        child: _InstalledVibeCard(
+                          key: ValueKey<String>(rec.instanceId),
+                          host: widget.host,
+                          record: rec,
+                          theme: t,
+                          strings: s,
+                          adapter: widget.adapter,
+                          canMoveUp: (groupIndexById[rec.instanceId] ?? 0) > 0,
+                          canMoveDown: (groupIndexById[rec.instanceId] ?? -1) >=
+                                  0 &&
+                              (groupIndexById[rec.instanceId] ?? 0) <
+                                  (rec.pinned ? pinnedCount : unpinnedCount) -
+                                      1,
+                          onEdit: () => _openEditDialog(rec, t),
+                          onShare: () => _openShareDialog(rec.vibe, t),
+                          onMoveUp: () => _moveWithinGroup(rec, -1),
+                          onMoveDown: () => _moveWithinGroup(rec, 1),
+                          onDelete: () => _deleteWithUndo(
+                            rec,
+                            globalIndexById[rec.instanceId] ?? 0,
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        OutlinedButton(
-                          onPressed: () =>
-                              _startPreviewDraft(gv, origin: 'gallery'),
-                          child: Text(s.addLabel),
-                        ),
-                      ],
+                      ),
+                    ),
+
+                // Portable vibes gallery
+                if (widget.gallery.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 10),
+                  Text(
+                    s.portableGalleryTitle.toUpperCase(),
+                    style: TextStyle(
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.6,
+                      color: t.mutedText,
                     ),
                   ),
+                  const SizedBox(height: 2),
+                  Text(
+                    s.portableGallerySubtitle,
+                    style: TextStyle(fontSize: 12, color: t.mutedText),
+                  ),
+                  const SizedBox(height: 8),
+                  for (final gv in widget.gallery)
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 10,
+                      ),
+                      decoration: BoxDecoration(
+                        color: t.cardBackground,
+                        borderRadius: BorderRadius.circular(t.radius),
+                        border: Border.all(color: t.border),
+                      ),
+                      child: Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Text(
+                                  gv.name,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w600,
+                                    color: t.text,
+                                  ),
+                                ),
+                                if (gv.wish.isNotEmpty)
+                                  Text(
+                                    gv.wish,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: t.mutedText,
+                                    ),
+                                  ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          OutlinedButton(
+                            onPressed: () =>
+                                _startPreviewDraft(gv, origin: 'gallery'),
+                            child: Text(s.addLabel),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
               ],
-            ],
+            ),
           ),
         ),
       ),
-    ),
     );
   }
 }
@@ -1737,7 +1777,7 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
         prev.vibe.version != rec.vibe.version ||
         !_sameNeeds(prev.vibe.needs, rec.vibe.needs) ||
         prev.vibe.refreshMs != rec.vibe.refreshMs ||
-        jsonEncode(prev.args) != jsonEncode(rec.args);
+        !vibeDeepEquals(prev.args, rec.args);
 
     if (needsRemount) {
       _stopRun();
@@ -1941,7 +1981,8 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
                   ),
                   PopupMenuItem<String>(
                     value: 'inspect',
-                    child: Text(_inspectOpen ? s.hideInspectLabel : s.inspectLabel),
+                    child: Text(
+                        _inspectOpen ? s.hideInspectLabel : s.inspectLabel),
                   ),
                   PopupMenuItem<String>(
                     value: 'share',
@@ -1980,7 +2021,8 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
                     value: 'delete',
                     child: Text(
                       s.deleteLabel,
-                      style: TextStyle(color: t.danger, fontWeight: FontWeight.w600),
+                      style: TextStyle(
+                          color: t.danger, fontWeight: FontWeight.w600),
                     ),
                   ),
                 ],
@@ -2001,7 +2043,8 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
             spacing: 6,
             runSpacing: 4,
             children: <Widget>[
-              if (rec.pinned) _SmallPill(label: s.pinnedBadge, color: t.accent, theme: t),
+              if (rec.pinned)
+                _SmallPill(label: s.pinnedBadge, color: t.accent, theme: t),
               _SmallPill(
                 label: _originBadgeLabel(rec.origin),
                 color: t.mutedText,
@@ -2045,8 +2088,8 @@ class _InstalledVibeCardState extends State<_InstalledVibeCard> {
                     ),
                     FilledButton(
                       style: FilledButton.styleFrom(backgroundColor: t.accent),
-                      onPressed: () =>
-                          widget.host.updateRecord(rec.instanceId, paused: false),
+                      onPressed: () => widget.host
+                          .updateRecord(rec.instanceId, paused: false),
                       child: Text(s.resumeLabel),
                     ),
                   ],
@@ -2491,7 +2534,6 @@ class _EditVibeDialogState extends State<_EditVibeDialog> {
                 onSelectionChanged: (s) => setState(() => _tabIndex = s.first),
               ),
               const SizedBox(height: 12),
-
               if (_tabIndex == 0) ...<Widget>[
                 if (base.wish.isNotEmpty) ...<Widget>[
                   Text(
@@ -2522,7 +2564,8 @@ class _EditVibeDialogState extends State<_EditVibeDialog> {
                 ),
                 if (_wishError != null) ...<Widget>[
                   const SizedBox(height: 6),
-                  Text(_wishError!, style: TextStyle(fontSize: 12, color: t.warn)),
+                  Text(_wishError!,
+                      style: TextStyle(fontSize: 12, color: t.warn)),
                 ],
               ] else ...<Widget>[
                 Text(
@@ -2538,8 +2581,11 @@ class _EditVibeDialogState extends State<_EditVibeDialog> {
                     dense: true,
                     contentPadding: EdgeInsets.zero,
                     controlAffinity: ListTileControlAffinity.leading,
-                    title: Text(cap.name, style: const TextStyle(fontFamily: 'monospace', fontSize: 12)),
-                    subtitle: Text(cap.title, style: TextStyle(fontSize: 11.5, color: t.mutedText)),
+                    title: Text(cap.name,
+                        style: const TextStyle(
+                            fontFamily: 'monospace', fontSize: 12)),
+                    subtitle: Text(cap.title,
+                        style: TextStyle(fontSize: 11.5, color: t.mutedText)),
                     value: _selectedNeeds.contains(cap.name),
                     onChanged: (checked) {
                       setState(() {
@@ -2581,7 +2627,6 @@ class _EditVibeDialogState extends State<_EditVibeDialog> {
                   ),
                 ),
               ],
-
               const SizedBox(height: 12),
               Container(
                 padding: const EdgeInsets.all(10),
@@ -2606,7 +2651,6 @@ class _EditVibeDialogState extends State<_EditVibeDialog> {
                   ],
                 ),
               ),
-
               const SizedBox(height: 10),
               Text(
                 addedNeeds.isNotEmpty
@@ -2628,9 +2672,21 @@ class _EditVibeDialogState extends State<_EditVibeDialog> {
                     return Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: <Widget>[
-                        _LabelRow(title: 'Reads', items: lbl.reads, accentColor: t.accent, theme: t),
-                        _LabelRow(title: 'Shows', items: lbl.shows, accentColor: t.mutedText, theme: t),
-                        _LabelRow(title: 'Cannot', items: lbl.cannot, accentColor: t.mutedText, theme: t),
+                        _LabelRow(
+                            title: 'Reads',
+                            items: lbl.reads,
+                            accentColor: t.accent,
+                            theme: t),
+                        _LabelRow(
+                            title: 'Shows',
+                            items: lbl.shows,
+                            accentColor: t.mutedText,
+                            theme: t),
+                        _LabelRow(
+                            title: 'Cannot',
+                            items: lbl.cannot,
+                            accentColor: t.mutedText,
+                            theme: t),
                       ],
                     );
                   },
@@ -2638,9 +2694,9 @@ class _EditVibeDialogState extends State<_EditVibeDialog> {
               ],
               if (_saveError != null) ...<Widget>[
                 const SizedBox(height: 6),
-                Text(_saveError!, style: TextStyle(color: t.danger, fontSize: 12.5)),
+                Text(_saveError!,
+                    style: TextStyle(color: t.danger, fontSize: 12.5)),
               ],
-
               if (history.isNotEmpty) ...<Widget>[
                 const SizedBox(height: 12),
                 Divider(height: 1, color: t.border),
@@ -2667,7 +2723,8 @@ class _EditVibeDialogState extends State<_EditVibeDialog> {
                         ),
                         OutlinedButton(
                           onPressed: () {
-                            widget.host.revertRecord(widget.record.instanceId, i);
+                            widget.host
+                                .revertRecord(widget.record.instanceId, i);
                             Navigator.of(context).pop();
                           },
                           child: const Text('Restore'),
@@ -2769,7 +2826,7 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
     if (oldWidget.host != widget.host ||
         oldWidget.vibe.id != widget.vibe.id ||
         oldWidget.vibe.source != widget.vibe.source ||
-        jsonEncode(oldWidget.args) != jsonEncode(widget.args)) {
+        !vibeDeepEquals(oldWidget.args, widget.args)) {
       _stopRun();
       _pinned = false;
       _mountRun();
@@ -2848,125 +2905,126 @@ class _VibeEmbedCardState extends State<VibeEmbedCard> {
     return Directionality(
       textDirection: s.isRtl ? TextDirection.rtl : TextDirection.ltr,
       child: _wrapToneScope(
-      t,
-      Container(
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: t.surface,
-          borderRadius: BorderRadius.circular(t.radius),
-          border: Border.all(color: t.border),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 6,
-              children: <Widget>[
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      s.madeByAgent,
-                      style: TextStyle(
-                        fontSize: 12.5,
-                        fontWeight: FontWeight.w700,
-                        color: t.text,
-                      ),
-                    ),
-                    if (widget.caption != null && widget.caption!.isNotEmpty)
+        t,
+        Container(
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: t.surface,
+            borderRadius: BorderRadius.circular(t.radius),
+            border: Border.all(color: t.border),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 6,
+                children: <Widget>[
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
                       Text(
-                        widget.caption!,
-                        style: TextStyle(fontSize: 12, color: t.mutedText),
-                      ),
-                  ],
-                ),
-                _SmallPill(
-                  label: _pinned ? s.pinnedBadge : s.temporaryBadge,
-                  color: _pinned ? t.ok : t.warn,
-                  theme: t,
-                ),
-              ],
-            ),
-            Divider(height: 16, color: t.border),
-            if (health != null &&
-                (health.state != VibeSourceMode.live ||
-                    health.usingSampleFallback)) ...<Widget>[
-              _SourceHealthBanner(
-                health: health,
-                theme: t,
-                strings: s,
-                onRetry: () => _run?.retry(),
-                onUseSample: () => _run?.setDataMode('sample'),
-                onUseLive: () => _run?.setDataMode('live'),
-              ),
-              const SizedBox(height: 8),
-            ],
-            _RunViewBody(
-              host: widget.host,
-              run: _run,
-              theme: t,
-              adapter: widget.adapter,
-            ),
-            Divider(height: 16, color: t.border),
-            Wrap(
-              alignment: WrapAlignment.spaceBetween,
-              crossAxisAlignment: WrapCrossAlignment.center,
-              spacing: 8,
-              runSpacing: 6,
-              children: <Widget>[
-                Text(
-                  '${s.readsLabel}: ${label.reads.join(', ')}',
-                  style: TextStyle(fontSize: 12, color: t.mutedText),
-                ),
-                Wrap(
-                  spacing: 6,
-                  runSpacing: 6,
-                  crossAxisAlignment: WrapCrossAlignment.center,
-                  children: <Widget>[
-                    TextButton(
-                      onPressed: () =>
-                          setState(() => _inspectOpen = !_inspectOpen),
-                      child: Text(
-                        _inspectOpen ? s.hideInspectLabel : s.inspectLabel,
-                      ),
-                    ),
-                    if (_pinned)
-                      Text(
-                        s.pinnedToVibeSpace,
+                        s.madeByAgent,
                         style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                          color: t.ok,
+                          fontSize: 12.5,
+                          fontWeight: FontWeight.w700,
+                          color: t.text,
                         ),
-                      )
-                    else
-                      FilledButton(
-                        style: FilledButton.styleFrom(backgroundColor: t.accent),
-                        onPressed: () => _openPinDialog(t, s),
-                        child: Text(s.pinToVibeSpace),
                       ),
-                  ],
+                      if (widget.caption != null && widget.caption!.isNotEmpty)
+                        Text(
+                          widget.caption!,
+                          style: TextStyle(fontSize: 12, color: t.mutedText),
+                        ),
+                    ],
+                  ),
+                  _SmallPill(
+                    label: _pinned ? s.pinnedBadge : s.temporaryBadge,
+                    color: _pinned ? t.ok : t.warn,
+                    theme: t,
+                  ),
+                ],
+              ),
+              Divider(height: 16, color: t.border),
+              if (health != null &&
+                  (health.state != VibeSourceMode.live ||
+                      health.usingSampleFallback)) ...<Widget>[
+                _SourceHealthBanner(
+                  health: health,
+                  theme: t,
+                  strings: s,
+                  onRetry: () => _run?.retry(),
+                  onUseSample: () => _run?.setDataMode('sample'),
+                  onUseLive: () => _run?.setDataMode('live'),
                 ),
+                const SizedBox(height: 8),
               ],
-            ),
-            if (_inspectOpen) ...<Widget>[
-              const SizedBox(height: 8),
-              _InspectPane(
+              _RunViewBody(
                 host: widget.host,
-                vibe: widget.vibe,
                 run: _run,
                 theme: t,
-                onHide: () => setState(() => _inspectOpen = false),
+                adapter: widget.adapter,
               ),
+              Divider(height: 16, color: t.border),
+              Wrap(
+                alignment: WrapAlignment.spaceBetween,
+                crossAxisAlignment: WrapCrossAlignment.center,
+                spacing: 8,
+                runSpacing: 6,
+                children: <Widget>[
+                  Text(
+                    '${s.readsLabel}: ${label.reads.join(', ')}',
+                    style: TextStyle(fontSize: 12, color: t.mutedText),
+                  ),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    crossAxisAlignment: WrapCrossAlignment.center,
+                    children: <Widget>[
+                      TextButton(
+                        onPressed: () =>
+                            setState(() => _inspectOpen = !_inspectOpen),
+                        child: Text(
+                          _inspectOpen ? s.hideInspectLabel : s.inspectLabel,
+                        ),
+                      ),
+                      if (_pinned)
+                        Text(
+                          s.pinnedToVibeSpace,
+                          style: TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                            color: t.ok,
+                          ),
+                        )
+                      else
+                        FilledButton(
+                          style:
+                              FilledButton.styleFrom(backgroundColor: t.accent),
+                          onPressed: () => _openPinDialog(t, s),
+                          child: Text(s.pinToVibeSpace),
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+              if (_inspectOpen) ...<Widget>[
+                const SizedBox(height: 8),
+                _InspectPane(
+                  host: widget.host,
+                  vibe: widget.vibe,
+                  run: _run,
+                  theme: t,
+                  onHide: () => setState(() => _inspectOpen = false),
+                ),
+              ],
             ],
-          ],
+          ),
         ),
       ),
-    ),
     );
   }
 }

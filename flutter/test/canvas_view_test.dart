@@ -86,13 +86,15 @@ void main() {
     },
   );
 
-  testWidgets('VibeCanvasView renders markdown fallback when no builder provided',
+  testWidgets(
+      'VibeCanvasView renders markdown fallback when no builder provided',
       (tester) async {
     const payload = VibeCanvasPayload(
       canvasId: 'canvas-md-1',
       title: 'Architecture Doc',
       format: VibeCanvasFormat.markdown,
-      content: '# System Overview\n\n- Edge gateway\n- Worker pool\n\n```mermaid\ngraph TD\n  A-->B\n```',
+      content:
+          '# System Overview\n\n- Edge gateway\n- Worker pool\n\n```mermaid\ngraph TD\n  A-->B\n```',
     );
 
     await tester.pumpWidget(
@@ -161,7 +163,7 @@ void main() {
 
     expect(
       find.byKey(const ValueKey('vibe-canvas-vibe-ui-error')),
-    findsOneWidget,
+      findsOneWidget,
     );
     expect(find.text('Invalid Vibe UI Schema'), findsOneWidget);
   });
@@ -172,7 +174,8 @@ void main() {
       canvasId: 'canvas-md-table',
       title: 'Top Processes',
       format: VibeCanvasFormat.markdown,
-      content: '# Top Processes\n\n| PID | Command | %CPU |\n| --- | --- | --- |\n| 101 | nginx | 14.2 |\n| 202 | postgres | 8.5 |',
+      content:
+          '# Top Processes\n\n| PID | Command | %CPU |\n| --- | --- | --- |\n| 101 | nginx | 14.2 |\n| 202 | postgres | 8.5 |',
     );
 
     await tester.pumpWidget(

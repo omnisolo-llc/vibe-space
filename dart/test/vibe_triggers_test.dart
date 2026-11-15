@@ -7,11 +7,11 @@ void main() {
         'evaluates exact, glob, regex, contains, prefix, suffix, exists, and oneOf',
         () {
       final cond = VibeTriggerCondition.fromJson(<String, Object?>{
-        'program': <Object?>['agy', 'docker*'],
-        'command': <String, Object?>{'contains': '--model'},
+        'program': <Object?>['kubectl', 'docker*'],
+        'command': <String, Object?>{'contains': '--namespace'},
         'surface': 'terminal',
         'windowTitle': <String, Object?>{
-          'prefix': 'AGY',
+          'prefix': 'K8S',
           'caseSensitive': false
         },
         'cwd': '*/example-project*',
@@ -22,7 +22,7 @@ void main() {
           'inTmux': true,
           'gitRepo': true,
           'portOpen': '3000',
-          'branch': <String, Object?>{'regex': r'^swarm/[a-z-]+$'},
+          'branch': <String, Object?>{'regex': r'^feat/[a-z-]+$'},
           'logFile': <String, Object?>{'suffix': '.jsonl'},
         },
         'not': <String, Object?>{
@@ -31,19 +31,19 @@ void main() {
       });
 
       final matchingCtx = VibeTriggerContext.fromJson(<String, Object?>{
-        'program': '/home/kevin/.local/bin/agy',
-        'command': 'agy --model gemini-pro',
+        'program': '/usr/local/bin/kubectl',
+        'command': 'kubectl get pods --namespace staging',
         'surface': 'terminal',
         'window': 'dev-pane-1',
-        'windowTitle': 'agy · session',
+        'windowTitle': 'k8s · session',
         'cwd': '/workspace/example-project/app',
         'env': <String, Object?>{'TMUX': '/tmp/tmux-1000/default,123,0'},
         'context': <String, Object?>{
           'inTmux': true,
           'gitRepo': true,
           'ports': <String>['3000', '8080'],
-          'branch': 'swarm/vibe-triggers',
-          'logFile': 'transcript.jsonl',
+          'branch': 'feat/vibe-triggers',
+          'logFile': 'events.jsonl',
         },
       });
 
@@ -140,10 +140,10 @@ void main() {
       final evaluator = VibeTriggerEvaluator();
       final entries = <VibeConditionalEntry>[
         VibeConditionalEntry(
-          id: 'agy',
-          title: 'AGY Quota',
+          id: 'k8s',
+          title: 'Cluster Quota',
           condition: VibeTriggerCondition.fromJson(<String, Object?>{
-            'program': 'agy',
+            'program': 'kubectl',
           }),
           holdMs: 1500,
           priority: 20,
@@ -160,24 +160,24 @@ void main() {
 
       var res = evaluator.evaluate(
         entries,
-        const VibeTriggerContext(program: 'agy'),
+        const VibeTriggerContext(program: 'kubectl'),
         nowMs: 1000,
       );
-      expect(res.activeIds, <String>['agy']);
-      expect(res.newlyTriggeredIds, <String>['agy']);
+      expect(res.activeIds, <String>['k8s']);
+      expect(res.newlyTriggeredIds, <String>['k8s']);
       expect(res.changed, isTrue);
 
-      // Transient subshell at 1800ms (< 1500ms hold) keeps 'agy' active via hysteresis
+      // Transient subshell at 1800ms (< 1500ms hold) keeps 'k8s' active via hysteresis
       res = evaluator.evaluate(
         entries,
         const VibeTriggerContext(program: 'git'),
         nowMs: 1800,
       );
-      expect(res.activeIds, <String>['agy']);
-      expect(res.heldIds, <String>['agy']);
+      expect(res.activeIds, <String>['k8s']);
+      expect(res.heldIds, <String>['k8s']);
       expect(res.changed, isFalse);
 
-      // At 2600ms (>= 1500ms after last match at 1000ms), 'agy' deactivates
+      // At 2600ms (>= 1500ms after last match at 1000ms), 'k8s' deactivates
       res = evaluator.evaluate(
         entries,
         const VibeTriggerContext(program: 'docker-compose'),
@@ -185,7 +185,7 @@ void main() {
       );
       expect(res.activeIds, <String>['docker']);
       expect(res.newlyTriggeredIds, <String>['docker']);
-      expect(res.deactivatedIds, <String>['agy']);
+      expect(res.deactivatedIds, <String>['k8s']);
 
       // Dismiss 'docker' during current episode -> suppressed until condition resets
       evaluator.dismiss('docker');
@@ -223,23 +223,23 @@ void main() {
       );
       final registry = VibeConditionalRegistry(host: host, storage: storage);
 
-      final agyPreset = VibeConditionalEntry(
-        id: 'vibe.preset.agy',
-        title: 'AGY Models',
+      final k8sPreset = VibeConditionalEntry(
+        id: 'preset.k8s',
+        title: 'Cluster Nodes',
         isPreset: true,
         priority: 100,
         condition: VibeTriggerCondition.fromJson(<String, Object?>{
-          'program': 'agy',
+          'program': 'kubectl',
         }),
         canvas: const VibeCanvasPayload(
-          canvasId: 'agy-canvas',
-          title: 'AGY',
+          canvasId: 'k8s-canvas',
+          title: 'K8s',
           format: VibeCanvasFormat.vibeUi,
-          content: '{"type":"stat","label":"TPS","value":"42"}',
+          content: '{"type":"stat","label":"RPS","value":"42"}',
         ),
       );
       final gitPreset = VibeConditionalEntry(
-        id: 'vibe.preset.git',
+        id: 'preset.git',
         title: 'Git Repo',
         isPreset: true,
         priority: 50,
@@ -248,10 +248,10 @@ void main() {
         }),
       );
 
-      registry.registerPresets(<VibeConditionalEntry>[agyPreset, gitPreset]);
+      registry.registerPresets(<VibeConditionalEntry>[k8sPreset, gitPreset]);
 
       // User disables gitPreset and adds a custom Vibe view
-      registry.setEnabled('vibe.preset.git', false);
+      registry.setEnabled('preset.git', false);
       registry.upsert(
         VibeConditionalEntry(
           id: 'custom.branch-banner',
@@ -268,18 +268,18 @@ void main() {
         ),
       );
 
-      // Live telemetry updates agyPreset payload without touching custom entries or overrides
+      // Live telemetry updates k8sPreset payload without touching custom entries or overrides
       registry.hydratePresetPayloads(<String, Object?>{
-        'vibe.preset.agy': const VibeCanvasPayload(
-          canvasId: 'agy-canvas',
-          title: 'AGY Live',
+        'preset.k8s': const VibeCanvasPayload(
+          canvasId: 'k8s-canvas',
+          title: 'K8s Live',
           format: VibeCanvasFormat.vibeUi,
-          content: '{"type":"stat","label":"TPS","value":"88"}',
+          content: '{"type":"stat","label":"RPS","value":"88"}',
         ),
       });
 
       final eval = registry.updateContextFromJson(<String, Object?>{
-        'program': 'agy',
+        'program': 'kubectl',
         'cwd': '/repo/app',
         'context': <String, Object?>{
           'gitRepo': true,
@@ -289,7 +289,7 @@ void main() {
 
       expect(
         eval.activeIds,
-        <String>['vibe.preset.agy', 'custom.branch-banner'],
+        <String>['preset.k8s', 'custom.branch-banner'],
       );
       expect(
         registry.activeEntries.first.canvas!.content,
@@ -301,11 +301,11 @@ void main() {
 
       // Reloading from storage retains custom view and disabled gitPreset override
       final reloaded = VibeConditionalRegistry(host: host, storage: storage);
-      reloaded.registerPresets(<VibeConditionalEntry>[agyPreset, gitPreset]);
+      reloaded.registerPresets(<VibeConditionalEntry>[k8sPreset, gitPreset]);
       reloaded.updateContext(eval.context);
       expect(
         reloaded.activeEntries.map((e) => e.id).toList(),
-        <String>['vibe.preset.agy', 'custom.branch-banner'],
+        <String>['preset.k8s', 'custom.branch-banner'],
       );
 
       reloaded.dispose();
@@ -314,25 +314,25 @@ void main() {
     });
   });
 
-  group('WeChat Mini Program Dual-Layer & Skyline VXML / Canvas', () {
+  group('Vibe-Snippet Dual-Layer & Skyline VXML / Canvas', () {
     test(
-        'parses air-gapped defineMiniProgram, enforces sandbox caps, and compiles VXML + canvas',
+        'parses air-gapped defineVibeSnippet, enforces sandbox caps, and compiles VXML + canvas',
         () {
       expect(
         () => validateMiniProgramSource(
-          'defineMiniProgram({ onLoad() { fetch("https://evil.example"); } })',
+          'defineVibeSnippet({ onLoad() { fetch("https://evil.example"); } })',
         ),
         throwsFormatException,
       );
       expect(
         () => validateMiniProgramSource(
-          'defineMiniProgram({ onLoad() { window.alert(1); } })',
+          'defineVibeSnippet({ onLoad() { window.alert(1); } })',
         ),
         throwsFormatException,
       );
 
       final def = VibeMiniProgramDefinition.fromSource('''
-        defineMiniProgram({
+        defineVibeSnippet({
           data: {
             mode: 'compact',
             tps: 48.5,
@@ -363,10 +363,10 @@ void main() {
             ]
           },
           onDataUpdate(hostData) {
-            if (hostData['terminal.agy']) {
+            if (hostData['metrics.cluster']) {
               this.setData({
-                tps: hostData['terminal.agy'].tps,
-                'series[3]': hostData['terminal.agy'].tps
+                tps: hostData['metrics.cluster'].tps,
+                'series[3]': hostData['metrics.cluster'].tps
               });
             }
           },
@@ -384,9 +384,9 @@ void main() {
       final session = VibeMiniProgramSession(definition: def);
       session.load(
         hostData: <String, Object?>{
-          'terminal.agy': <String, Object?>{'tps': 94.2},
+          'metrics.cluster': <String, Object?>{'tps': 94.2},
         },
-        context: const VibeTriggerContext(program: 'agy'),
+        context: const VibeTriggerContext(program: 'kubectl'),
       );
 
       var view = session.buildView()!;
@@ -399,9 +399,9 @@ void main() {
 
       // Dispatch bindtap event -> hides canvas via setData
       final tapEvent = VibeMiniProgramEvent.tryFromCommand(
-        'mp:tap:toggleChart',
+        'vibe:tap:toggleChart',
         <String, Object?>{
-          '__mpEvent': true,
+          '__vibeEvent': true,
           'type': 'tap',
           'handler': 'toggleChart',
           'dataset': <String, Object?>{'panel': 'expanded'},
@@ -414,6 +414,36 @@ void main() {
         (view['children'] as List).where((n) => (n as Map)['type'] == 'canvas'),
         isEmpty,
       );
+
+      // Dual wire aliases accepted as input; canonical wire name remains miniprogram
+      expect(
+        VibeRuntimeKind.tryFromWireName('miniprogram'),
+        VibeRuntimeKind.miniProgram,
+      );
+      expect(
+        VibeRuntimeKind.tryFromWireName('mini_program'),
+        VibeRuntimeKind.miniProgram,
+      );
+      expect(
+        VibeRuntimeKind.tryFromWireName('vibe-snippet'),
+        VibeRuntimeKind.miniProgram,
+      );
+      expect(
+        VibeRuntimeKind.tryFromWireName('vibe_snippet'),
+        VibeRuntimeKind.miniProgram,
+      );
+      expect(VibeRuntimeKind.miniProgram.wireName, 'miniprogram');
+      final legacyDef = VibeMiniProgramDefinition.fromSource(
+        'defineMiniProgram({ data: { ok: true }, methods: { ping() { this.setData({ ok: false }); } } })',
+      );
+      final legacySession = VibeMiniProgramSession(definition: legacyDef)
+        ..load();
+      final legacyTap = VibeMiniProgramEvent.tryFromCommand(
+        'mp:tap:ping',
+        const <String, Object?>{'__mpEvent': true, 'type': 'tap'},
+      )!;
+      expect(legacySession.dispatchEvent(legacyTap), isTrue);
+      expect(legacySession.data['ok'], isFalse);
 
       // > 64 KiB setData diff rejected
       expect(

@@ -9,7 +9,7 @@ export 'vibe_wasm_evaluator.dart';
 /// Maximum UTF-8 byte length for a `setData` incremental patch (64 KiB).
 const int kMaxVibeSetDataBytes = 64 * 1024;
 
-/// Maximum `setData` mutations per second per Mini Program instance.
+/// Maximum `setData` mutations per second per Vibe-Snippet instance.
 const int kMaxVibeSetDataRatePerSec = 30;
 
 /// Maximum vector draw commands per `canvas` frame (`<= 2,000`).
@@ -60,8 +60,9 @@ String _randomActionToken() {
 /// [vxml] (data-bound Skyline template), [wasm], [js], [a2ui], [vibeUi], and
 /// [markdown] — zero iframes/WebViews!
 enum VibeRuntimeKind {
-  /// WeChat Mini Program Dual-Layer (`defineMiniProgram` + `setData` + `VXML`
-  /// template rendered natively via Skyline Flutter widgets & Skia `CustomPaint`).
+  /// WeChat Mini Program Dual-Layer (`defineMiniProgram` / `defineVibeSnippet`
+  /// alias + `setData` + `VXML` template rendered natively via Skyline Flutter
+  /// widgets & Skia `CustomPaint`).
   miniProgram('miniprogram'),
 
   /// Declarative Skyline `VXML` template (`{{path}}`, `if`/`v-if`, `for`/`v-for`,
@@ -88,6 +89,9 @@ enum VibeRuntimeKind {
 
   const VibeRuntimeKind(this.wireName);
 
+  /// Compatibility alias for [miniProgram].
+  static const VibeRuntimeKind vibeSnippet = miniProgram;
+
   final String wireName;
 
   /// True when this runtime executes imperative guest logic (`miniprogram`, `wasm`, `js`, `dom`).
@@ -105,7 +109,12 @@ enum VibeRuntimeKind {
     return switch (norm) {
       'miniprogram' ||
       'mini_program' ||
-      'wechat' =>
+      'mini-program' ||
+      'wechat' ||
+      'vibe-snippet' ||
+      'vibe_snippet' ||
+      'vibesnippet' ||
+      'snippet' =>
         VibeRuntimeKind.miniProgram,
       'vxml' || 'template' || 'wxml' => VibeRuntimeKind.vxml,
       'wasm' || 'webassembly' => VibeRuntimeKind.wasm,
@@ -257,7 +266,12 @@ String buildVibeSpaceDomHtml({
   for (const fn of ['alert', 'confirm', 'prompt', 'print']) {
     try { Object.defineProperty(window, fn, { value: noopVoid, writable: false, configurable: false }); } catch (_) { window[fn] = noopVoid; }
   }
-  for (const api of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection', 'RTCDataChannel', 'SharedWorker', 'BroadcastChannel', 'EventSource']) {
+  for (const api of [
+    'fetch', 'XMLHttpRequest', 'WebSocket', 'WebTransport', 'EventSource',
+    'RTCPeerConnection', 'webkitRTCPeerConnection', 'mozRTCPeerConnection', 'RTCDataChannel',
+    'SharedWorker', 'ServiceWorkerContainer', 'BroadcastChannel',
+    'caches', 'cookieStore', 'indexedDB', 'localStorage', 'sessionStorage'
+  ]) {
     try { Object.defineProperty(window, api, { value: undefined, writable: false, configurable: false }); } catch (_) { try { delete window[api]; } catch (__) {} }
   }
   if (typeof navigator === 'object' && navigator) {
@@ -287,12 +301,17 @@ String buildVibeSpaceDomHtml({
     const alloc = findWasmEntrypoint(e, 'alloc');
     const invoke = findWasmEntrypoint(e, 'invoke');
     if (!e.memory || typeof alloc !== 'function' || typeof invoke !== 'function') return null;
+    if (e.memory.buffer.byteLength > 33554432) throw new Error('Wasm memory exceeds 32 MiB cap');
     const payload = new TextEncoder().encode(JSON.stringify({ command: command || 'refresh', data: _data, context: _context }));
-    const ptr = alloc(payload.length);
+    const ptr = alloc(payload.length) >>> 0;
+    if (ptr + payload.length > e.memory.buffer.byteLength) throw new Error('Wasm alloc out of bounds');
     new Uint8Array(e.memory.buffer, ptr, payload.length).set(payload);
     const packed = BigInt.asUintN(64, invoke(ptr, payload.length));
     const offset = Number(packed & 0xffffffffn);
     const length = Number(packed >> 32n);
+    if (e.memory.buffer.byteLength > 33554432 || offset + length > e.memory.buffer.byteLength || length > 1048576) {
+      throw new Error('Wasm output slice out of bounds');
+    }
     return JSON.parse(new TextDecoder('utf-8').decode(new Uint8Array(e.memory.buffer, offset, length)));
   }
 

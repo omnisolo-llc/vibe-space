@@ -201,7 +201,7 @@ class VibeWasmEvaluator {
   }
 
   /// Executes [wasmBytes] and adapts any returned `view` / `a2ui` / `markdown`
-  /// (or preserves `setData` patches for WeChat Mini Program Wasm guests).
+  /// (or preserves `setData` patches for WeChat Mini Program dual-layer style Wasm guests).
   static FutureOr<Map<String, Object?>> evaluate(
     Uint8List wasmBytes,
     Map<String, Object?> input, {

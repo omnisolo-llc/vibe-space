@@ -166,7 +166,7 @@ class VibeTriggerRuleBadge extends StatelessWidget {
   }
 }
 
-/// Renders a single [VibeConditionalEntry] (`miniProgram`, `vxml`, `wasm`,
+/// Renders a single [VibeConditionalEntry] (`vibeSnippet`, `vxml`, `wasm`,
 /// `js`, `a2ui`, `vibe_ui`, `markdown`, or opt-in `dom`) inside a themed,
 /// `RepaintBoundary`-isolated card.
 class VibeConditionalEntryCard extends StatelessWidget {

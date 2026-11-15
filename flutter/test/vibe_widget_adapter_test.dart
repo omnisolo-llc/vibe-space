@@ -330,7 +330,11 @@ void main() {
               title: 'Disk usage',
               fields: const <String, String>{'mount': 'public'},
               read: () => const <Map<String, Object?>>[
-                <String, Object?>{'mount': '/', 'usedFraction': 0.5, 'sizeGb': 100},
+                <String, Object?>{
+                  'mount': '/',
+                  'usedFraction': 0.5,
+                  'sizeGb': 100
+                },
               ],
             ),
           ],

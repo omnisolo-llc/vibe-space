@@ -3,9 +3,12 @@ import 'dart:convert';
 
 typedef JsonMap = Map<String, dynamic>;
 
+final RegExp _kValidApiNameRe = RegExp(
+  r'^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$',
+);
+
 bool validApiName(String value) =>
-    value.length <= 128 &&
-    RegExp(r'^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$').hasMatch(value);
+    value.length <= 128 && _kValidApiNameRe.hasMatch(value);
 
 /// Host-configurable policy defining built-in capabilities and effect
 /// method-to-capability mappings beyond `network`, `network.fetch`, and

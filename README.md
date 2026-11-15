@@ -16,7 +16,8 @@ Vibe Space panel (⋯ management) & inline Temporary agent embeds
 
 ## Trust Boundaries & Key Capabilities
 
-- **Opt-in host manifest**: Each host explicitly declares offered capabilities (`public` or `sealed` fields, synthetic `sample` rows, optional `status()` health checks) and a plain-language `notOffered` list.
+- **Opt-in host manifest & LLM guidance prompt**: Each host explicitly declares offered capabilities (`public` or `sealed` fields, synthetic `sample` rows, optional `status()` health checks) and a plain-language `notOffered` list. Built-in guidance prompt builders (`buildVibeGenerationSystemPrompt` / `host.buildGenerationSystemPrompt` / `build_generation_system_prompt`) let LLMs generate Vibes from sanitized `sample` schemas without ever touching live data or live sealed values.
+- **WeChat Mini Program security standard**: Dual-layer isolation for Vibe Mini Programs (`AppService` air-gapped logic + `Skyline` native declarative `VibeView` & 2D `canvas`), locked ambient globals and `Function` constructors, `<= 64 KiB` / `<= 30/s` `setData` caps, scoped `WXSS` style allowlists, SVG `url(...)` & terminal ANSI/OSC 52 exfiltration blocking, and ReDoS-safe `when` triggers.
 - **Generated permission labels**: Before running on live data, the host deterministically builds a **Reads / Shows / Cannot** label from `vibe.needs` and the host manifest. Same-capability edits show `"No new permissions."`; expanded capabilities display a permission diff; `#vibe=...` share tokens carry no grants.
 - **Sealed values ("show without seeing")**: Fields marked `'sealed'` cross the sandbox boundary as random opaque handles (`{ "sealed": "h_..." }`). The vibe never sees the real string; the host resolves handles at draw time with a lock indicator, and forged handles render empty.
 - **Dedicated panel & inline agent embeds**: Hosts mount `VibeSpacePanel` for wish authoring, sample previews, gallery vibes, and link imports, plus `VibeEmbedCard` inside agent replies (`Temporary` badge, `Inspect` ledger, and **Pin to Vibe Space**).
@@ -36,7 +37,7 @@ Vibe Space panel (⋯ management) & inline Temporary agent embeds
 | `sdk/typescript` | JSON protocol types (`index.d.ts`), `SealedHandle` / `ViewTone`, and package verification helpers (`index.mjs`) |
 | `web/worker.js` | Disposable browser worker with no Wasm imports |
 | `tools` | `vibe.mjs` CLI (`init`, `build`, `keygen`, `pack`, `inspect`) and `sync-worker.mjs` |
-| `skills/vibe-space` | Instructions for AI-assisted vibe and mini-app authoring |
+| `skills/vibe-space` | Instructions for AI-assisted Vibe Mini Program and Wasm guest authoring |
 
 See [VibeProtocol Contract](docs/vibeprotocol.md), [Compatibility Adapters](docs/compatibility-adapters.md), [Protocol v1 (Wasm ABI)](docs/protocol.md), [Host Integration](docs/hosts.md), and [Security Boundary](docs/security.md).
 

@@ -19,19 +19,19 @@ void main() {
 
       controller.registerPresets(<VibeConditionalEntry>[
         VibeConditionalEntry(
-          id: 'vibe.preset.agy',
-          title: 'AGY Session',
+          id: 'preset.k8s',
+          title: 'Cluster Session',
           isPreset: true,
           priority: 100,
           condition: VibeTriggerCondition.fromJson(<String, Object?>{
-            'program': 'agy',
+            'program': 'kubectl',
           }),
           canvas: const VibeCanvasPayload(
-            canvasId: 'agy-card',
-            title: 'AGY',
+            canvasId: 'k8s-card',
+            title: 'Cluster',
             format: VibeCanvasFormat.vibeUi,
             content:
-                '{"type":"column","children":[{"type":"stat","label":"Active Model","value":"{{activeModel}}"},{"type":"sparkline","values":[22,38,54,61]}]}',
+                '{"type":"column","children":[{"type":"stat","label":"Active Cluster","value":"{{activeCluster}}"},{"type":"sparkline","values":[22,38,54,61]}]}',
           ),
         ),
       ]);
@@ -62,31 +62,31 @@ void main() {
       );
 
       // Initially idle -> empty
-      expect(find.text('AGY Session'), findsNothing);
+      expect(find.text('Cluster Session'), findsNothing);
       expect(find.text('Neovim Tips'), findsNothing);
 
-      // Enter agy session -> AGY card appears with hydrated {{activeModel}}
+      // Enter kubectl session -> Cluster card appears with hydrated {{activeCluster}}
       controller.updateContext(
         const VibeTriggerContext(
-          program: 'agy',
+          program: 'kubectl',
           cwd: '/repo',
-          context: <String, Object?>{'activeModel': 'Gemini Pro'},
+          context: <String, Object?>{'activeCluster': 'prod-us-east'},
         ),
       );
       await tester.pump();
 
-      expect(find.text('AGY Session'), findsOneWidget);
+      expect(find.text('Cluster Session'), findsOneWidget);
       expect(find.text('Preset'), findsOneWidget);
-      expect(find.text('Gemini Pro'), findsOneWidget);
+      expect(find.text('prod-us-east'), findsOneWidget);
       expect(find.text('Neovim Tips'), findsNothing);
 
-      // Switch program to nvim -> AGY hides, Neovim Tips appears with hydrated cwd
+      // Switch program to nvim -> Cluster hides, Neovim Tips appears with hydrated cwd
       controller.updateContext(
         const VibeTriggerContext(program: 'nvim', cwd: '/repo/app'),
       );
       await tester.pump();
 
-      expect(find.text('AGY Session'), findsNothing);
+      expect(find.text('Cluster Session'), findsNothing);
       expect(find.text('Neovim Tips'), findsOneWidget);
       expect(find.textContaining('/repo/app'), findsOneWidget);
 
@@ -111,23 +111,23 @@ void main() {
       await tester.pump();
       expect(find.text('Neovim Tips'), findsNothing);
 
-      // Re-enter agy, click Dismiss -> suppressed until agy exits and re-enters
-      controller.updateContext(const VibeTriggerContext(program: 'agy'));
+      // Re-enter kubectl, click Dismiss -> suppressed until kubectl exits and re-enters
+      controller.updateContext(const VibeTriggerContext(program: 'kubectl'));
       await tester.pump();
-      expect(find.text('AGY Session'), findsOneWidget);
+      expect(find.text('Cluster Session'), findsOneWidget);
 
       await tester.tap(
         find.byKey(
-            const ValueKey<String>('vibe-conditional-dismiss-vibe.preset.agy')),
+            const ValueKey<String>('vibe-conditional-dismiss-preset.k8s')),
       );
       await tester.pump();
-      expect(find.text('AGY Session'), findsNothing);
+      expect(find.text('Cluster Session'), findsNothing);
 
       controller.updateContext(const VibeTriggerContext(program: 'zsh'));
       await tester.pump();
-      controller.updateContext(const VibeTriggerContext(program: 'agy'));
+      controller.updateContext(const VibeTriggerContext(program: 'kubectl'));
       await tester.pump();
-      expect(find.text('AGY Session'), findsOneWidget);
+      expect(find.text('Cluster Session'), findsOneWidget);
     },
   );
 
@@ -199,18 +199,18 @@ void main() {
   });
 
   testWidgets(
-    'VibeTriggeredViewDeck renders WeChat Mini Program VXML + VibeSkylineCanvas with live stream & bindtap',
+    'VibeTriggeredViewDeck renders Vibe-Snippet VXML + VibeSkylineCanvas with live stream & bindtap',
     (tester) async {
       var liveTps = 62.5;
       final host = VibeProtocolHost(
-        id: 'mp-host',
-        name: 'MP Host',
+        id: 'snippet-host',
+        name: 'Snippet Host',
         capabilities: const <VibeCapability>[],
       );
       host.registerStreamCapability(
         VibeCapability(
-          name: 'terminal.agy',
-          title: 'AGY Telemetry',
+          name: 'metrics.cluster',
+          title: 'Cluster Telemetry',
           fields: const <String, String>{'tps': 'public', 'series': 'public'},
           sample: const <Map<String, Object?>>[
             <String, Object?>{
@@ -234,14 +234,14 @@ void main() {
 
       controller.upsert(
         VibeConditionalEntry.fromJson(<String, Object?>{
-          'id': 'custom.agy-skyline',
-          'name': 'AGY Skyline Histogram',
-          'when': <String, Object?>{'program': 'agy'},
-          'needs': <String>['terminal.agy'],
-          'runtime': 'miniprogram',
+          'id': 'custom.cluster-skyline',
+          'name': 'Cluster Skyline Histogram',
+          'when': <String, Object?>{'program': 'kubectl'},
+          'needs': <String>['metrics.cluster'],
+          'runtime': 'vibe-snippet',
           'trusted': true,
           'source': '''
-            defineMiniProgram({
+            defineVibeSnippet({
               data: {
                 tps: 0,
                 series: [10, 20, 30],
@@ -267,7 +267,7 @@ void main() {
                 ]
               },
               onDataUpdate(hostData) {
-                const rows = hostData['terminal.agy'];
+                const rows = hostData['metrics.cluster'];
                 if (rows && rows[0]) {
                   this.setData({
                     tps: rows[0].tps,
@@ -285,7 +285,7 @@ void main() {
         }),
       );
 
-      controller.updateContext(const VibeTriggerContext(program: 'agy'));
+      controller.updateContext(const VibeTriggerContext(program: 'kubectl'));
 
       await tester.pumpWidget(
         MaterialApp(
@@ -300,13 +300,13 @@ void main() {
       expect(find.byType(VibeSkylineCanvas), findsOneWidget);
       expect(find.text('Chart Inspector Open'), findsNothing);
 
-      // Push live capability update -> Mini Program updates in place via setData
+      // Push live capability update -> vibe-snippet updates in place via setData
       liveTps = 96.4;
       host.notifySourceChange();
       await tester.pump();
       expect(find.text('96.4 tok/s'), findsOneWidget);
 
-      // Tap native Skyline canvas -> dispatches mp:tap:onCanvasTap -> setData({ boosted: true })
+      // Tap native Skyline canvas -> dispatches vibe:tap:onCanvasTap -> setData({ boosted: true })
       await tester.tap(find.byType(VibeSkylineCanvas));
       await tester.pump();
       expect(find.text('Chart Inspector Open'), findsOneWidget);

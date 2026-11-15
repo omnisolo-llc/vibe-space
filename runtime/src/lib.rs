@@ -1,11 +1,13 @@
 //! Optional signed Wasm packages. No WASI, ambient imports, JIT or bundled plugins.
 pub mod adapter;
+pub mod prompt;
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
@@ -325,6 +327,51 @@ impl Drop for WipingBuffer {
     }
 }
 
+fn xor_sha256_keystream(base_hasher: &Sha256, src: &[u8], dst: &mut [u8]) {
+    let mut offset = 0usize;
+    let mut counter = 0u64;
+    while offset < src.len() {
+        let mut hasher = base_hasher.clone();
+        hasher.update(counter.to_le_bytes());
+        let block: [u8; 32] = hasher.finalize().into();
+        let take = (src.len() - offset).min(32);
+        for (i, &k) in block.iter().take(take).enumerate() {
+            dst[offset + i] = src[offset + i] ^ k;
+        }
+        offset += take;
+        counter = counter.wrapping_add(1);
+    }
+}
+
+fn disk_seal_base_hasher(publisher: &[u8; 32], sig_bytes: &[u8], manifest_bytes: &[u8]) -> Sha256 {
+    let mut hasher = Sha256::new();
+    hasher.update(b"vibe-space.runtime.disk-seal.v1\0");
+    hasher.update(publisher);
+    hasher.update((sig_bytes.len() as u64).to_le_bytes());
+    hasher.update(sig_bytes);
+    hasher.update((manifest_bytes.len() as u64).to_le_bytes());
+    hasher.update(manifest_bytes);
+    hasher
+}
+
+fn compute_disk_seal_tag(
+    publisher: &[u8; 32],
+    sig_bytes: &[u8],
+    manifest_bytes: &[u8],
+    masked: &[u8],
+) -> [u8; 32] {
+    let mut tag_hasher = Sha256::new();
+    tag_hasher.update(b"vibe-space.runtime.disk-tag.v1\0");
+    tag_hasher.update(publisher);
+    tag_hasher.update((sig_bytes.len() as u64).to_le_bytes());
+    tag_hasher.update(sig_bytes);
+    tag_hasher.update((manifest_bytes.len() as u64).to_le_bytes());
+    tag_hasher.update(manifest_bytes);
+    tag_hasher.update((masked.len() as u64).to_le_bytes());
+    tag_hasher.update(masked);
+    tag_hasher.finalize().into()
+}
+
 /// Wasm module held as two XOR shares in memory.
 ///
 /// The raw `\0asm` bytecode is XOR-split across two independent heap buffers
@@ -341,20 +388,29 @@ impl SealedWasmModule {
     /// the caller's plaintext `module_bytes` vector in-place.
     #[must_use]
     pub fn seal(module_bytes: Vec<u8>, context_seed: &[u8]) -> Self {
+        let expected_sha256: [u8; 32] = Sha256::digest(&module_bytes).into();
+        Self::seal_with_digest(module_bytes, expected_sha256, context_seed)
+    }
+
+    fn seal_with_digest(
+        module_bytes: Vec<u8>,
+        expected_sha256: [u8; 32],
+        context_seed: &[u8],
+    ) -> Self {
         let module_bytes = WipingBuffer(module_bytes);
-        let expected_sha256: [u8; 32] = Sha256::digest(&module_bytes.0).into();
         let len = module_bytes.0.len();
         let mut mask = WipingBuffer(vec![0_u8; len]);
         let mut masked = WipingBuffer(vec![0_u8; len]);
+        let addr_entropy = (&raw const module_bytes as usize).to_le_bytes();
+        let mut base_hasher = Sha256::new();
+        base_hasher.update(b"vibe-space.runtime.wasm-seal.v1\0");
+        base_hasher.update(context_seed);
+        base_hasher.update(expected_sha256);
+        base_hasher.update(addr_entropy);
         let mut offset = 0usize;
         let mut counter = 0u64;
-        let addr_entropy = (&raw const module_bytes as usize).to_le_bytes();
         while offset < len {
-            let mut hasher = Sha256::new();
-            hasher.update(b"vibe-space.runtime.wasm-seal.v1\0");
-            hasher.update(context_seed);
-            hasher.update(expected_sha256);
-            hasher.update(addr_entropy);
+            let mut hasher = base_hasher.clone();
             hasher.update(counter.to_le_bytes());
             let block: [u8; 32] = hasher.finalize().into();
             let take = (len - offset).min(32);
@@ -440,35 +496,9 @@ fn seal_disk_package(
     let sig_bytes = package.signature.as_bytes();
     let manifest_bytes = package.manifest.as_bytes();
     let mut masked = WipingBuffer(vec![0_u8; raw_module.len()]);
-    let mut offset = 0usize;
-    let mut counter = 0u64;
-    while offset < raw_module.len() {
-        let mut hasher = Sha256::new();
-        hasher.update(b"vibe-space.runtime.disk-seal.v1\0");
-        hasher.update(publisher);
-        hasher.update((sig_bytes.len() as u64).to_le_bytes());
-        hasher.update(sig_bytes);
-        hasher.update((manifest_bytes.len() as u64).to_le_bytes());
-        hasher.update(manifest_bytes);
-        hasher.update(counter.to_le_bytes());
-        let block: [u8; 32] = hasher.finalize().into();
-        let take = (raw_module.len() - offset).min(32);
-        for (i, &k) in block.iter().take(take).enumerate() {
-            masked.0[offset + i] = raw_module[offset + i] ^ k;
-        }
-        offset += take;
-        counter = counter.wrapping_add(1);
-    }
-    let mut tag_hasher = Sha256::new();
-    tag_hasher.update(b"vibe-space.runtime.disk-tag.v1\0");
-    tag_hasher.update(publisher);
-    tag_hasher.update((sig_bytes.len() as u64).to_le_bytes());
-    tag_hasher.update(sig_bytes);
-    tag_hasher.update((manifest_bytes.len() as u64).to_le_bytes());
-    tag_hasher.update(manifest_bytes);
-    tag_hasher.update((masked.0.len() as u64).to_le_bytes());
-    tag_hasher.update(&masked.0);
-    let tag: [u8; 32] = tag_hasher.finalize().into();
+    let base_hasher = disk_seal_base_hasher(publisher, sig_bytes, manifest_bytes);
+    xor_sha256_keystream(&base_hasher, raw_module, &mut masked.0);
+    let tag = compute_disk_seal_tag(publisher, sig_bytes, manifest_bytes, &masked.0);
     SealedDiskPackage {
         manifest: package.manifest.clone(),
         signature: package.signature.clone(),
@@ -477,10 +507,10 @@ fn seal_disk_package(
     }
 }
 
-fn unseal_disk_package(
+fn unseal_disk_package_raw(
     disk: &SealedDiskPackage,
     publisher: &[u8; 32],
-) -> Result<SignedPackage, Error> {
+) -> Result<WipingBuffer, Error> {
     if disk.manifest.len() > 64 * 1024
         || disk.sealed_module.len() > 4 * MAX_MODULE_BYTES.div_ceil(3)
         || disk.signature.len() != 88
@@ -500,16 +530,7 @@ fn unseal_disk_package(
     }
     let sig_bytes = disk.signature.as_bytes();
     let manifest_bytes = disk.manifest.as_bytes();
-    let mut tag_hasher = Sha256::new();
-    tag_hasher.update(b"vibe-space.runtime.disk-tag.v1\0");
-    tag_hasher.update(publisher);
-    tag_hasher.update((sig_bytes.len() as u64).to_le_bytes());
-    tag_hasher.update(sig_bytes);
-    tag_hasher.update((manifest_bytes.len() as u64).to_le_bytes());
-    tag_hasher.update(manifest_bytes);
-    tag_hasher.update((masked.0.len() as u64).to_le_bytes());
-    tag_hasher.update(&masked.0);
-    let expected_tag: [u8; 32] = tag_hasher.finalize().into();
+    let expected_tag = compute_disk_seal_tag(publisher, sig_bytes, manifest_bytes, &masked.0);
     let mut diff = 0_u8;
     for (a, b) in expected_tag.iter().zip(provided_tag.iter()) {
         diff |= a ^ b;
@@ -518,25 +539,17 @@ fn unseal_disk_package(
         return Err(Error::Package);
     }
     let mut plain = WipingBuffer(vec![0_u8; masked.0.len()]);
-    let mut offset = 0usize;
-    let mut counter = 0u64;
-    while offset < masked.0.len() {
-        let mut hasher = Sha256::new();
-        hasher.update(b"vibe-space.runtime.disk-seal.v1\0");
-        hasher.update(publisher);
-        hasher.update((sig_bytes.len() as u64).to_le_bytes());
-        hasher.update(sig_bytes);
-        hasher.update((manifest_bytes.len() as u64).to_le_bytes());
-        hasher.update(manifest_bytes);
-        hasher.update(counter.to_le_bytes());
-        let block: [u8; 32] = hasher.finalize().into();
-        let take = (masked.0.len() - offset).min(32);
-        for (i, &k) in block.iter().take(take).enumerate() {
-            plain.0[offset + i] = masked.0[offset + i] ^ k;
-        }
-        offset += take;
-        counter = counter.wrapping_add(1);
-    }
+    let base_hasher = disk_seal_base_hasher(publisher, sig_bytes, manifest_bytes);
+    xor_sha256_keystream(&base_hasher, &masked.0, &mut plain.0);
+    Ok(plain)
+}
+
+#[cfg(test)]
+fn unseal_disk_package(
+    disk: &SealedDiskPackage,
+    publisher: &[u8; 32],
+) -> Result<SignedPackage, Error> {
+    let plain = unseal_disk_package_raw(disk, publisher)?;
     Ok(SignedPackage {
         manifest: disk.manifest.clone(),
         signature: disk.signature.clone(),
@@ -544,31 +557,28 @@ fn unseal_disk_package(
     })
 }
 
-/// Verifies a signed plugin package against [`HostPolicy::default`].
-pub fn verify(package: &SignedPackage, publisher: &[u8; 32]) -> Result<(Manifest, Vec<u8>), Error> {
-    verify_with_policy(package, publisher, &HostPolicy::default())
-}
-
-/// Verifies a signed plugin package against a caller-supplied [`HostPolicy`].
-pub fn verify_with_policy(
-    package: &SignedPackage,
+fn verify_manifest_and_raw_module(
+    manifest_str: &str,
+    signature_str: &str,
+    raw_module: &[u8],
     publisher: &[u8; 32],
     policy: &HostPolicy,
-) -> Result<(Manifest, Vec<u8>), Error> {
-    if package.manifest.len() > 64 * 1024
-        || package.module.len() > 4 * MAX_MODULE_BYTES.div_ceil(3)
-        || package.signature.len() != 88
-    {
+) -> Result<(Manifest, [u8; 32]), Error> {
+    if manifest_str.len() > 64 * 1024 || signature_str.len() != 88 {
+        return Err(Error::Package);
+    }
+    if raw_module.len() > MAX_MODULE_BYTES || !raw_module.starts_with(b"\0asm") {
         return Err(Error::Package);
     }
     let key = VerifyingKey::from_bytes(publisher).map_err(|_| Error::Package)?;
-    let signature = STANDARD
-        .decode(&package.signature)
+    let mut sig_buf = [0_u8; 66];
+    let sig_len = STANDARD
+        .decode_slice(signature_str, &mut sig_buf)
         .map_err(|_| Error::Package)?;
-    let signature = Signature::from_slice(&signature).map_err(|_| Error::Package)?;
-    key.verify_strict(package.manifest.as_bytes(), &signature)
+    let signature = Signature::from_slice(&sig_buf[..sig_len]).map_err(|_| Error::Package)?;
+    key.verify_strict(manifest_str.as_bytes(), &signature)
         .map_err(|_| Error::Package)?;
-    let manifest: Manifest = serde_json::from_str(&package.manifest)?;
+    let manifest: Manifest = serde_json::from_str(manifest_str)?;
     if !safe_id(&manifest.id)
         || manifest.api_version != API_VERSION
         || manifest.version == 0
@@ -610,18 +620,56 @@ pub fn verify_with_policy(
             return Err(Error::Package);
         }
     }
+    let sha256: [u8; 32] = Sha256::digest(raw_module).into();
+    let mut b64_buf = [0_u8; 44];
+    let b64_len = STANDARD
+        .encode_slice(sha256, &mut b64_buf)
+        .map_err(|_| Error::Package)?;
+    if &b64_buf[..b64_len] != manifest.module_sha256.as_bytes() {
+        return Err(Error::Package);
+    }
+    Ok((manifest, sha256))
+}
+
+/// Verifies a signed plugin package against [`HostPolicy::default`].
+pub fn verify(package: &SignedPackage, publisher: &[u8; 32]) -> Result<(Manifest, Vec<u8>), Error> {
+    verify_with_policy(package, publisher, &HostPolicy::default())
+}
+
+/// Verifies a signed plugin package against a caller-supplied [`HostPolicy`].
+pub fn verify_with_policy(
+    package: &SignedPackage,
+    publisher: &[u8; 32],
+    policy: &HostPolicy,
+) -> Result<(Manifest, Vec<u8>), Error> {
+    let (manifest, module, _) = verify_with_policy_and_digest(package, publisher, policy)?;
+    Ok((manifest, module))
+}
+
+fn verify_with_policy_and_digest(
+    package: &SignedPackage,
+    publisher: &[u8; 32],
+    policy: &HostPolicy,
+) -> Result<(Manifest, Vec<u8>, [u8; 32]), Error> {
+    if package.manifest.len() > 64 * 1024
+        || package.module.len() > 4 * MAX_MODULE_BYTES.div_ceil(3)
+        || package.signature.len() != 88
+    {
+        return Err(Error::Package);
+    }
     let mut module = WipingBuffer(
         STANDARD
             .decode(&package.module)
             .map_err(|_| Error::Package)?,
     );
-    if module.0.len() > MAX_MODULE_BYTES
-        || !module.0.starts_with(b"\0asm")
-        || STANDARD.encode(Sha256::digest(&module.0)) != manifest.module_sha256
-    {
-        return Err(Error::Package);
-    }
-    Ok((manifest, std::mem::take(&mut module.0)))
+    let (manifest, sha256) = verify_manifest_and_raw_module(
+        &package.manifest,
+        &package.signature,
+        &module.0,
+        publisher,
+        policy,
+    )?;
+    Ok((manifest, std::mem::take(&mut module.0), sha256))
 }
 
 /// Verifies a signed plugin package and immediately seals the decoded Wasm
@@ -640,12 +688,13 @@ pub fn verify_sealed_with_policy(
     publisher: &[u8; 32],
     policy: &HostPolicy,
 ) -> Result<(Manifest, SealedWasmModule), Error> {
-    let (manifest, module) = verify_with_policy(package, publisher, policy)?;
+    let (manifest, module, sha256) = verify_with_policy_and_digest(package, publisher, policy)?;
     let mut module = WipingBuffer(module);
     let mut context_seed = Vec::with_capacity(32 + package.signature.len());
     context_seed.extend_from_slice(publisher);
     context_seed.extend_from_slice(package.signature.as_bytes());
-    let sealed = SealedWasmModule::seal(std::mem::take(&mut module.0), &context_seed);
+    let sealed =
+        SealedWasmModule::seal_with_digest(std::mem::take(&mut module.0), sha256, &context_seed);
     Ok((manifest, sealed))
 }
 
@@ -679,16 +728,31 @@ fn validate_ui_resource_descriptor(
     Ok(())
 }
 
+const MAX_CACHED_MODULES: usize = 16;
+
+fn shared_wasm_engine() -> &'static Engine {
+    static ENGINE: OnceLock<Engine> = OnceLock::new();
+    ENGINE.get_or_init(|| {
+        let mut config = Config::default();
+        config
+            .consume_fuel(true)
+            .enforced_limits(EnforcedLimits::strict());
+        Engine::new(&config)
+    })
+}
+
 /// The caller supplies a publisher key from a host-managed trust store, never the package.
 pub struct PackageStore {
     root: PathBuf,
     policy: HostPolicy,
+    compiled_cache: Mutex<Vec<([u8; 32], Module)>>,
 }
 impl PackageStore {
     pub fn new(root: impl Into<PathBuf>) -> Self {
         Self {
             root: root.into(),
             policy: HostPolicy::default(),
+            compiled_cache: Mutex::new(Vec::new()),
         }
     }
 
@@ -696,6 +760,7 @@ impl PackageStore {
         Self {
             root: root.into(),
             policy,
+            compiled_cache: Mutex::new(Vec::new()),
         }
     }
 
@@ -765,6 +830,14 @@ impl PackageStore {
     }
 
     pub fn load(&self, id: &str) -> Result<InstalledPlugin, Error> {
+        let (installed, _sealed_disk) = self.load_with_disk_package(id)?;
+        Ok(installed)
+    }
+
+    fn load_with_disk_package(
+        &self,
+        id: &str,
+    ) -> Result<(InstalledPlugin, SealedDiskPackage), Error> {
         if !safe_id(id) {
             return Err(Error::Package);
         }
@@ -775,13 +848,40 @@ impl PackageStore {
         }
         let revision = self.root.join(id).join(value.manifest.version.to_string());
         let disk_bytes = fs::read(revision.join("package.json")).map_err(|_| Error::Package)?;
-        let _sealed_disk: SealedDiskPackage =
+        let sealed_disk: SealedDiskPackage =
             serde_json::from_slice(&disk_bytes).map_err(|_| Error::Package)?;
         if value.revision.is_empty() {
             value.enabled = false;
             value.grants.clear();
         }
-        Ok(value)
+        Ok((value, sealed_disk))
+    }
+
+    fn get_or_compile_module(&self, sha256: [u8; 32], raw_module: &[u8]) -> Result<Module, Error> {
+        {
+            let mut cache = self
+                .compiled_cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some(idx) = cache.iter().position(|(key, _)| *key == sha256) {
+                let entry = cache.remove(idx);
+                let module = entry.1.clone();
+                cache.push(entry);
+                return Ok(module);
+            }
+        }
+        let compiled = Module::new(shared_wasm_engine(), raw_module).map_err(runtime_error)?;
+        let mut cache = self
+            .compiled_cache
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !cache.iter().any(|(key, _)| *key == sha256) {
+            if cache.len() >= MAX_CACHED_MODULES {
+                cache.remove(0);
+            }
+            cache.push((sha256, compiled.clone()));
+        }
+        Ok(compiled)
     }
 
     fn save(&self, installed: &InstalledPlugin) -> Result<(), Error> {
@@ -854,31 +954,41 @@ impl PackageStore {
         request: &[u8],
     ) -> Result<serde_json::Value, Error> {
         let _lock = self.lock()?;
-        let installed = self.load(id)?;
+        let (installed, sealed_disk) = self.load_with_disk_package(id)?;
         if expected_revision.is_some_and(|r| r != installed.revision || r.is_empty()) {
             return Err(Error::Permission);
         }
         if !installed.enabled {
             return Err(Error::Permission);
         }
+        if request.len() > MAX_MESSAGE_BYTES {
+            return Err(Error::Package);
+        }
         let revision = self
             .root
             .join(id)
             .join(installed.manifest.version.to_string());
-        let sealed_disk: SealedDiskPackage =
-            serde_json::from_slice(&fs::read(revision.join("package.json"))?)
-                .map_err(|_| Error::Package)?;
         let publisher: [u8; 32] = fs::read(revision.join("publisher.key"))?
             .try_into()
             .map_err(|_| Error::Package)?;
-        let package = unseal_disk_package(&sealed_disk, &publisher)?;
-        let verified = verify_sealed_with_policy(&package, &publisher, &self.policy);
-        drop(WipingBuffer(package.module.into_bytes()));
-        let (manifest, sealed_module) = verified?;
+        let plain_wasm = unseal_disk_package_raw(&sealed_disk, &publisher)?;
+        let (manifest, sha256) = verify_manifest_and_raw_module(
+            &sealed_disk.manifest,
+            &sealed_disk.signature,
+            &plain_wasm.0,
+            &publisher,
+            &self.policy,
+        )?;
         if manifest != installed.manifest {
             return Err(Error::Package);
         }
-        let mut result = execute_sealed_with_policy(&sealed_module, request, &self.policy)?;
+        let mut result = {
+            let _permit = ExecutionPermit::acquire()?;
+            let engine = shared_wasm_engine();
+            let compiled = self.get_or_compile_module(sha256, &plain_wasm.0)?;
+            drop(plain_wasm);
+            execute_compiled_module(engine, &compiled, request, &self.policy)?
+        };
         if let Some(obj) = result.as_object_mut() {
             obj.remove("confirmation_required");
         } else {
@@ -896,6 +1006,7 @@ impl PackageStore {
             if effects.len() > 32 {
                 return Err(Error::Permission);
             }
+            pending_confirmations.reserve(effects.len());
             let mut effect_ids = BTreeSet::new();
             for (idx, effect) in effects.iter().enumerate() {
                 let effect_id = effect
@@ -956,16 +1067,13 @@ impl PackageStore {
                             if val_str.contains('\r') || val_str.contains('\n') {
                                 return Err(Error::Permission);
                             }
-                            let lower = h_name.to_ascii_lowercase();
-                            if matches!(
-                                lower.as_str(),
-                                "authorization"
-                                    | "cookie"
-                                    | "proxy-authorization"
-                                    | "host"
-                                    | "content-length"
-                                    | "transfer-encoding"
-                            ) {
+                            if h_name.eq_ignore_ascii_case("authorization")
+                                || h_name.eq_ignore_ascii_case("cookie")
+                                || h_name.eq_ignore_ascii_case("proxy-authorization")
+                                || h_name.eq_ignore_ascii_case("host")
+                                || h_name.eq_ignore_ascii_case("content-length")
+                                || h_name.eq_ignore_ascii_case("transfer-encoding")
+                            {
                                 return Err(Error::Permission);
                             }
                         }
@@ -1024,15 +1132,11 @@ pub fn execute_sealed_with_policy(
         return Err(Error::Package);
     }
     let _permit = ExecutionPermit::acquire()?;
-    let mut config = Config::default();
-    config
-        .consume_fuel(true)
-        .enforced_limits(EnforcedLimits::strict());
-    let engine = Engine::new(&config);
+    let engine = shared_wasm_engine();
     let module = sealed_module.with_decrypted_bytes(|module_bytes| {
-        Module::new(&engine, module_bytes).map_err(runtime_error)
+        Module::new(engine, module_bytes).map_err(runtime_error)
     })?;
-    execute_compiled_module(&engine, &module, request, policy)
+    execute_compiled_module(engine, &module, request, policy)
 }
 
 /// ABI: `vibe_alloc(length)->pointer`; `vibe_invoke(pointer,length)->(length<<32 | pointer)`.
@@ -1051,13 +1155,9 @@ pub fn execute_with_policy(
         return Err(Error::Package);
     }
     let _permit = ExecutionPermit::acquire()?;
-    let mut config = Config::default();
-    config
-        .consume_fuel(true)
-        .enforced_limits(EnforcedLimits::strict());
-    let engine = Engine::new(&config);
-    let module = Module::new(&engine, module).map_err(runtime_error)?;
-    execute_compiled_module(&engine, &module, request, policy)
+    let engine = shared_wasm_engine();
+    let module = Module::new(engine, module).map_err(runtime_error)?;
+    execute_compiled_module(engine, &module, request, policy)
 }
 
 fn resolve_entrypoint<P, R>(
@@ -1071,8 +1171,11 @@ where
     R: wasmi::WasmResults,
 {
     let mut last_err = None;
+    let mut name = String::with_capacity(32);
     for prefix in &policy.entrypoint_prefixes {
-        let name = format!("{prefix}{suffix}");
+        name.clear();
+        name.push_str(prefix);
+        name.push_str(suffix);
         match instance.get_typed_func::<P, R>(store, &name) {
             Ok(func) => return Ok(func),
             Err(err) => last_err = Some(err),

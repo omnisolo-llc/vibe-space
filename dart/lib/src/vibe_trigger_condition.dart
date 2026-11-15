@@ -1,13 +1,60 @@
+import 'dart:collection';
 import 'dart:convert';
 
 import 'vibe_trigger_context.dart';
 export 'vibe_trigger_context.dart';
 
+const int _kMaxCompiledRegexCacheEntries = 1024;
+final LinkedHashMap<(String, bool), RegExp> _globRegexCache =
+    LinkedHashMap<(String, bool), RegExp>();
+final LinkedHashMap<(String, bool), RegExp> _triggerRegexCache =
+    LinkedHashMap<(String, bool), RegExp>();
+final RegExp _kQuantifierBraceRe = RegExp(r'^\{(\d+)(?:,(\d*))?\}');
+
+RegExp _cacheLookupOrPut(
+  LinkedHashMap<(String, bool), RegExp> cache,
+  String pattern,
+  bool caseSensitive,
+  RegExp Function() compile,
+) {
+  final key = (pattern, caseSensitive);
+  final existing = cache.remove(key);
+  if (existing != null) {
+    cache[key] = existing;
+    return existing;
+  }
+  final compiled = compile();
+  if (cache.length >= _kMaxCompiledRegexCacheEntries) {
+    cache.remove(cache.keys.first);
+  }
+  cache[key] = compiled;
+  return compiled;
+}
+
+RegExp _cachedTriggerRegExp(String pattern, {required bool caseSensitive}) {
+  return _cacheLookupOrPut(
+    _triggerRegexCache,
+    pattern,
+    caseSensitive,
+    () {
+      if (_hasUnsafeRegexConstructs(pattern)) {
+        throw const FormatException(
+          'Matcher regex contains unsafe catastrophic backtracking construct',
+        );
+      }
+      return RegExp(pattern, caseSensitive: caseSensitive);
+    },
+  );
+}
+
 /// Maximum nesting depth for boolean combinators in [VibeTriggerCondition].
 const int kMaxVibeTriggerDepth = 16;
 
-/// Maximum pattern length for a [VibeTriggerMatcher] string or regex.
+/// Maximum pattern length for a [VibeTriggerMatcher] string or glob.
 const int kMaxVibeTriggerPatternLength = 512;
+
+/// Maximum pattern length for a [VibeTriggerMatcher] regex (ReDoS guard).
+const int kMaxVibeTriggerRegexLength = 256;
 
 /// Maximum list items in a `oneOf` [VibeTriggerMatcher] or combinator branch.
 const int kMaxVibeTriggerBranchItems = 64;
@@ -197,10 +244,10 @@ class VibeTriggerMatcher {
         final pat = value;
         if (pat is! String ||
             pat.isEmpty ||
-            pat.length > kMaxVibeTriggerPatternLength) {
-          throw const FormatException('Matcher regex must be 1..512 chars');
+            pat.length > kMaxVibeTriggerRegexLength) {
+          throw const FormatException('Matcher regex must be 1..256 chars');
         }
-        RegExp(pat, caseSensitive: caseSensitive);
+        _cachedTriggerRegExp(pat, caseSensitive: caseSensitive);
       case VibeTriggerMatchKind.exists:
         if (value is! bool) {
           throw const FormatException('Matcher exists must be boolean');
@@ -245,8 +292,10 @@ class VibeTriggerMatcher {
       case VibeTriggerMatchKind.regex:
         final text = _asMatchString(actual);
         return text != null &&
-            RegExp(value as String, caseSensitive: caseSensitive)
-                .hasMatch(text);
+            _cachedTriggerRegExp(
+              value as String,
+              caseSensitive: caseSensitive,
+            ).hasMatch(text);
       case VibeTriggerMatchKind.contains:
         final text = _asMatchString(actual);
         final needle = _asMatchString(value);
@@ -358,10 +407,18 @@ class VibeTriggerMatcher {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is VibeTriggerMatcher &&
-          jsonEncode(toJson()) == jsonEncode(other.toJson());
+          other.kind == kind &&
+          other.caseSensitive == caseSensitive &&
+          vibeDeepEquals(other.value, value) &&
+          vibeDeepEquals(other.values, values);
 
   @override
-  int get hashCode => jsonEncode(toJson()).hashCode;
+  int get hashCode => Object.hash(
+        kind,
+        caseSensitive,
+        vibeDeepHash(value),
+        vibeDeepHash(values),
+      );
 }
 
 /// Declarative `when` condition determining when a Vibe view or preset activates.
@@ -582,10 +639,12 @@ class VibeTriggerCondition {
         )) {
       return false;
     }
-    final normalizedCwd = _normalizePath(ctx.cwd);
-    if (cwd != null && !cwd!.matches(normalizedCwd)) return false;
-    if (pathPattern != null && !pathPattern!.matches(normalizedCwd)) {
-      return false;
+    if (cwd != null || pathPattern != null) {
+      final normalizedCwd = _normalizePath(ctx.cwd);
+      if (cwd != null && !cwd!.matches(normalizedCwd)) return false;
+      if (pathPattern != null && !pathPattern!.matches(normalizedCwd)) {
+        return false;
+      }
     }
     for (final entry in env.entries) {
       if (!entry.value.matches(ctx.lookupEnv(entry.key))) return false;
@@ -652,10 +711,36 @@ class VibeTriggerCondition {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is VibeTriggerCondition &&
-          jsonEncode(toJson()) == jsonEncode(other.toJson());
+          other.always == always &&
+          other.program == program &&
+          other.command == command &&
+          other.window == window &&
+          other.surface == surface &&
+          other.windowTitle == windowTitle &&
+          other.cwd == cwd &&
+          other.pathPattern == pathPattern &&
+          other.not == not &&
+          vibeDeepEquals(other.all, all) &&
+          vibeDeepEquals(other.any, any) &&
+          vibeDeepEquals(other.env, env) &&
+          vibeDeepEquals(other.context, context);
 
   @override
-  int get hashCode => jsonEncode(toJson()).hashCode;
+  int get hashCode => Object.hash(
+        always,
+        program,
+        command,
+        window,
+        surface,
+        windowTitle,
+        cwd,
+        pathPattern,
+        not,
+        vibeDeepHash(all),
+        vibeDeepHash(any),
+        vibeDeepHash(env),
+        vibeDeepHash(context),
+      );
 }
 
 bool _valueExists(Object? v) => switch (v) {
@@ -695,36 +780,151 @@ bool _scalarEquals(Object? actual, Object? expected,
 }
 
 RegExp _globToRegExp(String glob, {required bool caseSensitive}) {
-  final buf = StringBuffer('^');
-  for (var i = 0; i < glob.length; i++) {
-    final ch = glob[i];
-    if (ch == '*') {
-      buf.write('.*');
-    } else if (ch == '?') {
-      buf.write('.');
-    } else if (r'.+^$(){}[]|\'.contains(ch)) {
-      buf.write('\\$ch');
-    } else {
-      buf.write(ch);
-    }
-  }
-  buf.write('\$');
-  return RegExp(buf.toString(), caseSensitive: caseSensitive);
+  return _cacheLookupOrPut(
+    _globRegexCache,
+    glob,
+    caseSensitive,
+    () {
+      final buf = StringBuffer('^');
+      for (var i = 0; i < glob.length; i++) {
+        final ch = glob[i];
+        if (ch == '*') {
+          buf.write('.*');
+        } else if (ch == '?') {
+          buf.write('.');
+        } else if (r'.+^$(){}[]|\'.contains(ch)) {
+          buf.write('\\$ch');
+        } else {
+          buf.write(ch);
+        }
+      }
+      buf.write('\$');
+      return RegExp(buf.toString(), caseSensitive: caseSensitive);
+    },
+  );
 }
 
 bool _matchCandidates(VibeTriggerMatcher matcher, List<String?> candidates) {
-  final nonEmpty = <String>[
-    for (final c in candidates)
-      if (c != null && c.isNotEmpty) c,
-  ];
   if (matcher.kind == VibeTriggerMatchKind.exists) {
-    return matcher.value == true ? nonEmpty.isNotEmpty : nonEmpty.isEmpty;
+    final shouldExist = matcher.value == true;
+    for (final c in candidates) {
+      if (c != null && c.isNotEmpty) return shouldExist;
+    }
+    return !shouldExist;
   }
-  return nonEmpty.any(matcher.matches);
+  for (final c in candidates) {
+    if (c != null && c.isNotEmpty && matcher.matches(c)) return true;
+  }
+  return false;
 }
 
 String? _normalizePath(String? raw) {
   if (raw == null || raw.isEmpty) return null;
   final f = raw.replaceAll('\\', '/');
   return (f.length > 1 && f.endsWith('/')) ? f.substring(0, f.length - 1) : f;
+}
+
+bool _isRepeatingQuantifierAt(String pattern, int idx) {
+  if (idx >= pattern.length) return false;
+  final ch = pattern[idx];
+  if (ch == '+' || ch == '*') return true;
+  if (ch == '{') {
+    final m = _kQuantifierBraceRe.matchAsPrefix(pattern, idx);
+    if (m != null) {
+      final minV = int.tryParse(m.group(1)!) ?? 0;
+      final maxGroup = m.group(2);
+      if (maxGroup == null) return minV > 1;
+      if (maxGroup.isEmpty) return true;
+      return (int.tryParse(maxGroup) ?? 0) > 1;
+    }
+  }
+  return false;
+}
+
+bool _hasUnsafeRegexConstructs(String pattern) {
+  var inCharClass = false;
+  final groupStack = <({bool hasQuantifier, List<String> branches})>[];
+  for (var i = 0; i < pattern.length; i++) {
+    final ch = pattern[i];
+    if (ch == r'\') {
+      if (i + 1 < pattern.length) {
+        final next = pattern[i + 1];
+        final cu = next.codeUnitAt(0);
+        if (!inCharClass && cu >= 49 && cu <= 57) return true;
+        if (groupStack.isNotEmpty) {
+          final top = groupStack.last;
+          top.branches[top.branches.length - 1] = '${top.branches.last}\\$next';
+        }
+      }
+      i += 1;
+      continue;
+    }
+    if (inCharClass) {
+      if (ch == ']') inCharClass = false;
+      continue;
+    }
+    if (ch == '[') {
+      inCharClass = true;
+      continue;
+    }
+    if (ch == '(') {
+      var skip = 0;
+      if (i + 2 < pattern.length && pattern[i + 1] == '?') {
+        final p2 = pattern[i + 2];
+        if (p2 == ':' || p2 == '=' || p2 == '!') {
+          skip = 2;
+        } else if (p2 == '<' &&
+            i + 3 < pattern.length &&
+            (pattern[i + 3] == '=' || pattern[i + 3] == '!')) {
+          skip = 3;
+        }
+      }
+      groupStack.add((hasQuantifier: false, branches: <String>['']));
+      i += skip;
+      continue;
+    }
+    if (ch == ')') {
+      if (groupStack.isEmpty) continue;
+      final grp = groupStack.removeLast();
+      final repeated = _isRepeatingQuantifierAt(pattern, i + 1);
+      if (repeated) {
+        if (grp.hasQuantifier) return true;
+        if (grp.branches.length > 1) {
+          for (var a = 0; a < grp.branches.length; a++) {
+            for (var b = a + 1; b < grp.branches.length; b++) {
+              final ba = grp.branches[a];
+              final bb = grp.branches[b];
+              if (ba.isEmpty ||
+                  bb.isEmpty ||
+                  ba.startsWith(bb) ||
+                  bb.startsWith(ba)) {
+                return true;
+              }
+            }
+          }
+        }
+      }
+      if ((grp.hasQuantifier || repeated) && groupStack.isNotEmpty) {
+        final parent = groupStack.removeLast();
+        groupStack.add((hasQuantifier: true, branches: parent.branches));
+      }
+      continue;
+    }
+    if (ch == '|' && groupStack.isNotEmpty) {
+      groupStack.last.branches.add('');
+      continue;
+    }
+    if (_isRepeatingQuantifierAt(pattern, i)) {
+      if (groupStack.isNotEmpty) {
+        final top = groupStack.removeLast();
+        groupStack.add((hasQuantifier: true, branches: top.branches));
+      }
+      continue;
+    }
+    if (groupStack.isNotEmpty) {
+      final top = groupStack.last;
+      top.branches[top.branches.length - 1] = '${top.branches.last}$ch';
+    }
+  }
+  return false;
 }

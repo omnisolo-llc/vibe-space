@@ -3,13 +3,23 @@ import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:vibe_space/vibe_space.dart'
-    show VibeUiCompatibilityAdapter, kMaxVibeCanvasCommands;
+    show
+        VibeUiCompatibilityAdapter,
+        isValidVibeCanvasColor,
+        isValidMiniProgramHandlerName,
+        kMaxVibeCanvasCommands,
+        kSafeVibeSvgPathRe;
 
 import 'vibe_skyline_canvas.dart';
 import 'vibe_widget_adapter.dart';
 
 const Set<String> _validTones = <String>{'default', 'ok', 'warn', 'danger'};
 final RegExp _hexColorRe = RegExp(r'^#[0-9a-fA-F]{6}$');
+final RegExp _kSafeViewIdRe = RegExp(r'^[a-zA-Z0-9_.-]+$');
+const Map<String, dynamic> _kEmptyDynamicMap = <String, dynamic>{};
+
+Map<String, dynamic> _asDynamicMap(Map raw) =>
+    raw is Map<String, dynamic> ? raw : Map<String, dynamic>.from(raw);
 
 const Set<String> _kCanonicalVibeNodeTypes = <String>{
   'heading',
@@ -160,6 +170,21 @@ void validateVibeView(Map<String, dynamic> view) {
       }
     }
 
+    for (final handlerKey in const <String>[
+      'bindtap',
+      'catchtap',
+      'bindinput',
+      'bindchange',
+    ]) {
+      final rawHandler = node[handlerKey];
+      if (rawHandler != null) {
+        if (rawHandler is! String ||
+            !isValidMiniProgramHandlerName(rawHandler.trim())) {
+          throw FormatException('Invalid extension $handlerKey handler');
+        }
+      }
+    }
+
     switch (node['type']) {
       case 'heading':
       case 'badge':
@@ -232,12 +257,108 @@ void validateVibeView(Map<String, dynamic> view) {
           if (op == null || !_kValidCanvasOps.contains(op)) {
             throw const FormatException('Invalid extension canvas op');
           }
+          for (final ck in const <String>['fill', 'stroke', 'color']) {
+            final cv = cmd[ck];
+            if (cv != null && (cv is! String || !isValidVibeCanvasColor(cv))) {
+              throw FormatException('Unsafe extension canvas $ck');
+            }
+          }
+          final grad = cmd['linearGradient'];
+          if (grad != null) {
+            if (grad is! Map) {
+              throw const FormatException('Invalid extension canvas gradient');
+            }
+            final gradColors = grad['colors'];
+            if (gradColors is! List || gradColors.length < 2) {
+              throw const FormatException('Invalid extension canvas gradient');
+            }
+            for (final gc in gradColors) {
+              if (gc is! String || !isValidVibeCanvasColor(gc)) {
+                throw const FormatException(
+                  'Unsafe extension canvas gradient color',
+                );
+              }
+            }
+          }
+          final rawPath = cmd['d'];
+          if (rawPath != null &&
+              (rawPath is! String ||
+                  !kSafeVibeSvgPathRe.hasMatch(rawPath.trim()))) {
+            throw const FormatException('Unsafe extension canvas SVG path');
+          }
+          final cmdText = cmd['text'];
+          if (cmdText != null &&
+              !_isSealedHandleMap(cmdText) &&
+              (cmdText is! String || cmdText.length > 64000)) {
+            throw const FormatException('Invalid extension canvas text');
+          }
+          for (final nk in const <String>[
+            'x',
+            'y',
+            'w',
+            'width',
+            'h',
+            'height',
+            'cx',
+            'cy',
+            'r',
+            'radius',
+            'x1',
+            'y1',
+            'x2',
+            'y2',
+            'startAngle',
+            'sweepAngle',
+            'strokeWidth',
+            'fontSize',
+            'min',
+            'max',
+            'gap',
+          ]) {
+            final nv = cmd[nk];
+            if (nv != null && (nv is! num || !nv.isFinite)) {
+              throw FormatException('Invalid extension canvas $nk');
+            }
+          }
+          final rawValues = cmd['values'];
+          if (rawValues != null) {
+            if (rawValues is! List || rawValues.length > 512) {
+              throw const FormatException('Invalid extension canvas values');
+            }
+            for (final v in rawValues) {
+              if (v is! num || !v.isFinite) {
+                throw const FormatException('Invalid extension canvas value');
+              }
+            }
+          }
+          final rawPoints = cmd['points'];
+          if (rawPoints != null) {
+            if (rawPoints is! List || rawPoints.length > 512) {
+              throw const FormatException('Invalid extension canvas points');
+            }
+            for (final pt in rawPoints) {
+              final validPair = pt is List &&
+                  pt.length >= 2 &&
+                  pt[0] is num &&
+                  (pt[0] as num).isFinite &&
+                  pt[1] is num &&
+                  (pt[1] as num).isFinite;
+              final validMap = pt is Map &&
+                  pt['x'] is num &&
+                  (pt['x'] as num).isFinite &&
+                  pt['y'] is num &&
+                  (pt['y'] as num).isFinite;
+              if (!validPair && !validMap) {
+                throw const FormatException('Invalid extension canvas point');
+              }
+            }
+          }
         }
         validateTone();
       case 'input':
         text('id', maximum: 64);
         text('label', maximum: 256);
-        if (!RegExp(r'^[a-zA-Z0-9_.-]+$').hasMatch(node['id'] as String) ||
+        if (!_kSafeViewIdRe.hasMatch(node['id'] as String) ||
             !inputs.add(node['id'] as String)) {
           throw const FormatException('Invalid extension input ID');
         }
@@ -264,7 +385,7 @@ void validateVibeView(Map<String, dynamic> view) {
       case 'checkbox':
         text('id', maximum: 64);
         text('label', maximum: 256);
-        if (!RegExp(r'^[a-zA-Z0-9_.-]+$').hasMatch(node['id'] as String) ||
+        if (!_kSafeViewIdRe.hasMatch(node['id'] as String) ||
             !inputs.add(node['id'] as String)) {
           throw const FormatException('Invalid extension checkbox ID');
         }
@@ -279,7 +400,7 @@ void validateVibeView(Map<String, dynamic> view) {
         if (node['label'] != null) {
           text('label', maximum: 256);
         }
-        if (!RegExp(r'^[a-zA-Z0-9_.-]+$').hasMatch(node['id'] as String) ||
+        if (!_kSafeViewIdRe.hasMatch(node['id'] as String) ||
             !inputs.add(node['id'] as String)) {
           throw const FormatException('Invalid extension option_group ID');
         }
@@ -800,14 +921,14 @@ class VibeView extends StatelessWidget {
         final commands = <Map<String, dynamic>>[
           if (rawCmds is List)
             for (final cmd in rawCmds.take(kMaxVibeCanvasCommands))
-              if (cmd is Map) Map<String, dynamic>.from(cmd),
+              if (cmd is Map) _asDynamicMap(cmd),
         ];
-        final bindTap = node['bindtap']?.toString();
+        final bindTap = node['bindtap']?.toString().trim();
         final explicitCmd = node['command']?.toString();
         VoidCallback? onTap;
-        if (bindTap != null && bindTap.isNotEmpty) {
-          onTap = () => onCommand('mp:tap:$bindTap', <String, dynamic>{
-                '__mpEvent': true,
+        if (bindTap != null && isValidMiniProgramHandlerName(bindTap)) {
+          onTap = () => onCommand('vibe:tap:$bindTap', <String, dynamic>{
+                '__vibeEvent': true,
                 'type': 'tap',
                 'handler': bindTap,
                 if (node['id'] != null) 'id': node['id'],
@@ -816,7 +937,8 @@ class VibeView extends StatelessWidget {
               });
         } else if (explicitCmd != null && explicitCmd.isNotEmpty) {
           final rawArgs = node['arguments'] ?? node['args'];
-          final args = Map<String, dynamic>.from(rawArgs as Map? ?? {});
+          final args =
+              rawArgs is Map ? _asDynamicMap(rawArgs) : _kEmptyDynamicMap;
           onTap = () => onCommand(explicitCmd, args);
         }
         if (effectiveAdapter.canvasBuilder != null) {
@@ -849,7 +971,7 @@ class VibeView extends StatelessWidget {
         final widgets = <Widget>[
           for (final child in children)
             VibeView(
-              value: Map<String, dynamic>.from(child as Map),
+              value: _asDynamicMap(child as Map),
               onCommand: onCommand,
               onInput: onInput,
               depth: depth + 1,
@@ -920,7 +1042,8 @@ class VibeView extends StatelessWidget {
         final rawTitle = node['title'] ?? node['text'];
         final title = _resolvePlainString(rawTitle);
         final rawArgs = node['arguments'] ?? node['args'];
-        final args = Map<String, dynamic>.from(rawArgs as Map? ?? {});
+        final args =
+            rawArgs is Map ? _asDynamicMap(rawArgs) : _kEmptyDynamicMap;
         final btnTone = _toneColor(context, node['tone']);
         void onPressed() => onCommand(cmd, args);
         if (effectiveAdapter.buttonBuilder != null) {
@@ -982,12 +1105,12 @@ class VibeView extends StatelessWidget {
         final inputLabel = node['label'] as String;
         final isSecret = node['secret'] == true;
         final isMultiline = node['multiline'] == true;
-        final bindInput = node['bindinput']?.toString();
+        final bindInput = node['bindinput']?.toString().trim();
         void handleInputChanged(String text) {
           onInput?.call(inputId, text);
-          if (bindInput != null && bindInput.isNotEmpty) {
-            onCommand('mp:input:$bindInput', <String, dynamic>{
-              '__mpEvent': true,
+          if (bindInput != null && isValidMiniProgramHandlerName(bindInput)) {
+            onCommand('vibe:input:$bindInput', <String, dynamic>{
+              '__vibeEvent': true,
               'type': 'input',
               'handler': bindInput,
               'id': inputId,
@@ -1057,7 +1180,7 @@ class VibeView extends StatelessWidget {
           multiSelect: node['multiSelect'] == true,
           options: (node['options'] as List)
               .take(50)
-              .map((item) => Map<String, dynamic>.from(item as Map))
+              .map((item) => _asDynamicMap(item as Map))
               .toList(growable: false),
           command: node['command'] as String?,
           onInput: onInput,

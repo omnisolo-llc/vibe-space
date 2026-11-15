@@ -89,7 +89,7 @@ VibeProtocol includes a declarative trigger condition engine (`VibeTriggerCondit
 
 ```json
 {
-  "program": ["agy", "claude"],
+  "program": ["kubectl", "helm"],
   "cwd": "*/example-project*",
   "context": {
     "inTmux": true,
@@ -107,7 +107,7 @@ VibeProtocol includes a declarative trigger condition engine (`VibeTriggerCondit
   - `cwd` / `pathPattern`: normalized working directory matched via glob, regex, or exact path.
   - `env` / `context`: arbitrary host key/value predicates (`inTmux == true`, `gitRepo == true`, `portOpen == "3000"`, or list membership on `ports: ["3000", "5173"]`).
 - **Boolean combinators**: `all` (AND), `any` (OR), `not` (NOT), and `always` (`true | false`), bounded to depth 16 and 64 items per branch.
-- **Value matchers**: scalar shorthands (`"agy"`, `"docker*"`, `true`, `3000`, `["agy", "nvim"]`) or explicit operator maps (`exact`, `glob`, `regex`, `contains`, `prefix`, `suffix`, `exists`, `oneOf`, `caseSensitive`).
+- **Value matchers**: scalar shorthands (`"kubectl"`, `"docker*"`, `true`, `3000`, `["git", "nvim"]`) or explicit operator maps (`exact`, `glob`, `regex` capped at 256 chars with nested-quantifier ReDoS rejection, `contains`, `prefix`, `suffix`, `exists`, `oneOf`, `caseSensitive`).
 
 ### Evaluation, Hysteresis & Reactive Decks
 
@@ -115,14 +115,28 @@ VibeProtocol includes a declarative trigger condition engine (`VibeTriggerCondit
 - **`VibeConditionalRegistry` & Presets**: unifies built-in adaptive presets (`isPreset: true`, `registerPresets(...)`, `hydratePresetPayloads(...)`) with user-authored custom Vibe views (`vibe_ui`, `markdown`, `html`, `wasm`, or JS `VibeSpec`), preserving user enablement, pin, and custom `when` overrides across live refreshes and storage reloads.
 - **`VibeConditionalController` & `VibeTriggeredViewDeck`**: reactive `vibe_space_flutter` widgets rendering active conditional Vibe cards inside `RepaintBoundary` containers with `tabularFigures` typography and `{{variable}}` context template hydration.
 
-## 9. WeChat Mini Program Dual-Layer + Skyline Native Render Engine
+## 9. WeChat Mini Program Dual-Layer Standard + Skyline Native Render Engine
 
-VibeProtocol pairs an air-gapped logic runtime (**Layer 1 — `AppService`**) with a native Flutter/Skia view engine (**Layer 2 — `Skyline`**) so custom and AI-generated Vibes run at 60/120 fps with zero WebViews, zero iframes, and zero DOM/network access by default:
+VibeProtocol pairs an air-gapped logic runtime (**Layer 1 — `AppService`**) with a native Flutter/Skia view engine (**Layer 2 — `Skyline`**) so custom and AI-generated Vibe Mini Programs run at 60/120 fps with zero WebViews, zero iframes, and zero DOM/network access by default:
 
 - **Layer 1 (`AppService` Logic Sandbox)**:
-  - Authored via `defineMiniProgram({ data, template, onLoad, onShow, onHide, onDataUpdate, methods })` (or `wasm32` `vibe_alloc` / `vibe_invoke` modules).
+  - Authored via `defineMiniProgram({ data, template, onLoad, onShow, onHide, onDataUpdate, methods })` (or `defineVibeSnippet(...)` alias / `wasm32` `vibe_alloc` / `vibe_invoke` modules).
   - Air-gapped execution: `window`, `document`, `fetch`, `XMLHttpRequest`, `WebSocket`, `RTCPeerConnection`, `localStorage`, `navigator`, `eval`, and `Function` are statically and dynamically absent.
   - Incremental state bridge: `this.setData({ 'meta.tps': 94.2, 'bars[0]': 61 })` patches nested object/array paths with prototype-pollution guards, a **`<= 64 KiB`** per-diff cap, and a **`<= 30/s`** rate limit.
 - **Layer 2 (`Skyline` VXML Template + Native `canvas` 2D)**:
   - `compileVibeTemplate(template, scope)` evaluates `if` / `v-if` / `wx:if`, `for` / `v-for` / `wx:for` (`forItem` / `forIndex`), `{{path}}` typed bindings (preserving `{ "sealed": "h_..." }` handles, arrays, numbers, and booleans), scoped `WXSS` `style` tokens, and `bindtap` / `bindinput` + `dataset` (`data-*`) event round-trips back to Layer 1 `methods[handler](event)`.
-  - First-class `canvas` primitive (`{ "type": "canvas", "width": 260, "height": 56, "commands": [...] }`) renders bounded 2D vector draw-lists (`clear`, `rect`, `rrect`, `circle`, `arc`, `line`, `path`, `polygon`, `bars`, `text`, `linearGradient`) directly onto Flutter's `CustomPaint` Skia/Impeller canvas (and `<svg>` / terminal sparklines on web/CLI), strictly capped at **`<= 2,000`** draw commands per frame tree.
+  - First-class `canvas` primitive (`{ "type": "canvas", "width": 260, "height": 56, "commands": [...] }`) renders bounded 2D vector draw-lists (`clear`, `rect`, `rrect`, `circle`, `arc`, `line`, `path`, `polygon`, `bars`, `text`, `linearGradient`) directly onto Flutter's `CustomPaint` Skia/Impeller canvas (and `<svg>` / terminal sparklines on web/CLI), strictly capped at **`<= 2,000`** draw commands per frame tree with hex/semantic color validation (blocking SVG `url(...)` paint-server exfiltration).
+
+## 10. LLM Guidance System Prompt Builder
+
+Every SDK ships a deterministic guidance system prompt builder for AI-assisted Vibe generation and remixing:
+
+- **Dart**: `host.buildGenerationSystemPrompt(...)` / `buildVibeGenerationSystemPrompt(manifest, options: ...)`
+- **TypeScript / JavaScript**: `buildVibeGenerationSystemPrompt(manifestOrHost, options)` and `VibeKit.buildSystemPrompt(manifestOrHost, options)`
+- **Rust**: `vibe_space_runtime::prompt::build_generation_system_prompt(&manifest, &options)`
+
+Security guarantees of the guidance prompt builder:
+
+1. **Zero live data exposure**: Only `host.manifest()` schema metadata and synthetic `sample` rows are serialized; capability `read()` callbacks and live handle tables are never touched, and `'sealed'` sample fields are replaced with synthetic `{ "sealed": "h_sample_01" }` placeholders.
+2. **WeChat Mini Program security standard**: Instructs the model on `defineMiniProgram` (`defineVibeSnippet` alias) / `setData` (`<= 64 KiB`, `<= 30/s`), `VXML` data-binding (`{{path}}`, `if`, `for`, `bindtap`), native `canvas` (`<= 2,000` commands), sealed-handle pass-through, and forbidden globals/prototypes.
+3. **Prompt-injection isolation**: Wraps `userWish` and `existingVibe` inside untrusted XML fences (`<untrusted_user_wish>`, `<untrusted_existing_vibe>`) with tag-breakout neutralization so user text cannot override capability or sandbox rules.

@@ -4,7 +4,8 @@ import 'package:test/test.dart';
 import 'package:vibe_space/vibe_space.dart';
 
 void main() {
-  test('VibeCanvasPayload parses JSON, encodes JSON, and decodes VibeView UI', () {
+  test('VibeCanvasPayload parses JSON, encodes JSON, and decodes VibeView UI',
+      () {
     final viewMap = <String, dynamic>{
       'type': 'card',
       'children': <Map<String, dynamic>>[
@@ -49,7 +50,8 @@ void main() {
     expect(markdownPayload.tryDecodeVibeUi(), isNull);
   });
 
-  test('createVibeCanvasHostApi enforces api:vibe.canvas grant and schema', () async {
+  test('createVibeCanvasHostApi enforces api:vibe.canvas grant and schema',
+      () async {
     VibeCanvasPayload? renderedPayload;
     String? renderedPluginId;
 
@@ -144,7 +146,9 @@ void main() {
     expect(renderedPayload!.updatedAtIso, isNotEmpty);
   });
 
-  test('isReadOnlyCanvasMcpTool and isReadOnlyCanvasShellCommand enforce strict read-only policy', () {
+  test(
+      'isReadOnlyCanvasMcpTool and isReadOnlyCanvasShellCommand enforce strict read-only policy',
+      () {
     // Empty default catalog rejects unlisted tools
     expect(isReadOnlyCanvasMcpTool('telemetry.snapshot'), isFalse);
     expect(isReadOnlyCanvasMcpTool('workspace.write'), isFalse);
@@ -217,8 +221,10 @@ void main() {
       isTrue,
     );
     expect(isReadOnlyCanvasShellCommand('rm -rf /tmp/foo'), isFalse);
-    expect(isReadOnlyCanvasShellCommand('cat /proc/meminfo > /tmp/out'), isFalse);
-    expect(isReadOnlyCanvasShellCommand('sudo systemctl restart nginx'), isFalse);
+    expect(
+        isReadOnlyCanvasShellCommand('cat /proc/meminfo > /tmp/out'), isFalse);
+    expect(
+        isReadOnlyCanvasShellCommand('sudo systemctl restart nginx'), isFalse);
     expect(isReadOnlyCanvasShellCommand('kill -9 1024'), isFalse);
 
     // Regression tests for allowlist bypasses
@@ -266,7 +272,8 @@ void main() {
     expect(isReadOnlyCanvasShellCommand('cat ~/.vault-token'), isFalse);
     expect(isReadOnlyCanvasShellCommand('cat ~/.config/gh/hosts.yml'), isFalse);
     expect(
-      isReadOnlyCanvasShellCommand('cat ~/.config/gcloud/application_default.json'),
+      isReadOnlyCanvasShellCommand(
+          'cat ~/.config/gcloud/application_default.json'),
       isFalse,
     );
     expect(isReadOnlyCanvasShellCommand('ls ~/.azure'), isFalse);
@@ -274,7 +281,8 @@ void main() {
     expect(isReadOnlyCanvasShellCommand('cat /app/credentials'), isFalse);
     expect(isReadOnlyCanvasShellCommand('cat /app/credentials.json'), isFalse);
     expect(isReadOnlyCanvasShellCommand('kubectl get secret'), isFalse);
-    expect(isReadOnlyCanvasShellCommand('kubectl get secrets -n prod'), isFalse);
+    expect(
+        isReadOnlyCanvasShellCommand('kubectl get secrets -n prod'), isFalse);
     expect(
       isReadOnlyCanvasShellCommand('kubectl describe secret/api-key'),
       isFalse,
@@ -286,7 +294,9 @@ void main() {
     expect(isReadOnlyCanvasShellCommand('cat /proc/meminfo'), isTrue);
   });
 
-  test('VibeMcpToolCatalog resolves canonical names, tags, and conditional exposure', () {
+  test(
+      'VibeMcpToolCatalog resolves canonical names, tags, and conditional exposure',
+      () {
     final catalog = VibeMcpToolCatalog(
       tools: <VibeMcpToolDescriptor>[
         VibeMcpToolDescriptor(
@@ -394,7 +404,9 @@ void main() {
     expect(prompt, contains('`network.sockets`'));
   });
 
-  test('VibeMcpToolDescriptor.fromCatalogJson and VibeMcpToolCatalog.fromCatalogJson support custom host hooks', () {
+  test(
+      'VibeMcpToolDescriptor.fromCatalogJson and VibeMcpToolCatalog.fromCatalogJson support custom host hooks',
+      () {
     const customCategory = VibeMcpToolCategory('notes', 'Notes');
     const customTag = VibeMcpToolTag('notes_read');
     final catalog = VibeMcpToolCatalog.fromCatalogJson(
@@ -418,8 +430,9 @@ void main() {
           },
         ],
       }),
-      classifyCategory: (name) =>
-          name.startsWith('notes.') ? customCategory : VibeMcpToolCategory.runtime,
+      classifyCategory: (name) => name.startsWith('notes.')
+          ? customCategory
+          : VibeMcpToolCategory.runtime,
       deriveTags: ({required name, required scope, required mutates}) =>
           <VibeMcpToolTag>{
         if (mutates) VibeMcpToolTag.mutating else VibeMcpToolTag.readOnly,

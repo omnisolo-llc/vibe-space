@@ -134,6 +134,7 @@ export interface VibeStrings {
   locale:string; rtl:boolean; [key:string]:string | boolean;
 }
 export function isSealedHandle(value:unknown):value is SealedHandle;
+export function normalizeStyleTokens(rawStyle:unknown):Record<string,string | number> | undefined;
 export function adaptExternalUi(raw:unknown):View;
 export function resolveViewTree(view:unknown, options?:{resolveSealed?:SealedResolver}):Record<string,unknown>;
 export function renderWithH<TNode = unknown>(
@@ -166,10 +167,12 @@ export const MAX_SET_DATA_BYTES:number;
 export const MAX_SET_DATA_RATE_PER_SEC:number;
 export const MAX_CANVAS_COMMANDS:number;
 export function validateMiniProgramSource(source:string):boolean;
+export function validateVibeSnippetSource(source:string):boolean;
 export function applySetData(currentData:Record<string,unknown>, patch:Record<string,unknown>):Record<string,unknown>;
 export function lookupScopePath(scope:Record<string,unknown>, expr:string):unknown;
 export function compileTemplate(template:Record<string,unknown>, scope?:Record<string,unknown>):View;
 export function defineMiniProgram(spec:Record<string,unknown>):Record<string,unknown>;
+export function defineVibeSnippet(spec:Record<string,unknown>):Record<string,unknown>;
 export function createMiniProgramSession(definition:Record<string,unknown>, options?:{template?:Record<string,unknown>; maxRatePerSec?:number}):{
   readonly data:Record<string,unknown>;
   readonly lifecycle:string;
@@ -180,3 +183,40 @@ export function createMiniProgramSession(definition:Record<string,unknown>, opti
   hide():void;
   buildView():View | null;
 };
+export function createVibeSnippetSession(definition:Record<string,unknown>, options?:{template?:Record<string,unknown>; maxRatePerSec?:number}):{
+  readonly data:Record<string,unknown>;
+  readonly lifecycle:string;
+  setData(patch:Record<string,unknown>, nowMs?:number):void;
+  load(initialHostData?:Record<string,unknown>, initialContext?:TriggerContext):void;
+  updateHostData(nextHostData?:Record<string,unknown>, nextContext?:TriggerContext):void;
+  dispatchEvent(event:{type:string; handler:string; target?:Record<string,unknown>; detail?:Record<string,unknown>}):boolean;
+  hide():void;
+  buildView():View | null;
+};
+
+export type VibeGenerationTarget =
+  | 'auto'
+  | 'mini-program'
+  | 'mini_program'
+  | 'miniProgram'
+  | 'vibe-snippet'
+  | 'vibe_snippet'
+  | 'vibeSnippet'
+  | 'invoke'
+  | 'declarative'
+  | 'wasm';
+export interface VibeGenerationPromptOptions {
+  userWish?:string;
+  existingVibe?:Record<string,unknown>;
+  target?:VibeGenerationTarget;
+  includeTriggerGuidance?:boolean;
+  includeCanvasGuidance?:boolean;
+  extraConstraints?:readonly string[];
+}
+export function sanitizeManifestForPrompt(manifestOrHost:unknown):{
+  protocol:string;
+  host:{id:string; name:string};
+  capabilities:{name:string; title:string; fields:Record<string,'public' | 'sealed'>; sample:Record<string,unknown>[]}[];
+  notOffered:string[];
+};
+export function buildVibeGenerationSystemPrompt(manifestOrHost:unknown, options?:VibeGenerationPromptOptions):string;

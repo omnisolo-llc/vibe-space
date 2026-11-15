@@ -5,6 +5,84 @@ const MAX_TEXT_LEN = 4096;
 const VALID_TONES = new Set(['default', 'ok', 'warn', 'danger']);
 const VALID_CANVAS_OPS = new Set(['clear', 'rect', 'rrect', 'circle', 'arc', 'line', 'path', 'polygon', 'bars', 'text']);
 const VALID_HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+const VALID_CANVAS_HEX_COLOR = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/;
+const SAFE_SVG_PATH_RE = /^[MmLlHhVvCcSsQqTtAaZz0-9.,eE+\-\s]{1,4096}$/;
+const VALID_HANDLER_NAME_RE = /^[a-zA-Z_$][a-zA-Z0-9_$]{0,63}$/;
+const STYLE_CAMEL_RE = /-([a-zA-Z])/g;
+const STYLE_PX_RE = /px$/i;
+const LINE_SPLIT_RE = /\r?\n/;
+const MD_HR_DASH_RE = /^---+$/;
+const MD_HR_STAR_RE = /^\*\*\*+$/;
+const MD_HEADING_RE = /^#{1,6}\s+(.+)$/;
+const MD_TABLE_SEP_RE = /^\|[\s:-]+\|/;
+const MD_LIST_RE = /^[-*+]\s+(.+)$/;
+const MD_LEAD_PIPE_RE = /^\|/;
+const MD_TRAIL_PIPE_RE = /\|$/;
+const LOCALE_SPLIT_RE = /[-_]/;
+const HTML_ESCAPE_RE = /[&<>"']/g;
+const HTML_ESCAPE_MAP = {
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+};
+const TERM_FAST_RE = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/;
+const TERM_OSC_RE = /(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)?/g;
+const TERM_DCS_RE = /(?:\x1b[PX^_]|[\x90\x98\x9e\x9f])[^\x1b\x9c]*(?:\x1b\\|\x9c)?/g;
+const TERM_CSI_RE = /(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]?/g;
+const TERM_ESC_RE = /\x1b[ -/]*[@-~]/g;
+const TERM_CTRL_RE = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+const A2UI_TYPES = new Set([
+  'Text', 'Heading', 'Badge', 'Button', 'Card', 'Row', 'Column',
+  'TextField', 'CheckBox', 'MultipleChoice', 'ProgressBar', 'LinearProgress',
+  'Metric', 'Stat', 'Table', 'Divider', 'Bar', 'Sparkline'
+]);
+const FORBIDDEN_HANDLER_NAMES = new Set([
+  '__proto__', 'constructor', 'prototype',
+  'toString', 'toLocaleString', 'valueOf',
+  'hasOwnProperty', 'isPrototypeOf', 'propertyIsEnumerable',
+  '__defineGetter__', '__defineSetter__', '__lookupGetter__', '__lookupSetter__'
+]);
+const SEMANTIC_STYLE_COLORS = new Set([
+  'accent', 'ok', 'warn', 'danger', 'surface', 'card', 'border', 'text', 'muted', 'transparent'
+]);
+const ALLOWED_FONT_WEIGHTS = new Set(['normal', 'medium', 'semibold', 'bold', '400', '500', '600', '700']);
+const ALLOWED_ALIGNS = new Set(['start', 'center', 'end', 'stretch', 'spaceBetween', 'space_between']);
+const CANVAS_SEMANTIC_COLORS = {
+  default: '#38BDF8',
+  accent: '#38BDF8',
+  ok: '#22C55E',
+  warn: '#F59E0B',
+  danger: '#EF4444',
+  surface: '#0F172A',
+  card: '#1E293B',
+  border: '#334155',
+  text: '#E2E8F0',
+  muted: '#94A3B8',
+  transparent: 'transparent',
+  none: 'none',
+  currentcolor: 'currentColor'
+};
+
+function isValidCanvasColor(raw) {
+  if (typeof raw !== 'string') return false;
+  const trimmed = raw.trim();
+  if (!trimmed) return false;
+  if (VALID_CANVAS_HEX_COLOR.test(trimmed)) return true;
+  return Object.hasOwn(CANVAS_SEMANTIC_COLORS, trimmed.toLowerCase());
+}
+
+function resolveSafeCanvasColor(raw, fallback) {
+  if (typeof raw !== 'string') return fallback;
+  const trimmed = raw.trim();
+  if (!trimmed) return fallback;
+  if (VALID_CANVAS_HEX_COLOR.test(trimmed)) return trimmed;
+  if (Object.hasOwn(CANVAS_SEMANTIC_COLORS, trimmed.toLowerCase())) {
+    return CANVAS_SEMANTIC_COLORS[trimmed.toLowerCase()];
+  }
+  return fallback;
+}
 
 const LOCALE_PACKS = {
   en: {
@@ -416,9 +494,12 @@ function isPlainObject(v) {
 }
 
 export function isSealedHandle(val) {
-  if (!isPlainObject(val)) return false;
-  const keys = Object.keys(val);
-  return keys.length === 1 && keys[0] === 'sealed' && typeof val.sealed === 'string' && val.sealed.length > 0;
+  if (!isPlainObject(val) || !Object.hasOwn(val, 'sealed')) return false;
+  if (typeof val.sealed !== 'string' || val.sealed.length === 0) return false;
+  for (const k in val) {
+    if (Object.hasOwn(val, k) && k !== 'sealed') return false;
+  }
+  return true;
 }
 
 function normalizeTone(tone) {
@@ -437,6 +518,11 @@ function sanitizeTextSlot(val) {
     if (val.text !== undefined) return sanitizeTextSlot(val.text);
   }
   return '';
+}
+
+function sanitizeTextSlotString(val) {
+  const s = sanitizeTextSlot(val);
+  return isSealedHandle(s) ? '' : String(s);
 }
 
 function sanitizeId(raw, fallback) {
@@ -465,11 +551,95 @@ function sanitizeArgs(raw, depth = 0) {
   return out;
 }
 
+export function normalizeStyleTokens(rawStyle) {
+  if (rawStyle === null || rawStyle === undefined) return undefined;
+  let map;
+  if (typeof rawStyle === 'string') {
+    map = {};
+    for (const part of rawStyle.split(';')) {
+      const idx = part.indexOf(':');
+      if (idx <= 0) continue;
+      const rawKey = part.slice(0, idx).trim();
+      const rawVal = part.slice(idx + 1).trim();
+      if (!rawKey || !rawVal) continue;
+      const camel = rawKey.replace(STYLE_CAMEL_RE, (_, c) => c.toUpperCase());
+      const strippedPx = rawVal.replace(STYLE_PX_RE, '');
+      const numCandidate = Number(strippedPx);
+      map[camel] = Number.isFinite(numCandidate) && strippedPx.trim() !== '' ? numCandidate : rawVal;
+    }
+  } else if (isPlainObject(rawStyle)) {
+    map = rawStyle;
+  } else {
+    return undefined;
+  }
+
+  const out = {};
+  const numIn = (key, minV, maxV) => {
+    const v = map[key];
+    if (typeof v === 'number' && Number.isFinite(v)) return Math.max(minV, Math.min(maxV, v));
+    if (typeof v === 'string') {
+      const cleaned = v.trim().replace(STYLE_PX_RE, '').trim();
+      if (!cleaned) return undefined;
+      const p = Number(cleaned);
+      if (Number.isFinite(p)) return Math.max(minV, Math.min(maxV, p));
+    }
+    return undefined;
+  };
+  const colorIn = key => {
+    const raw = map[key];
+    if (typeof raw !== 'string') return undefined;
+    const v = raw.trim();
+    if (!v) return undefined;
+    if (VALID_CANVAS_HEX_COLOR.test(v) || SEMANTIC_STYLE_COLORS.has(v)) return v;
+    return undefined;
+  };
+
+  for (const k of [
+    'padding', 'paddingHorizontal', 'paddingVertical', 'gap',
+    'borderRadius', 'borderWidth', 'fontSize', 'width', 'height', 'minHeight', 'maxWidth'
+  ]) {
+    const n = numIn(k, 0, 2048);
+    if (n !== undefined) out[k] = n;
+  }
+  const flex = numIn('flex', 0, 24);
+  if (flex !== undefined && flex > 0) out.flex = Math.round(flex);
+  const opacity = numIn('opacity', 0, 1);
+  if (opacity !== undefined) out.opacity = opacity;
+
+  for (const ck of ['backgroundColor', 'borderColor', 'color']) {
+    const c = colorIn(ck);
+    if (c !== undefined) out[ck] = c;
+  }
+  if (typeof map.fontWeight === 'string' || typeof map.fontWeight === 'number') {
+    const fw = String(map.fontWeight).trim().toLowerCase();
+    if (ALLOWED_FONT_WEIGHTS.has(fw)) out.fontWeight = fw;
+  }
+  if (typeof map.align === 'string') {
+    const align = map.align.trim();
+    if (ALLOWED_ALIGNS.has(align)) out.align = align;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function sanitizeHandlerName(raw) {
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed || !VALID_HANDLER_NAME_RE.test(trimmed) || FORBIDDEN_HANDLER_NAMES.has(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function attachSkylineMeta(out, node) {
   if (!out || !isPlainObject(node)) return out;
-  if (isPlainObject(node.style)) out.style = sanitizeArgs(node.style, 1);
-  if (typeof node.bindtap === 'string' && node.bindtap) out.bindtap = sanitizeCommand(node.bindtap);
-  if (typeof node.bindinput === 'string' && node.bindinput) out.bindinput = sanitizeCommand(node.bindinput);
+  const normStyle = normalizeStyleTokens(node.style);
+  if (normStyle) out.style = normStyle;
+  const bt = sanitizeHandlerName(node.bindtap);
+  if (bt) out.bindtap = bt;
+  const bi = sanitizeHandlerName(node.bindinput);
+  if (bi) out.bindinput = bi;
+  const bc = sanitizeHandlerName(node.bindchange);
+  if (bc) out.bindchange = bc;
   if (isPlainObject(node.dataset)) out.dataset = sanitizeArgs(node.dataset, 1);
   return out;
 }
@@ -484,7 +654,7 @@ function mapAdaptiveColor(color) {
 
 function parseMarkdownLines(md) {
   const text = String(md || '').slice(0, 65536);
-  const lines = text.split(/\r?\n/);
+  const lines = text.split(LINE_SPLIT_RE);
   const children = [];
   let i = 0;
 
@@ -494,19 +664,19 @@ function parseMarkdownLines(md) {
       i += 1;
       continue;
     }
-    if (/^---+$/.test(line) || /^\*\*\*+$/.test(line)) {
+    if (MD_HR_DASH_RE.test(line) || MD_HR_STAR_RE.test(line)) {
       children.push({ type: 'divider' });
       i += 1;
       continue;
     }
-    const headingMatch = line.match(/^#{1,6}\s+(.+)$/);
+    const headingMatch = line.match(MD_HEADING_RE);
     if (headingMatch) {
       children.push({ type: 'heading', text: headingMatch[1].trim() });
       i += 1;
       continue;
     }
-    if (line.startsWith('|') && i + 1 < lines.length && /^\|[\s:-]+\|/.test(lines[i + 1].trim())) {
-      const parseCells = row => row.replace(/^\|/, '').replace(/\|$/, '').split('|').map(c => c.trim());
+    if (line.startsWith('|') && i + 1 < lines.length && MD_TABLE_SEP_RE.test(lines[i + 1].trim())) {
+      const parseCells = row => row.replace(MD_LEAD_PIPE_RE, '').replace(MD_TRAIL_PIPE_RE, '').split('|').map(c => c.trim());
       const headers = parseCells(line);
       i += 2;
       const rows = [];
@@ -517,7 +687,7 @@ function parseMarkdownLines(md) {
       children.push({ type: 'table', headers, rows });
       continue;
     }
-    const listMatch = line.match(/^[-*+]\s+(.+)$/);
+    const listMatch = line.match(MD_LIST_RE);
     if (listMatch) {
       children.push({ type: 'text', text: '\u2022 ' + listMatch[1].trim() });
       i += 1;
@@ -596,7 +766,7 @@ function normalizeAdaptiveCardNode(node, budget) {
     return {
       type: 'input',
       id: sanitizeId(node.id, 'input_' + budget.count),
-      label: String(sanitizeTextSlot(node.label || node.placeholder || node.id || 'Input')),
+      label: sanitizeTextSlotString(node.label || node.placeholder || node.id || 'Input'),
       multiline: Boolean(node.isMultiline)
     };
   }
@@ -605,7 +775,7 @@ function normalizeAdaptiveCardNode(node, budget) {
     return {
       type: 'checkbox',
       id: sanitizeId(node.id, 'toggle_' + budget.count),
-      label: String(sanitizeTextSlot(node.title || node.label || node.id || 'Toggle')),
+      label: sanitizeTextSlotString(node.title || node.label || node.id || 'Toggle'),
       checked: node.value === 'true' || node.value === true
     };
   }
@@ -615,11 +785,11 @@ function normalizeAdaptiveCardNode(node, budget) {
     return {
       type: 'option_group',
       id: sanitizeId(node.id, 'choice_' + budget.count),
-      label: String(sanitizeTextSlot(node.label || '')),
+      label: sanitizeTextSlotString(node.label || ''),
       multiSelect: Boolean(node.isMultiSelect),
       options: choices.slice(0, 50).map((c, idx) => ({
         id: sanitizeId(String(c?.value ?? idx), 'opt_' + idx),
-        label: String(sanitizeTextSlot(c?.title ?? c?.value ?? ('Option ' + (idx + 1)))),
+        label: sanitizeTextSlotString(c?.title ?? c?.value ?? ('Option ' + (idx + 1))),
         value: typeof c?.value === 'string' ? c.value : undefined
       }))
     };
@@ -793,7 +963,7 @@ function adaptA2uiNode(nodeOrId, byId, visiting, depth, budget) {
         result = {
           type: 'input',
           id: sanitizeId(props.id || idHint, 'field_' + budget.count),
-          label: String(sanitizeTextSlot(unwrapA2uiValue(props.label || 'Input'))),
+          label: sanitizeTextSlotString(unwrapA2uiValue(props.label || 'Input')),
           secret: props.obscured === true || props.secret === true || undefined,
           multiline: props.multiline === true || undefined
         };
@@ -802,7 +972,7 @@ function adaptA2uiNode(nodeOrId, byId, visiting, depth, budget) {
         result = {
           type: 'checkbox',
           id: sanitizeId(props.id || idHint, 'cb_' + budget.count),
-          label: String(sanitizeTextSlot(unwrapA2uiValue(props.label || 'Option'))),
+          label: sanitizeTextSlotString(unwrapA2uiValue(props.label || 'Option')),
           checked: Boolean(unwrapA2uiValue(props.value ?? props.checked)),
           command: typeof props.command === 'string' ? sanitizeCommand(props.command) : undefined
         };
@@ -811,11 +981,11 @@ function adaptA2uiNode(nodeOrId, byId, visiting, depth, budget) {
         result = {
           type: 'option_group',
           id: sanitizeId(props.id || idHint, 'choice_' + budget.count),
-          label: props.label !== undefined ? String(sanitizeTextSlot(unwrapA2uiValue(props.label))) : undefined,
+          label: props.label !== undefined ? sanitizeTextSlotString(unwrapA2uiValue(props.label)) : undefined,
           multiSelect: Boolean(props.maxAllowedSelections !== 1 && props.multiSelect !== false ? props.multiSelect : false),
           options: (Array.isArray(props.options) ? props.options : []).slice(0, 50).map((o, idx) => ({
             id: sanitizeId(String(o?.id ?? o?.value ?? idx), 'opt_' + idx),
-            label: String(sanitizeTextSlot(unwrapA2uiValue(o?.label ?? o?.value ?? ('Option ' + (idx + 1))))),
+            label: sanitizeTextSlotString(unwrapA2uiValue(o?.label ?? o?.value ?? ('Option ' + (idx + 1)))),
             value: typeof o?.value === 'string' ? o.value : undefined
           }))
         };
@@ -854,12 +1024,7 @@ function isA2uiPayload(raw) {
   if (isPlainObject(raw.surfaceUpdate) && Array.isArray(raw.surfaceUpdate.components)) return true;
   if (Array.isArray(raw.components)) return true;
   if (isPlainObject(raw.component)) return true;
-  const a2uiTypes = new Set([
-    'Text', 'Heading', 'Badge', 'Button', 'Card', 'Row', 'Column',
-    'TextField', 'CheckBox', 'MultipleChoice', 'ProgressBar', 'LinearProgress',
-    'Metric', 'Stat', 'Table', 'Divider', 'Bar', 'Sparkline'
-  ]);
-  return typeof raw.type === 'string' && a2uiTypes.has(raw.type);
+  return typeof raw.type === 'string' && A2UI_TYPES.has(raw.type);
 }
 
 function normalizeCanonicalNode(node, depth, budget) {
@@ -932,6 +1097,33 @@ function normalizeCanonicalNode(node, depth, budget) {
       if (!isPlainObject(rawCmd)) throw new Error('Invalid canvas command');
       const op = String(rawCmd.op || rawCmd.type || '');
       if (!VALID_CANVAS_OPS.has(op)) throw new Error(`Unsupported canvas op "${op}"`);
+      for (const colorKey of ['fill', 'stroke', 'color']) {
+        if (rawCmd[colorKey] !== undefined && rawCmd[colorKey] !== null) {
+          if (!isValidCanvasColor(rawCmd[colorKey])) {
+            throw new Error(`Unsafe canvas ${colorKey} color "${String(rawCmd[colorKey]).slice(0, 64)}"`);
+          }
+        }
+      }
+      if (rawCmd.linearGradient !== undefined && rawCmd.linearGradient !== null) {
+        if (!isPlainObject(rawCmd.linearGradient) || !Array.isArray(rawCmd.linearGradient.colors)) {
+          throw new Error('Invalid canvas linearGradient');
+        }
+        for (const c of rawCmd.linearGradient.colors) {
+          if (!isValidCanvasColor(c)) {
+            throw new Error(`Unsafe canvas linearGradient color "${String(c).slice(0, 64)}"`);
+          }
+        }
+      }
+      if (rawCmd.d !== undefined && rawCmd.d !== null) {
+        if (typeof rawCmd.d !== 'string' || !SAFE_SVG_PATH_RE.test(rawCmd.d.trim())) {
+          throw new Error('Unsafe canvas SVG path data');
+        }
+      }
+      if (op === 'polygon' && rawCmd.points !== undefined) {
+        if (!Array.isArray(rawCmd.points) || rawCmd.points.length > 512) {
+          throw new Error('Invalid canvas polygon points');
+        }
+      }
       const cmd = { ...rawCmd, op };
       if (cmd.text !== undefined) cmd.text = sanitizeTextSlot(cmd.text);
       commands.push(cmd);
@@ -947,7 +1139,7 @@ function normalizeCanonicalNode(node, depth, budget) {
       command: sanitizeCommand(node.command)
     };
     if (t === 'button') out.text = sanitizeTextSlot(node.text ?? node.title ?? 'Run');
-    else out.title = String(sanitizeTextSlot(node.title ?? node.text ?? 'Run'));
+    else out.title = sanitizeTextSlot(node.title ?? node.text ?? 'Run');
     const args = sanitizeArgs(node.args ?? node.arguments);
     if (args) {
       if (t === 'button') out.args = args;
@@ -967,7 +1159,7 @@ function normalizeCanonicalNode(node, depth, budget) {
     return attachSkylineMeta({
       type: 'input',
       id: sanitizeId(node.id, 'input_' + budget.count),
-      label: String(sanitizeTextSlot(node.label || 'Input')),
+      label: sanitizeTextSlotString(node.label || 'Input'),
       secret: Boolean(node.secret) || undefined,
       multiline: Boolean(node.multiline) || undefined
     }, node);
@@ -976,7 +1168,7 @@ function normalizeCanonicalNode(node, depth, budget) {
     return {
       type: 'checkbox',
       id: sanitizeId(node.id, 'cb_' + budget.count),
-      label: String(sanitizeTextSlot(node.label || 'Option')),
+      label: sanitizeTextSlotString(node.label || 'Option'),
       checked: Boolean(node.checked),
       command: typeof node.command === 'string' ? sanitizeCommand(node.command) : undefined
     };
@@ -985,12 +1177,12 @@ function normalizeCanonicalNode(node, depth, budget) {
     return {
       type: 'option_group',
       id: sanitizeId(node.id, 'opt_' + budget.count),
-      label: node.label !== undefined ? String(sanitizeTextSlot(node.label)) : undefined,
+      label: node.label !== undefined ? sanitizeTextSlotString(node.label) : undefined,
       multiSelect: Boolean(node.multiSelect),
       command: typeof node.command === 'string' ? sanitizeCommand(node.command) : undefined,
       options: (Array.isArray(node.options) ? node.options : []).slice(0, 50).map((o, idx) => ({
         id: sanitizeId(String(o?.id ?? idx), 'opt_' + idx),
-        label: String(sanitizeTextSlot(o?.label ?? ('Option ' + (idx + 1)))),
+        label: sanitizeTextSlotString(o?.label ?? ('Option ' + (idx + 1))),
         value: typeof o?.value === 'string' ? o.value : undefined,
         checked: typeof o?.checked === 'boolean' ? o.checked : undefined,
         selected: typeof o?.selected === 'boolean' ? o.selected : undefined
@@ -1261,24 +1453,27 @@ export function renderWithH(h, view, { resolveSealed, onCommand, onInput, classP
       const svgKids = [];
       (node.commands || []).slice(0, MAX_CANVAS_COMMANDS).forEach((cmd, idx) => {
         if (cmd.op === 'clear') {
-          svgKids.push(h('rect', { key: idx, x: 0, y: 0, width: w, height: hgt, fill: cmd.fill || 'transparent' }));
+          svgKids.push(h('rect', { key: idx, x: 0, y: 0, width: w, height: hgt, fill: resolveSafeCanvasColor(cmd.fill, 'transparent') }));
         } else if (cmd.op === 'rect' || cmd.op === 'rrect') {
-          svgKids.push(h('rect', { key: idx, x: cmd.x || 0, y: cmd.y || 0, width: cmd.w ?? cmd.width ?? w, height: cmd.h ?? cmd.height ?? hgt, rx: cmd.radius || cmd.r || 0, fill: cmd.fill || 'none', stroke: cmd.stroke }));
+          svgKids.push(h('rect', { key: idx, x: cmd.x || 0, y: cmd.y || 0, width: cmd.w ?? cmd.width ?? w, height: cmd.h ?? cmd.height ?? hgt, rx: cmd.radius || cmd.r || 0, fill: resolveSafeCanvasColor(cmd.fill, 'none'), stroke: cmd.stroke ? resolveSafeCanvasColor(cmd.stroke, 'none') : undefined }));
         } else if (cmd.op === 'circle') {
-          svgKids.push(h('circle', { key: idx, cx: cmd.cx ?? cmd.x ?? 0, cy: cmd.cy ?? cmd.y ?? 0, r: cmd.r ?? cmd.radius ?? 4, fill: cmd.fill || 'none', stroke: cmd.stroke }));
+          svgKids.push(h('circle', { key: idx, cx: cmd.cx ?? cmd.x ?? 0, cy: cmd.cy ?? cmd.y ?? 0, r: cmd.r ?? cmd.radius ?? 4, fill: resolveSafeCanvasColor(cmd.fill, 'none'), stroke: cmd.stroke ? resolveSafeCanvasColor(cmd.stroke, 'none') : undefined }));
         } else if (cmd.op === 'line') {
-          svgKids.push(h('line', { key: idx, x1: cmd.x1 || 0, y1: cmd.y1 || 0, x2: cmd.x2 || 0, y2: cmd.y2 || 0, stroke: cmd.stroke || cmd.fill || 'currentColor', strokeWidth: cmd.strokeWidth || 1.5 }));
+          svgKids.push(h('line', { key: idx, x1: cmd.x1 || 0, y1: cmd.y1 || 0, x2: cmd.x2 || 0, y2: cmd.y2 || 0, stroke: resolveSafeCanvasColor(cmd.stroke || cmd.fill, 'currentColor'), strokeWidth: cmd.strokeWidth || 1.5 }));
+        } else if (cmd.op === 'path' && typeof cmd.d === 'string' && SAFE_SVG_PATH_RE.test(cmd.d.trim())) {
+          svgKids.push(h('path', { key: idx, d: cmd.d.trim(), fill: resolveSafeCanvasColor(cmd.fill, 'none'), stroke: cmd.stroke ? resolveSafeCanvasColor(cmd.stroke, 'none') : undefined }));
         } else if (cmd.op === 'bars' && Array.isArray(cmd.values) && cmd.values.length > 0) {
           const vals = cmd.values.filter(v => typeof v === 'number' && Number.isFinite(v));
           const max = typeof cmd.max === 'number' && cmd.max > 0 ? cmd.max : Math.max(1, ...vals);
           const bx = cmd.x || 0, by = cmd.y || 0, bw = cmd.w ?? cmd.width ?? (w - bx), bh = cmd.h ?? cmd.height ?? (hgt - by), gap = cmd.gap ?? 2;
           const barW = Math.max(1, (bw - gap * (vals.length - 1)) / Math.max(1, vals.length));
+          const barFill = resolveSafeCanvasColor(cmd.fill || cmd.color || cmd.tone, 'currentColor');
           vals.forEach((v, j) => {
             const barH = Math.max(1.5, Math.min(1, Math.max(0, v / max)) * bh);
-            svgKids.push(h('rect', { key: `${idx}_${j}`, x: bx + j * (barW + gap), y: by + (bh - barH), width: barW, height: barH, rx: cmd.radius ?? 2, fill: cmd.fill || 'currentColor' }));
+            svgKids.push(h('rect', { key: `${idx}_${j}`, x: bx + j * (barW + gap), y: by + (bh - barH), width: barW, height: barH, rx: cmd.radius ?? 2, fill: barFill }));
           });
         } else if (cmd.op === 'text' && cmd.text) {
-          svgKids.push(h('text', { key: idx, x: cmd.x || 0, y: (cmd.y || 0) + (cmd.fontSize || 11), fill: cmd.fill || 'currentColor', fontSize: cmd.fontSize || 11 }, cmd.text));
+          svgKids.push(h('text', { key: idx, x: cmd.x || 0, y: (cmd.y || 0) + (cmd.fontSize || 11), fill: resolveSafeCanvasColor(cmd.fill, 'currentColor'), fontSize: cmd.fontSize || 11 }, cmd.text));
         }
       });
       return h(
@@ -1367,9 +1562,20 @@ export function renderWithH(h, view, { resolveSealed, onCommand, onInput, classP
   return renderNode(tree, 0);
 }
 
+function stripTerminalControls(str) {
+  const s = String(str || '');
+  if (!TERM_FAST_RE.test(s)) return s;
+  return s
+    .replace(TERM_OSC_RE, '')
+    .replace(TERM_DCS_RE, '')
+    .replace(TERM_CSI_RE, '')
+    .replace(TERM_ESC_RE, '')
+    .replace(TERM_CTRL_RE, '');
+}
+
 function formatTerminalSlot(slot) {
-  if (!slot.sealed) return slot.text;
-  return slot.sealedResolved ? '\ud83d\udd12 ' + slot.text : '';
+  if (!slot.sealed) return stripTerminalControls(slot.text);
+  return slot.sealedResolved ? '\ud83d\udd12 ' + stripTerminalControls(slot.text) : '';
 }
 
 function wrapAnsi(text, tone, ansi) {
@@ -1437,7 +1643,8 @@ export function renderToTerminal(view, { resolveSealed, ansi = false, width = 72
           const span = max - min || 1;
           parts.push(cmd.values.map(v => sparks[Math.max(0, Math.min(7, Math.round(((v - min) / span) * 7)))]).join(''));
         } else if (cmd.op === 'text' && cmd.text) {
-          parts.push(cmd.sealed ? (cmd.sealedResolved ? '\ud83d\udd12 ' + cmd.text : '') : cmd.text);
+          const safeText = stripTerminalControls(cmd.text);
+          parts.push(cmd.sealed ? (cmd.sealedResolved ? '\ud83d\udd12 ' + safeText : '') : safeText);
         }
       }
       lines.push(wrapAnsi(parts.filter(Boolean).join(' ') || `[canvas ${node.width}x${node.height}]`, node.tone, ansi));
@@ -1535,12 +1742,10 @@ export function renderToMarkdown(view, { resolveSealed } = {}) {
 }
 
 function escapeHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+  const s = String(str);
+  if (!HTML_ESCAPE_RE.test(s)) return s;
+  HTML_ESCAPE_RE.lastIndex = 0;
+  return s.replace(HTML_ESCAPE_RE, ch => HTML_ESCAPE_MAP[ch]);
 }
 
 function renderSlotHtml(slot) {
@@ -1608,9 +1813,10 @@ export function renderToHtmlString(view, { resolveSealed } = {}) {
       const w = Number(node.width) || 260;
       const hgt = Number(node.height) || 56;
       const inner = (node.commands || []).slice(0, MAX_CANVAS_COMMANDS).map(cmd => {
-        if (cmd.op === 'clear') return '<rect x="0" y="0" width="' + w + '" height="' + hgt + '" fill="' + escapeHtml(cmd.fill || 'transparent') + '"/>';
-        if (cmd.op === 'rect' || cmd.op === 'rrect') return '<rect x="' + (Number(cmd.x) || 0) + '" y="' + (Number(cmd.y) || 0) + '" width="' + (Number(cmd.w ?? cmd.width) || w) + '" height="' + (Number(cmd.h ?? cmd.height) || hgt) + '" rx="' + (Number(cmd.radius ?? cmd.r) || 0) + '" fill="' + escapeHtml(cmd.fill || 'none') + '"/>';
-        if (cmd.op === 'text' && cmd.text) return '<text x="' + (Number(cmd.x) || 0) + '" y="' + ((Number(cmd.y) || 0) + (Number(cmd.fontSize) || 11)) + '">' + escapeHtml(cmd.text) + '</text>';
+        if (cmd.op === 'clear') return '<rect x="0" y="0" width="' + w + '" height="' + hgt + '" fill="' + escapeHtml(resolveSafeCanvasColor(cmd.fill, 'transparent')) + '"/>';
+        if (cmd.op === 'rect' || cmd.op === 'rrect') return '<rect x="' + (Number(cmd.x) || 0) + '" y="' + (Number(cmd.y) || 0) + '" width="' + (Number(cmd.w ?? cmd.width) || w) + '" height="' + (Number(cmd.h ?? cmd.height) || hgt) + '" rx="' + (Number(cmd.radius ?? cmd.r) || 0) + '" fill="' + escapeHtml(resolveSafeCanvasColor(cmd.fill, 'none')) + '"' + (cmd.stroke ? ' stroke="' + escapeHtml(resolveSafeCanvasColor(cmd.stroke, 'none')) + '"' : '') + '/>';
+        if (cmd.op === 'path' && typeof cmd.d === 'string' && SAFE_SVG_PATH_RE.test(cmd.d.trim())) return '<path d="' + escapeHtml(cmd.d.trim()) + '" fill="' + escapeHtml(resolveSafeCanvasColor(cmd.fill, 'none')) + '"' + (cmd.stroke ? ' stroke="' + escapeHtml(resolveSafeCanvasColor(cmd.stroke, 'none')) + '"' : '') + '/>';
+        if (cmd.op === 'text' && cmd.text) return '<text x="' + (Number(cmd.x) || 0) + '" y="' + ((Number(cmd.y) || 0) + (Number(cmd.fontSize) || 11)) + '" fill="' + escapeHtml(resolveSafeCanvasColor(cmd.fill, 'currentColor')) + '">' + escapeHtml(cmd.text) + '</text>';
         return '';
       }).join('');
       return '<svg class="vk-canvas' + toneCls + '" viewBox="0 0 ' + w + ' ' + hgt + '" width="' + w + '" height="' + hgt + '">' + inner + '</svg>';
@@ -1637,13 +1843,13 @@ export function renderToHtmlString(view, { resolveSealed } = {}) {
 
 export function isRtlLocale(locale) {
   if (typeof locale !== 'string' || !locale.trim()) return false;
-  const base = locale.trim().toLowerCase().split(/[-_]/)[0];
+  const base = locale.trim().toLowerCase().split(LOCALE_SPLIT_RE)[0];
   return base === 'ar' || base === 'he' || base === 'fa' || base === 'ur';
 }
 
 export function getVibeStrings(locale = 'en', overrides = undefined) {
   const base = typeof locale === 'string' && locale.trim()
-    ? locale.trim().toLowerCase().split(/[-_]/)[0]
+    ? locale.trim().toLowerCase().split(LOCALE_SPLIT_RE)[0]
     : 'en';
   const pack = LOCALE_PACKS[base] || LOCALE_PACKS.en;
   const merged = { ...pack };

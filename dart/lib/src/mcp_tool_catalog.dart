@@ -88,8 +88,7 @@ class VibeMcpExecutionLocation {
 
   final String id;
 
-  static const VibeMcpExecutionLocation host =
-      VibeMcpExecutionLocation('host');
+  static const VibeMcpExecutionLocation host = VibeMcpExecutionLocation('host');
   static const VibeMcpExecutionLocation gateway =
       VibeMcpExecutionLocation('gateway');
   static const VibeMcpExecutionLocation runner =
@@ -417,7 +416,10 @@ class VibeMcpToolDescriptor {
       name,
     );
     final resolvedTags = (deriveTags ??
-        ({required String name, required String scope, required bool mutates}) =>
+        (
+                {required String name,
+                required String scope,
+                required bool mutates}) =>
             deriveVibeMcpToolTags(name: name, scope: scope, mutates: mutates))(
       name: name,
       scope: scope,

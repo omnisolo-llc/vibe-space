@@ -11,18 +11,47 @@ export const DEMO_ROOT = path.resolve(__dirname, '..');
  * Loads Playwright without hardcoding a single checkout layout path.
  */
 export async function loadPlaywright() {
-  const candidates = [
+  const directCandidates = [
     process.env.PLAYWRIGHT_PATH,
-    path.resolve(DEMO_ROOT, '../../../cloud/web/node_modules/playwright/index.mjs'),
-    path.resolve(DEMO_ROOT, '../../../website/node_modules/playwright/index.mjs'),
     path.resolve(DEMO_ROOT, '../node_modules/playwright/index.mjs'),
   ].filter(Boolean);
-  for (const candidate of candidates) {
+  for (const candidate of directCandidates) {
     if (fs.existsSync(candidate)) {
       return import(pathToFileURL(candidate).href);
     }
   }
-  return import('playwright');
+  try {
+    return await import('playwright');
+  } catch {
+    // Fall back to scanning nearby workspace node_modules directories.
+  }
+  let ancestor = path.resolve(DEMO_ROOT, '..');
+  for (let up = 0; up < 3; up += 1) {
+    ancestor = path.dirname(ancestor);
+    const rootCandidate = path.join(ancestor, 'node_modules/playwright/index.mjs');
+    if (fs.existsSync(rootCandidate)) {
+      return import(pathToFileURL(rootCandidate).href);
+    }
+    try {
+      for (const child of fs.readdirSync(ancestor, { withFileTypes: true })) {
+        if (!child.isDirectory() || child.name.startsWith('.')) continue;
+        const level1 = path.join(ancestor, child.name, 'node_modules/playwright/index.mjs');
+        if (fs.existsSync(level1)) return import(pathToFileURL(level1).href);
+        try {
+          for (const sub of fs.readdirSync(path.join(ancestor, child.name), { withFileTypes: true })) {
+            if (!sub.isDirectory() || sub.name.startsWith('.')) continue;
+            const level2 = path.join(ancestor, child.name, sub.name, 'node_modules/playwright/index.mjs');
+            if (fs.existsSync(level2)) return import(pathToFileURL(level2).href);
+          }
+        } catch {
+          // Ignore unreadable subdirectories.
+        }
+      }
+    } catch {
+      // Ignore unreadable parent directories.
+    }
+  }
+  throw new Error('Playwright package not found; install playwright or set PLAYWRIGHT_PATH');
 }
 
 function findCachedChromiumExecutable() {

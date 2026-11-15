@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:vibe_space/vibe_space.dart';
 
 import 'canvas_view.dart';
+import 'vibe_mini_program_view.dart';
 import 'vibe_space_widgets.dart';
 import 'vibe_widget_adapter.dart';
 import 'view.dart';
@@ -60,8 +61,8 @@ class VibeDomBridgeController extends ChangeNotifier {
   }
 }
 
-/// Multi-runtime renderer for [VibeConditionalEntry] supporting WeChat-style
-/// `miniProgram` (`AppService` + `Skyline` VXML + `canvas`), `vxml`, `wasm`,
+/// Multi-runtime renderer for [VibeConditionalEntry] supporting dual-layer
+/// `vibeSnippet` (`AppService` + `Skyline` VXML + `canvas`), `vxml`, `wasm`,
 /// `js`, `a2ui`, `vibe_ui`, `markdown`, and opt-in `dom`/`html`.
 class VibeRuntimeBody extends StatefulWidget {
   const VibeRuntimeBody({
@@ -108,8 +109,37 @@ class _VibeRuntimeBodyState extends State<VibeRuntimeBody> {
 
   String? _cachedDomSignature;
   VibeCanvasPayload? _cachedDomPayload;
-  String? _lastPushedDomStateJson;
+  Map<String, Object?>? _lastPushedDomData;
+  VibeTriggerContext? _lastPushedDomContext;
+
+  String? _cachedWasmBase64;
+  Uint8List? _cachedWasmBytes;
+  Map<String, Object?>? _cachedDynamicSourceView;
+  Map<String, dynamic>? _cachedDynamicView;
   int _evalGen = 0;
+
+  Uint8List? _decodeWasmBytes(String? rawB64) {
+    final trimmed = rawB64?.trim();
+    if (trimmed == null || trimmed.isEmpty) return null;
+    if (_cachedWasmBase64 == trimmed && _cachedWasmBytes != null) {
+      return _cachedWasmBytes;
+    }
+    final bytes = Uint8List.fromList(base64Decode(trimmed));
+    _cachedWasmBase64 = trimmed;
+    _cachedWasmBytes = bytes;
+    return bytes;
+  }
+
+  Map<String, dynamic> _dynamicViewFor(Map<String, Object?> source) {
+    if (identical(_cachedDynamicSourceView, source) &&
+        _cachedDynamicView != null) {
+      return _cachedDynamicView!;
+    }
+    final converted = toVibeDynamicMap(source);
+    _cachedDynamicSourceView = source;
+    _cachedDynamicView = converted;
+    return converted;
+  }
 
   String get _effectiveDataMode => widget.entry.trusted ? 'live' : 'sample';
 
@@ -137,16 +167,16 @@ class _VibeRuntimeBodyState extends State<VibeRuntimeBody> {
         oldWidget.entry.trusted != widget.entry.trusted ||
         oldWidget.entry.vibe != widget.entry.vibe ||
         oldWidget.entry.canvas != widget.entry.canvas ||
-        jsonEncode(oldWidget.entry.template) !=
-            jsonEncode(widget.entry.template) ||
-        jsonEncode(oldWidget.entry.initialData) !=
-            jsonEncode(widget.entry.initialData) ||
-        jsonEncode(oldWidget.entry.view) != jsonEncode(widget.entry.view) ||
-        jsonEncode(oldWidget.entry.dataModel) !=
-            jsonEncode(widget.entry.dataModel) ||
-        jsonEncode(oldWidget.entry.effectiveNeeds) !=
-            jsonEncode(widget.entry.effectiveNeeds) ||
-        jsonEncode(oldWidget.entry.args) != jsonEncode(widget.entry.args);
+        !vibeDeepEquals(oldWidget.entry.template, widget.entry.template) ||
+        !vibeDeepEquals(
+            oldWidget.entry.initialData, widget.entry.initialData) ||
+        !vibeDeepEquals(oldWidget.entry.view, widget.entry.view) ||
+        !vibeDeepEquals(oldWidget.entry.dataModel, widget.entry.dataModel) ||
+        !vibeDeepEquals(
+          oldWidget.entry.effectiveNeeds,
+          widget.entry.effectiveNeeds,
+        ) ||
+        !vibeDeepEquals(oldWidget.entry.args, widget.entry.args);
 
     final contextChanged = oldWidget.triggerContext != widget.triggerContext;
     if (entryChanged || oldWidget.host != widget.host) {
@@ -324,7 +354,8 @@ class _VibeRuntimeBodyState extends State<VibeRuntimeBody> {
         jsGlue: glue,
         when: entry.condition,
       );
-      _lastPushedDomStateJson = null;
+      _lastPushedDomData = null;
+      _lastPushedDomContext = null;
       _runtimeError = null;
     } on Object catch (err) {
       _runtimeError = err.toString();
@@ -332,12 +363,13 @@ class _VibeRuntimeBodyState extends State<VibeRuntimeBody> {
   }
 
   void _pushDomUpdateIfChanged() {
-    final stateSnapshot = jsonEncode(<String, Object?>{
-      'data': _needsData,
-      'context': widget.triggerContext.toJson(),
-    });
-    if (_lastPushedDomStateJson == stateSnapshot) return;
-    _lastPushedDomStateJson = stateSnapshot;
+    if (_lastPushedDomContext == widget.triggerContext &&
+        _lastPushedDomData != null &&
+        vibeDeepEquals(_lastPushedDomData, _needsData)) {
+      return;
+    }
+    _lastPushedDomData = Map<String, Object?>.of(_needsData);
+    _lastPushedDomContext = widget.triggerContext;
     final msg = VibeDomDataModelMessage(
       vibeId: widget.entry.id,
       data: _needsData,
@@ -362,7 +394,12 @@ class _VibeRuntimeBodyState extends State<VibeRuntimeBody> {
       return;
     }
     try {
-      final bytes = Uint8List.fromList(base64Decode(wb64.trim()));
+      final bytes = _decodeWasmBytes(wb64);
+      if (bytes == null) {
+        _runtimeError = 'Missing wasmBase64 module';
+        if (mounted) setState(() {});
+        return;
+      }
       final input = <String, Object?>{
         'command': command,
         'args': actionArgs ?? widget.entry.args,
@@ -450,9 +487,7 @@ class _VibeRuntimeBodyState extends State<VibeRuntimeBody> {
           return;
         }
         final wb64 = widget.entry.wasmBase64 ?? widget.entry.canvas?.wasmBase64;
-        final wasmBytes = (wb64 != null && wb64.trim().isNotEmpty)
-            ? Uint8List.fromList(base64Decode(wb64.trim()))
-            : null;
+        final wasmBytes = _decodeWasmBytes(wb64);
         final session = VibeMiniProgramSession(
           definition: def,
           template: widget.entry.template ?? def.template,
@@ -508,45 +543,20 @@ class _VibeRuntimeBodyState extends State<VibeRuntimeBody> {
     }
 
     if (_mpSession != null) {
-      try {
-        final mpView = _mpSession!.buildView();
-        if (mpView != null) {
-          return VibeView(
-            value: toVibeDynamicMap(mpView),
-            resolveSealed: widget.host?.resolveSealed,
-            adapter: widget.adapter,
-            onCommand: (cmd, args) {
-              final typedArgs = Map<String, Object?>.from(args);
-              final mpEvent = VibeMiniProgramEvent.tryFromCommand(
-                cmd,
-                typedArgs,
-              );
-              if (mpEvent != null) {
-                try {
-                  _mpSession?.dispatchEvent(mpEvent);
-                  _runtimeError = null;
-                } on Object catch (err) {
-                  _runtimeError = err.toString();
-                }
-                if (mounted) setState(() {});
-              }
-              widget.onCommand?.call(cmd, args);
-            },
-          );
-        }
-      } on Object catch (err) {
-        return Text(
-          err.toString(),
-          style: TextStyle(fontSize: 12, color: t.danger),
-        );
-      }
+      return VibeMiniProgramView(
+        session: _mpSession!,
+        resolveSealed: widget.host?.resolveSealed,
+        adapter: widget.adapter,
+        onCommand: widget.onCommand,
+        errorColor: t.danger,
+      );
     }
 
     if (_jsRun != null) {
       final view = _jsRun!.view;
       if (view != null) {
         return VibeView(
-          value: toVibeDynamicMap(view),
+          value: _dynamicViewFor(view),
           resolveSealed: widget.host?.resolveSealed,
           adapter: widget.adapter,
           onCommand: (cmd, args) {
@@ -589,7 +599,7 @@ class _VibeRuntimeBodyState extends State<VibeRuntimeBody> {
     if ((rt == VibeRuntimeKind.wasm || rt == VibeRuntimeKind.js) &&
         _wasmView != null) {
       return VibeView(
-        value: toVibeDynamicMap(_wasmView!),
+        value: _dynamicViewFor(_wasmView!),
         resolveSealed: widget.host?.resolveSealed,
         adapter: widget.adapter,
         onCommand: (cmd, args) {

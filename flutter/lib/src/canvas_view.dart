@@ -7,6 +7,10 @@ import 'package:vibe_space/vibe_space.dart';
 import 'vibe_widget_adapter.dart';
 import 'view.dart';
 
+final RegExp _kMdTableSepCellRe = RegExp(r'^:?-{2,}:?$');
+final RegExp _kMdHeadingRe = RegExp(r'^(#{1,6})\s+(.*)$');
+final RegExp _kMdBulletRe = RegExp(r'^[-*]\s+(.*)$');
+
 /// Builder hook allowing a host app to render rich Markdown & Mermaid diagrams.
 typedef VibeCanvasMarkdownBuilder = Widget Function(
   BuildContext context,
@@ -55,6 +59,22 @@ class VibeCanvasView extends StatefulWidget {
 
 class _VibeCanvasViewState extends State<VibeCanvasView> {
   bool _copied = false;
+  String? _cachedVibeUiContent;
+  Map<String, dynamic>? _cachedNormalizedVibeUi;
+  FormatException? _cachedVibeUiSchemaError;
+  bool _cachedVibeUiCompactTables = false;
+  Map<String, dynamic>? _cachedAdaptedVibeUi;
+
+  @override
+  void didUpdateWidget(covariant VibeCanvasView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.payload.content != widget.payload.content) {
+      _cachedVibeUiContent = null;
+      _cachedNormalizedVibeUi = null;
+      _cachedVibeUiSchemaError = null;
+      _cachedAdaptedVibeUi = null;
+    }
+  }
 
   VibeCanvasLayout _nextLayout(VibeCanvasLayout current) {
     const layouts = VibeCanvasLayout.values;
@@ -291,32 +311,53 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
   }
 
   Widget _buildVibeUiBody(BuildContext context, VibeCanvasPayload payload) {
-    final decoded = payload.tryDecodeVibeUi();
-    if (decoded == null) {
+    if (_cachedVibeUiContent != payload.content) {
+      _cachedVibeUiContent = payload.content;
+      _cachedAdaptedVibeUi = null;
+      final decoded = payload.tryDecodeVibeUi();
+      if (decoded == null) {
+        _cachedNormalizedVibeUi = null;
+        _cachedVibeUiSchemaError = null;
+      } else {
+        try {
+          final normalized = normalizeVibeViewInput(decoded);
+          validateVibeView(normalized);
+          _cachedNormalizedVibeUi = normalized;
+          _cachedVibeUiSchemaError = null;
+        } on FormatException catch (error) {
+          _cachedNormalizedVibeUi = null;
+          _cachedVibeUiSchemaError = error;
+        }
+      }
+    }
+    final schemaError = _cachedVibeUiSchemaError;
+    if (schemaError != null) {
+      return _buildErrorCard(
+        context,
+        title: 'Invalid Vibe UI Schema',
+        message: schemaError.message,
+      );
+    }
+    final normalized = _cachedNormalizedVibeUi;
+    if (normalized == null) {
       return _buildErrorCard(
         context,
         title: 'Invalid Vibe UI JSON',
         message: 'Canvas content is not a valid JSON object.',
       );
     }
-    final Map<String, dynamic> normalized;
-    try {
-      normalized = normalizeVibeViewInput(decoded);
-      validateVibeView(normalized);
-    } on FormatException catch (error) {
-      return _buildErrorCard(
-        context,
-        title: 'Invalid Vibe UI Schema',
-        message: error.message,
-      );
-    }
     return LayoutBuilder(
       builder: (context, constraints) {
         final compactTables = constraints.maxWidth < 600;
-        final adapted = _adaptVibeUiNode(
-          normalized,
-          compactTables: compactTables,
-        );
+        if (_cachedAdaptedVibeUi == null ||
+            _cachedVibeUiCompactTables != compactTables) {
+          _cachedVibeUiCompactTables = compactTables;
+          _cachedAdaptedVibeUi = _adaptVibeUiNode(
+            normalized,
+            compactTables: compactTables,
+          );
+        }
+        final adapted = _cachedAdaptedVibeUi!;
         return SingleChildScrollView(
           key: const ValueKey('vibe-canvas-vibe-ui-body'),
           padding: const EdgeInsets.all(16),
@@ -381,9 +422,8 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
           ),
         );
       case _MarkdownBlockKind.code:
-        final badge = block.language.isEmpty
-            ? 'CODE'
-            : block.language.toUpperCase();
+        final badge =
+            block.language.isEmpty ? 'CODE' : block.language.toUpperCase();
         return Container(
           padding: const EdgeInsets.all(12),
           decoration: BoxDecoration(
@@ -700,7 +740,7 @@ List<String> _splitMarkdownTableRow(String line) {
 bool _isMarkdownTableSeparator(String line) {
   final cells = _splitMarkdownTableRow(line);
   if (cells.isEmpty) return false;
-  return cells.every((c) => RegExp(r'^:?-{2,}:?$').hasMatch(c));
+  return cells.every((c) => _kMdTableSepCellRe.hasMatch(c));
 }
 
 List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
@@ -802,7 +842,7 @@ List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
     }
     flushTable();
 
-    final headingMatch = RegExp(r'^(#{1,6})\s+(.*)$').firstMatch(trimmed);
+    final headingMatch = _kMdHeadingRe.firstMatch(trimmed);
     if (headingMatch != null) {
       flushParagraph();
       flushBullets();
@@ -816,7 +856,7 @@ List<_MarkdownBlock> _parseMarkdownBlocks(String markdown) {
       continue;
     }
 
-    final bulletMatch = RegExp(r'^[-*]\s+(.*)$').firstMatch(trimmed);
+    final bulletMatch = _kMdBulletRe.firstMatch(trimmed);
     if (bulletMatch != null) {
       flushParagraph();
       bulletItems.add(bulletMatch.group(1)!.trim());

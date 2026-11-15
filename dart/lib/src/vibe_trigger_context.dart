@@ -1,5 +1,53 @@
 import 'dart:convert';
 
+final RegExp _kTemplatePlaceholderRe = RegExp(
+  r'\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}',
+);
+
+/// Structural equality across JSON-like maps, lists, and scalar primitives.
+bool vibeDeepEquals(Object? a, Object? b, [int depth = 0]) {
+  if (identical(a, b)) return true;
+  if (a == null || b == null || depth > 64) return false;
+  if (a is List && b is List) {
+    final len = a.length;
+    if (len != b.length) return false;
+    for (var i = 0; i < len; i++) {
+      if (!vibeDeepEquals(a[i], b[i], depth + 1)) return false;
+    }
+    return true;
+  }
+  if (a is Map && b is Map) {
+    if (a.length != b.length) return false;
+    for (final entry in a.entries) {
+      final key = entry.key;
+      if (!b.containsKey(key) ||
+          !vibeDeepEquals(entry.value, b[key], depth + 1)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return a == b;
+}
+
+/// Structural hash matching [vibeDeepEquals] across maps, lists, and scalars.
+int vibeDeepHash(Object? value, [int depth = 0]) {
+  if (value == null || depth > 64) return 0;
+  if (value is List) {
+    return Object.hashAll(
+      value.map((item) => vibeDeepHash(item, depth + 1)),
+    );
+  }
+  if (value is Map) {
+    return Object.hashAllUnordered(
+      value.entries.map(
+        (e) => Object.hash(e.key, vibeDeepHash(e.value, depth + 1)),
+      ),
+    );
+  }
+  return value.hashCode;
+}
+
 /// Live host snapshot evaluated against registered `VibeTriggerCondition`s.
 class VibeTriggerContext {
   const VibeTriggerContext({
@@ -78,8 +126,9 @@ class VibeTriggerContext {
   List<String?> get programCandidates {
     final out = <String?>[];
     void addProg(String? p) {
-      if (p == null || p.trim().isEmpty) return;
+      if (p == null) return;
       final trimmed = p.trim();
+      if (trimmed.isEmpty) return;
       out.add(trimmed);
       final base = _executableBasename(trimmed);
       if (base != trimmed) out.add(base);
@@ -87,8 +136,8 @@ class VibeTriggerContext {
 
     addProg(program);
     if (argv.isNotEmpty) addProg(argv.first);
-    if (command != null && command!.trim().isNotEmpty) {
-      addProg(command!.trim().split(RegExp(r'\s+')).first);
+    if (command != null) {
+      addProg(_firstWhitespaceToken(command!));
     }
     return out;
   }
@@ -169,10 +218,28 @@ class VibeTriggerContext {
   bool operator ==(Object other) =>
       identical(this, other) ||
       other is VibeTriggerContext &&
-          jsonEncode(toJson()) == jsonEncode(other.toJson());
+          other.program == program &&
+          other.command == command &&
+          other.window == window &&
+          other.surface == surface &&
+          other.windowTitle == windowTitle &&
+          other.cwd == cwd &&
+          vibeDeepEquals(other.argv, argv) &&
+          vibeDeepEquals(other.env, env) &&
+          vibeDeepEquals(other.context, context);
 
   @override
-  int get hashCode => jsonEncode(toJson()).hashCode;
+  int get hashCode => Object.hash(
+        program,
+        command,
+        window,
+        surface,
+        windowTitle,
+        cwd,
+        vibeDeepHash(argv),
+        vibeDeepHash(env),
+        vibeDeepHash(context),
+      );
 }
 
 /// Substitutes `{{key}}` placeholders in [template] from [context] safely.
@@ -184,7 +251,7 @@ String hydrateVibeTemplateString(
 }) {
   if (!template.contains('{{')) return template;
   return template.replaceAllMapped(
-    RegExp(r'\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}'),
+    _kTemplatePlaceholderRe,
     (match) {
       final key = match.group(1)!;
       final raw = context.lookupContext(key);
@@ -201,6 +268,20 @@ String hydrateVibeTemplateString(
       return text;
     },
   );
+}
+
+String? _firstWhitespaceToken(String raw) {
+  var start = 0;
+  final len = raw.length;
+  while (start < len && raw.codeUnitAt(start) <= 32) {
+    start++;
+  }
+  if (start >= len) return null;
+  var end = start;
+  while (end < len && raw.codeUnitAt(end) > 32) {
+    end++;
+  }
+  return raw.substring(start, end);
 }
 
 String _executableBasename(String raw) {

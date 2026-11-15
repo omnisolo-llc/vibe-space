@@ -560,8 +560,8 @@ class VibeConditionalRegistry {
     final result = _recompute(nowMs: nowMs);
     if (contextChanged ||
         result.changed ||
-        prevActiveIds.join(',') != result.activeIds.join(',') ||
-        prevHeld.join(',') != result.heldIds.join(',')) {
+        !vibeDeepEquals(prevActiveIds, result.activeIds) ||
+        !vibeDeepEquals(prevHeld, result.heldIds)) {
       _notify();
     }
     return result;

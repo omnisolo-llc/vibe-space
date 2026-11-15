@@ -1,107 +1,353 @@
 import 'dart:convert';
 import 'dart:math' as math;
 
-import 'vibe_mini_program.dart';
 import 'vibe_runtime_config.dart';
+import 'vibe_mini_program.dart';
 import 'vibe_vxml_template.dart';
 
 const Set<String> _kForbiddenMiniProgramGlobals = <String>{
   'window',
   'document',
+  'globalThis',
+  'self',
+  'top',
+  'parent',
+  'frames',
+  'opener',
   'fetch',
   'XMLHttpRequest',
   'WebSocket',
+  'EventSource',
+  'WebTransport',
   'RTCPeerConnection',
   'webkitRTCPeerConnection',
-  'EventSource',
+  'RTCDataChannel',
+  'Worker',
   'SharedWorker',
+  'ServiceWorker',
+  'ServiceWorkerContainer',
   'BroadcastChannel',
+  'navigator',
+  'location',
   'sendBeacon',
   'localStorage',
   'sessionStorage',
   'indexedDB',
+  'caches',
+  'cookieStore',
+  'importScripts',
+  'postMessage',
+  'open',
   'alert',
   'confirm',
   'prompt',
   'eval',
   'Function',
-  'importScripts',
+  'WebAssembly',
+  'Proxy',
+  'Reflect',
 };
 
-/// Validates air-gapped `AppService` Mini Program source: enforces `<= 64 KiB`
-/// and rejects any DOM, network, storage, popup, or dynamic code-gen globals.
+const Set<String> _kForbiddenPrototypeTokens = <String>{
+  '__proto__',
+  'constructor',
+  'prototype',
+};
+
+final RegExp _kLineContRe = RegExp(r'\\\r?\n');
+final RegExp _kUnicodeBraceEscapeRe = RegExp(r'\\u\{([0-9a-fA-F]{1,6})\}');
+final RegExp _kUnicode4EscapeRe = RegExp(r'\\u([0-9a-fA-F]{4})');
+final RegExp _kHexEscapeRe = RegExp(r'\\x([0-9a-fA-F]{2})');
+final RegExp _kOctalEscapeRe = RegExp(r'\\([0-3]?[0-7]{1,2})');
+final RegExp _kTplStrInterpRe = RegExp(
+  r'''`([a-zA-Z0-9_$]{0,32})\$\{\s*(?:'([a-zA-Z0-9_$]{0,32})'|"([a-zA-Z0-9_$]{0,32})")\s*\}([^`\\]{0,64})`''',
+);
+final RegExp _kConcatIdentStrRe = RegExp(
+  r'''(['"`])([a-zA-Z0-9_$]{1,32})\1\s*\+\s*(['"`])([a-zA-Z0-9_$]{1,32})\3''',
+);
+final RegExp _kDynImportRe = RegExp(r'(?<![.\w$])import\s*\(');
+final RegExp _kIdentRe = RegExp(r'(?<![.\w$])([A-Za-z_$][A-Za-z0-9_$]*)\b');
+final RegExp _kProtoWordRe = RegExp(r'\b(__proto__|constructor|prototype)\b');
+final RegExp _kProtoBracketRe = RegExp(
+  r'''\[\s*['"`](__proto__|constructor|prototype)['"`]\s*\]''',
+);
+final RegExp _kDefMiniProgramRe = RegExp(
+  r'(?:defineVibeSnippet|defineMiniProgram|VibeMiniApp|MiniProgram|VibeSnippet)\s*\(',
+);
+final RegExp _kPropIdentRe = RegExp(r'[A-Za-z_$][A-Za-z0-9_$]*');
+final RegExp _kSetDataStmtRe = RegExp(
+  r'^(?:this\s*\.\s*)?setData\s*\((.*)\)$',
+  dotAll: true,
+);
+final RegExp _kDeclStmtRe = RegExp(
+  r'^(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+)$',
+  dotAll: true,
+);
+final RegExp _kAssignStmtRe = RegExp(
+  r'^([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+)$',
+  dotAll: true,
+);
+final RegExp _kMathCallRe = RegExp(
+  r'^Math\.(round|floor|ceil|abs|min|max)\(([\s\S]*)\)$',
+);
+final RegExp _kThisDataRe = RegExp(r'\bthis\.data\b');
+
+bool _isWordOrDollarCodeUnit(int cu) =>
+    (cu >= 48 && cu <= 57) ||
+    (cu >= 65 && cu <= 90) ||
+    (cu >= 97 && cu <= 122) ||
+    cu == 95 ||
+    cu == 36;
+
+bool _isObjectLiteralKey(String candidate, int start, int end) {
+  var k = end;
+  while (k < candidate.length && candidate.codeUnitAt(k) <= 32) {
+    k++;
+  }
+  if (k >= candidate.length || candidate.codeUnitAt(k) != 58 /* ':' */) {
+    return false;
+  }
+  var prev = start - 1;
+  while (prev >= 0 && candidate.codeUnitAt(prev) <= 32) {
+    prev--;
+  }
+  if (prev < 0) return false;
+  final prevCu = candidate.codeUnitAt(prev);
+  return prevCu == 123 /* '{' */ || prevCu == 44 /* ',' */;
+}
+
+String _decodeJsEscapes(String src) {
+  var out = src
+      .replaceAll(_kLineContRe, '')
+      .replaceAllMapped(_kUnicodeBraceEscapeRe, (m) {
+    final cp = int.tryParse(m.group(1)!, radix: 16);
+    return (cp != null && cp <= 0x10ffff) ? String.fromCharCode(cp) : '';
+  });
+  out = out.replaceAllMapped(_kUnicode4EscapeRe, (m) {
+    final cp = int.tryParse(m.group(1)!, radix: 16);
+    return cp != null ? String.fromCharCode(cp) : '';
+  });
+  out = out.replaceAllMapped(_kHexEscapeRe, (m) {
+    final cp = int.tryParse(m.group(1)!, radix: 16);
+    return cp != null ? String.fromCharCode(cp) : '';
+  });
+  return out.replaceAllMapped(_kOctalEscapeRe, (m) {
+    final cp = int.tryParse(m.group(1)!, radix: 8);
+    return cp != null ? String.fromCharCode(cp) : '';
+  });
+}
+
+String _collapseConcatStrings(String src) {
+  var out = src;
+  for (var pass = 0; pass < 4; pass++) {
+    var next = out.replaceAllMapped(_kTplStrInterpRe, (m) {
+      final head = m.group(1)!;
+      final mid = m.group(2) ?? m.group(3) ?? '';
+      final tail = m.group(4)!;
+      return '`$head$mid$tail`';
+    });
+    next = next.replaceAllMapped(
+      _kConcatIdentStrRe,
+      (m) => "'${m.group(2)!}${m.group(4)!}'",
+    );
+    if (next == out) break;
+    out = next;
+  }
+  return out;
+}
+
+/// Validates air-gapped `AppService` Vibe-Snippet source: enforces `<= 64 KiB`
+/// and rejects any DOM, network, storage, popup, prototype, or dynamic code-gen globals.
 void validateMiniProgramSource(String source) {
+  if (source.trim().isEmpty) {
+    throw const FormatException('Vibe-Snippet source must be non-empty');
+  }
   final byteLen = utf8.encode(source).length;
   if (byteLen > kMaxVibeSetDataBytes) {
     throw FormatException(
-      'Mini Program source exceeds 64 KiB limit ($byteLen bytes)',
+      'Vibe-Snippet source exceeds 64 KiB limit ($byteLen bytes)',
     );
   }
-  final stripped = _stripCommentsAndStrings(source);
-  final identRe = RegExp(r'(?<![.\w$])([A-Za-z_$][A-Za-z0-9_$]*)\b');
-  for (final m in identRe.allMatches(stripped)) {
-    final ident = m.group(1)!;
-    var k = m.end;
-    while (k < stripped.length && stripped.codeUnitAt(k) <= 32) {
-      k++;
+  final (:noComments, :stripped) = _scanSourceForSecurity(source);
+  final decodedStripped = _decodeJsEscapes(stripped);
+  final decodedNoComments = _decodeJsEscapes(noComments);
+  final collapsedAll = _collapseConcatStrings(decodedNoComments);
+
+  if (_kDynImportRe.hasMatch(stripped) ||
+      _kDynImportRe.hasMatch(decodedStripped)) {
+    throw const FormatException(
+      'Vibe-Snippet logic forbids dynamic import()',
+    );
+  }
+
+  for (final candidate in <String>[stripped, decodedStripped]) {
+    for (final m in _kIdentRe.allMatches(candidate)) {
+      final ident = m.group(1)!;
+      if (!_isObjectLiteralKey(candidate, m.start, m.end) &&
+          _kForbiddenMiniProgramGlobals.contains(ident)) {
+        throw FormatException(
+          'Vibe-Snippet logic forbids browser/network global "$ident"',
+        );
+      }
     }
-    final isObjectKey = k < stripped.length && stripped[k] == ':';
-    if (!isObjectKey && _kForbiddenMiniProgramGlobals.contains(ident)) {
+    final protoMatch = _kProtoWordRe.firstMatch(candidate);
+    if (protoMatch != null) {
       throw FormatException(
-        'Mini Program logic forbids browser/network global "$ident"',
+        'Vibe-Snippet logic forbids prototype access "${protoMatch.group(1)}"',
       );
     }
   }
-  final globalPropRe = RegExp(
-    r'\bglobalThis\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)',
-  );
-  for (final m in globalPropRe.allMatches(stripped)) {
-    final prop = m.group(1)!;
-    if (_kForbiddenMiniProgramGlobals.contains(prop) || prop == 'open') {
-      throw FormatException('Mini Program logic forbids globalThis.$prop');
-    }
+
+  final bracketMatch = _kProtoBracketRe.firstMatch(noComments) ??
+      _kProtoBracketRe.firstMatch(decodedNoComments) ??
+      _kProtoBracketRe.firstMatch(collapsedAll);
+  if (bracketMatch != null) {
+    throw FormatException(
+      'Vibe-Snippet logic forbids prototype access "${bracketMatch.group(1)}"',
+    );
   }
 }
 
-String _stripCommentsAndStrings(String src) {
-  final buf = StringBuffer();
+({String noComments, String stripped}) _scanSourceForSecurity(String src) {
+  final noComments = StringBuffer();
+  final stripped = StringBuffer();
+  final tplBraceStack = <int>[];
   var i = 0;
-  while (i < src.length) {
-    final ch = src[i];
-    if (ch == '/' && i + 1 < src.length && src[i + 1] == '/') {
-      while (i < src.length && src[i] != '\n') {
-        i++;
+  final len = src.length;
+
+  while (i < len) {
+    final cu = src.codeUnitAt(i);
+
+    if (cu == 47 /* '/' */ && i + 1 < len) {
+      final next = src.codeUnitAt(i + 1);
+      if (next == 47 /* '/' */) {
+        i += 2;
+        while (i < len && src.codeUnitAt(i) != 10 /* '\n' */) {
+          i++;
+        }
+        noComments.write(' ');
+        stripped.write(' ');
+        continue;
       }
-      continue;
-    }
-    if (ch == '/' && i + 1 < src.length && src[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < src.length && !(src[i] == '*' && src[i + 1] == '/')) {
-        i++;
+      if (next == 42 /* '*' */) {
+        i += 2;
+        while (i + 1 < len &&
+            !(src.codeUnitAt(i) == 42 && src.codeUnitAt(i + 1) == 47)) {
+          i++;
+        }
+        i += 2;
+        noComments.write(' ');
+        stripped.write(' ');
+        continue;
       }
-      i += 2;
-      buf.write(' ');
-      continue;
     }
-    if (ch == "'" || ch == '"' || ch == '`') {
-      final quote = ch;
+
+    if (cu == 39 /* "'" */ || cu == 34 /* '"' */) {
+      final start = i;
       i++;
-      while (i < src.length && src[i] != quote) {
-        if (src[i] == r'\') i++;
+      while (i < len && src.codeUnitAt(i) != cu) {
+        if (src.codeUnitAt(i) == 92 /* '\' */ && i + 1 < len) i++;
         i++;
       }
-      i++;
-      buf.write('""');
+      if (i < len) i++;
+      noComments.write(src.substring(start, i));
+      stripped.write('""');
       continue;
     }
-    buf.write(ch);
+
+    if (cu == 96 /* '`' */) {
+      final start = i;
+      i++;
+      var interpHit = false;
+      while (i < len) {
+        final cur = src.codeUnitAt(i);
+        if (cur == 92 /* '\' */ && i + 1 < len) {
+          i += 2;
+          continue;
+        }
+        if (cur == 36 /* '$' */ &&
+            i + 1 < len &&
+            src.codeUnitAt(i + 1) == 123) {
+          i += 2;
+          noComments.write(src.substring(start, i));
+          stripped.write('""+(');
+          tplBraceStack.add(1);
+          interpHit = true;
+          break;
+        }
+        if (cur == 96) {
+          i++;
+          break;
+        }
+        i++;
+      }
+      if (!interpHit) {
+        noComments.write(src.substring(start, i));
+        stripped.write('""');
+      }
+      continue;
+    }
+
+    if (tplBraceStack.isNotEmpty) {
+      if (cu == 123 /* '{' */) {
+        tplBraceStack[tplBraceStack.length - 1] += 1;
+      } else if (cu == 125 /* '}' */) {
+        tplBraceStack[tplBraceStack.length - 1] -= 1;
+        if (tplBraceStack.last == 0) {
+          tplBraceStack.removeLast();
+          i++;
+          final tailStart = i;
+          var nextInterp = false;
+          while (i < len) {
+            final cur = src.codeUnitAt(i);
+            if (cur == 92 && i + 1 < len) {
+              i += 2;
+              continue;
+            }
+            if (cur == 36 && i + 1 < len && src.codeUnitAt(i + 1) == 123) {
+              i += 2;
+              noComments.write('}');
+              noComments.write(src.substring(tailStart, i));
+              stripped.write(')+""+(');
+              tplBraceStack.add(1);
+              nextInterp = true;
+              break;
+            }
+            if (cur == 96) {
+              i++;
+              break;
+            }
+            i++;
+          }
+          if (!nextInterp) {
+            noComments.write('}');
+            noComments.write(src.substring(tailStart, i));
+            stripped.write(')+""');
+          }
+          continue;
+        }
+      }
+    }
+
+    noComments.writeCharCode(cu);
+    stripped.writeCharCode(cu);
     i++;
   }
-  return buf.toString();
+
+  return (
+    noComments: noComments.toString(),
+    stripped: stripped.toString(),
+  );
 }
 
-/// Parses an air-gapped `defineMiniProgram({ ... })` script into a pure-Dart
-/// [VibeMiniProgramDefinition].
+/// Validates air-gapped `AppService` Vibe Mini Program source (`<= 64 KiB` UTF-8)
+/// and rejects DOM, network, storage, popup, prototype, escape obfuscation, and
+/// dynamic `import()` / `eval` / `Function` vectors.
+void validateVibeSnippetSource(String source) =>
+    validateMiniProgramSource(source);
+
+/// Parses an air-gapped `defineMiniProgram({ ... })` script (or
+/// `defineVibeSnippet({ ... })` alias) into a pure-Dart [VibeMiniProgramDefinition].
 VibeMiniProgramDefinition parseMiniProgramDefinitionFromSource(
   String source, {
   Map<String, Object?>? initialDataOverride,
@@ -152,6 +398,18 @@ VibeMiniProgramDefinition parseMiniProgramDefinitionFromSource(
   );
 }
 
+/// Compatibility alias for [parseMiniProgramDefinitionFromSource].
+VibeMiniProgramDefinition parseVibeSnippetDefinitionFromSource(
+  String source, {
+  Map<String, Object?>? initialDataOverride,
+  Map<String, Object?>? templateOverride,
+}) =>
+    parseMiniProgramDefinitionFromSource(
+      source,
+      initialDataOverride: initialDataOverride,
+      templateOverride: templateOverride,
+    );
+
 class _ParsedHandler {
   const _ParsedHandler(this.params, this.body);
   final List<String> params;
@@ -201,19 +459,17 @@ class _MiniProgramScriptParser {
           );
         }
       } on Object {
-        // Fall through to JS defineMiniProgram parser.
+        // Fall through to JS defineVibeSnippet parser.
       }
     }
 
-    final defMatch = RegExp(
-      r'(?:defineMiniProgram|VibeMiniApp|MiniProgram)\s*\(',
-    ).firstMatch(src);
+    final defMatch = _kDefMiniProgramRe.firstMatch(src);
     final objStart = defMatch != null
         ? src.indexOf('{', defMatch.end - 1)
         : src.indexOf('{');
     if (objStart < 0) {
       throw const FormatException(
-        'Mini Program source must call defineMiniProgram({ ... })',
+        'Vibe-Snippet source must call defineVibeSnippet({ ... })',
       );
     }
     final objEnd = _findMatchingBrace(src, objStart, '{', '}');
@@ -245,11 +501,21 @@ class _MiniProgramScriptParser {
           final inner = trimmed.substring(1, trimmed.length - 1);
           for (final sub in _scanObjectMembers(inner)) {
             if (sub.fnBody != null) {
+              if (!isValidMiniProgramHandlerName(sub.name)) {
+                throw FormatException(
+                  'Forbidden Vibe-Snippet method name "${sub.name}"',
+                );
+              }
               methods[sub.name] = _ParsedHandler(sub.params, sub.fnBody!);
             }
           }
         }
       } else if (m.fnBody != null) {
+        if (!isValidMiniProgramHandlerName(m.name)) {
+          throw FormatException(
+            'Forbidden Vibe-Snippet method name "${m.name}"',
+          );
+        }
         methods[m.name] = _ParsedHandler(m.params, m.fnBody!);
       }
     }
@@ -270,7 +536,7 @@ class _MiniProgramScriptParser {
     while (i < src.length) {
       i = _skipWsAndComments(src, i);
       if (i >= src.length) break;
-      if (src[i] == ',') {
+      if (src.codeUnitAt(i) == 44 /* ',' */) {
         i++;
         continue;
       }
@@ -280,7 +546,8 @@ class _MiniProgramScriptParser {
       i = _skipWsAndComments(src, keyRes.next);
       if (i >= src.length) break;
 
-      if (src[i] == '(') {
+      final cu = src.codeUnitAt(i);
+      if (cu == 40 /* '(' */) {
         final pEnd = _findMatchingBrace(src, i, '(', ')');
         final params = _splitParams(src.substring(i + 1, pEnd));
         i = _skipWsAndComments(src, pEnd + 1);
@@ -295,7 +562,7 @@ class _MiniProgramScriptParser {
         continue;
       }
 
-      if (src[i] == ':') {
+      if (cu == 58 /* ':' */) {
         i = _skipWsAndComments(src, i + 1);
         if (src.startsWith('function', i)) {
           final pStart = src.indexOf('(', i + 8);
@@ -335,12 +602,12 @@ class _MiniProgramScriptParser {
 
   static ({String name, int next})? readPropertyName(String src, int pos) {
     if (pos >= src.length) return null;
-    final ch = src[pos];
-    if (ch == "'" || ch == '"') {
+    final cu = src.codeUnitAt(pos);
+    if (cu == 39 || cu == 34) {
       final end = _skipString(src, pos);
       return (name: src.substring(pos + 1, end - 1), next: end);
     }
-    final m = RegExp(r'[A-Za-z_$][A-Za-z0-9_$]*').matchAsPrefix(src, pos);
+    final m = _kPropIdentRe.matchAsPrefix(src, pos);
     if (m == null) return null;
     return (name: m.group(0)!, next: m.end);
   }
@@ -351,31 +618,36 @@ class _MiniProgramBodyRunner {
   final VibeMiniProgramScope scope;
   final Map<String, Object?> locals;
 
-  void runBlock(String block) {
+  void runBlock(String block, [int depth = 0]) {
+    if (depth > 16) {
+      throw const FormatException('Vibe-Snippet block nesting limit exceeded');
+    }
     var i = 0;
     var steps = 0;
     while (i < block.length) {
       if (++steps > 500) {
-        throw const FormatException('Mini Program statement budget exceeded');
+        throw const FormatException('Vibe-Snippet statement budget exceeded');
       }
       i = _skipWsAndComments(block, i);
       if (i >= block.length) break;
-      if (block[i] == ';') {
+      if (block.codeUnitAt(i) == 59 /* ';' */) {
         i++;
         continue;
       }
       if (block.startsWith('return', i) &&
-          (i + 6 == block.length || !RegExp(r'[\w$]').hasMatch(block[i + 6]))) {
+          (i + 6 == block.length ||
+              !_isWordOrDollarCodeUnit(block.codeUnitAt(i + 6)))) {
         return;
       }
       if (block.startsWith('if', i) &&
-          (i + 2 < block.length && !RegExp(r'[\w$]').hasMatch(block[i + 2]))) {
+          (i + 2 < block.length &&
+              !_isWordOrDollarCodeUnit(block.codeUnitAt(i + 2)))) {
         final pStart = block.indexOf('(', i + 2);
         final pEnd = _findMatchingBrace(block, pStart, '(', ')');
         final cond = evalExpr(block.substring(pStart + 1, pEnd));
         var after = _skipWsAndComments(block, pEnd + 1);
         String thenBody;
-        if (block[after] == '{') {
+        if (after < block.length && block.codeUnitAt(after) == 123 /* '{' */) {
           final bEnd = _findMatchingBrace(block, after, '{', '}');
           thenBody = block.substring(after + 1, bEnd);
           after = _skipWsAndComments(block, bEnd + 1);
@@ -387,9 +659,10 @@ class _MiniProgramBodyRunner {
         String? elseBody;
         if (block.startsWith('else', after) &&
             (after + 4 == block.length ||
-                !RegExp(r'[\w$]').hasMatch(block[after + 4]))) {
+                !_isWordOrDollarCodeUnit(block.codeUnitAt(after + 4)))) {
           after = _skipWsAndComments(block, after + 4);
-          if (after < block.length && block[after] == '{') {
+          if (after < block.length &&
+              block.codeUnitAt(after) == 123 /* '{' */) {
             final eEnd = _findMatchingBrace(block, after, '{', '}');
             elseBody = block.substring(after + 1, eEnd);
             after = eEnd + 1;
@@ -400,9 +673,9 @@ class _MiniProgramBodyRunner {
           }
         }
         if (isVibeBindingTruthy(cond)) {
-          runBlock(thenBody);
+          runBlock(thenBody, depth + 1);
         } else if (elseBody != null) {
-          runBlock(elseBody);
+          runBlock(elseBody, depth + 1);
         }
         i = after;
         continue;
@@ -416,10 +689,7 @@ class _MiniProgramBodyRunner {
       i = stmtEnd + 1;
       if (stmt.isEmpty) continue;
 
-      final setDataMatch = RegExp(
-        r'^(?:this\s*\.\s*)?setData\s*\((.*)\)$',
-        dotAll: true,
-      ).firstMatch(stmt);
+      final setDataMatch = _kSetDataStmtRe.firstMatch(stmt);
       if (setDataMatch != null) {
         final patchVal = evalExpr(setDataMatch.group(1)!);
         if (patchVal is Map) {
@@ -430,21 +700,21 @@ class _MiniProgramBodyRunner {
         continue;
       }
 
-      final declMatch = RegExp(
-        r'^(?:const|let|var)\s+([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+)$',
-        dotAll: true,
-      ).firstMatch(stmt);
+      final declMatch = _kDeclStmtRe.firstMatch(stmt);
       if (declMatch != null) {
-        locals[declMatch.group(1)!] = evalExpr(declMatch.group(2)!);
+        final varName = declMatch.group(1)!;
+        if (!_kForbiddenPrototypeTokens.contains(varName)) {
+          locals[varName] = evalExpr(declMatch.group(2)!);
+        }
         continue;
       }
 
-      final assignMatch = RegExp(
-        r'^([A-Za-z_$][A-Za-z0-9_$]*)\s*=\s*(.+)$',
-        dotAll: true,
-      ).firstMatch(stmt);
+      final assignMatch = _kAssignStmtRe.firstMatch(stmt);
       if (assignMatch != null && !stmt.contains('==')) {
-        locals[assignMatch.group(1)!] = evalExpr(assignMatch.group(2)!);
+        final varName = assignMatch.group(1)!;
+        if (!_kForbiddenPrototypeTokens.contains(varName)) {
+          locals[varName] = evalExpr(assignMatch.group(2)!);
+        }
       }
     }
   }
@@ -458,9 +728,7 @@ class _MiniProgramBodyRunner {
     if (s.startsWith('[') && s.endsWith(']')) {
       return _evalArrayLiteral(s.substring(1, s.length - 1));
     }
-    final mathMatch = RegExp(
-      r'^Math\.(round|floor|ceil|abs|min|max)\(([\s\S]*)\)$',
-    ).firstMatch(s);
+    final mathMatch = _kMathCallRe.firstMatch(s);
     if (mathMatch != null) {
       final fn = mathMatch.group(1)!;
       final args = _splitTopLevelArgs(mathMatch.group(2)!)
@@ -477,7 +745,7 @@ class _MiniProgramBodyRunner {
         _ => args.first,
       };
     }
-    final normalized = s.replaceAll(RegExp(r'\bthis\.data\b'), '__pageData');
+    final normalized = s.replaceAll(_kThisDataRe, '__pageData');
     return evaluateVibeBindingExpression(normalized, <String, Object?>{
       ...locals,
       '__pageData': scope.data,
@@ -495,12 +763,12 @@ class _MiniProgramBodyRunner {
     while (i < inner.length) {
       i = _skipWsAndComments(inner, i);
       if (i >= inner.length) break;
-      if (inner[i] == ',') {
+      if (inner.codeUnitAt(i) == 44 /* ',' */) {
         i++;
         continue;
       }
       String key;
-      if (inner[i] == '[') {
+      if (inner.codeUnitAt(i) == 91 /* '[' */) {
         final kEnd = _findMatchingBrace(inner, i, '[', ']');
         key = evalExpr(inner.substring(i + 1, kEnd))?.toString() ?? '';
         i = kEnd + 1;
@@ -510,8 +778,11 @@ class _MiniProgramBodyRunner {
         key = kRes.name;
         i = kRes.next;
       }
+      if (_kForbiddenPrototypeTokens.contains(key)) {
+        throw FormatException('Forbidden object key "$key"');
+      }
       i = _skipWsAndComments(inner, i);
-      if (i < inner.length && inner[i] == ':') {
+      if (i < inner.length && inner.codeUnitAt(i) == 58 /* ':' */) {
         i = _skipWsAndComments(inner, i + 1);
         final vEnd = _findTopLevelCommaOrEnd(inner, i);
         out[key] = evalExpr(inner.substring(i, vEnd));
@@ -560,18 +831,25 @@ List<String> _splitTopLevelArgs(String src) {
 int _skipWsAndComments(String s, int start) {
   var i = start;
   while (i < s.length) {
-    if (s.codeUnitAt(i) <= 32) {
+    final cu = s.codeUnitAt(i);
+    if (cu <= 32) {
       i++;
-    } else if (i + 1 < s.length && s[i] == '/' && s[i + 1] == '/') {
-      while (i < s.length && s[i] != '\n') {
-        i++;
+    } else if (cu == 47 && i + 1 < s.length) {
+      final next = s.codeUnitAt(i + 1);
+      if (next == 47) {
+        while (i < s.length && s.codeUnitAt(i) != 10) {
+          i++;
+        }
+      } else if (next == 42) {
+        i += 2;
+        while (i + 1 < s.length &&
+            !(s.codeUnitAt(i) == 42 && s.codeUnitAt(i + 1) == 47)) {
+          i++;
+        }
+        i += 2;
+      } else {
+        break;
       }
-    } else if (i + 1 < s.length && s[i] == '/' && s[i + 1] == '*') {
-      i += 2;
-      while (i + 1 < s.length && !(s[i] == '*' && s[i + 1] == '/')) {
-        i++;
-      }
-      i += 2;
     } else {
       break;
     }
@@ -580,10 +858,10 @@ int _skipWsAndComments(String s, int start) {
 }
 
 int _skipString(String s, int start) {
-  final quote = s[start];
+  final quote = s.codeUnitAt(start);
   var i = start + 1;
-  while (i < s.length && s[i] != quote) {
-    if (s[i] == r'\') i++;
+  while (i < s.length && s.codeUnitAt(i) != quote) {
+    if (s.codeUnitAt(i) == 92 /* '\' */) i++;
     i++;
   }
   return i < s.length ? i + 1 : i;
@@ -591,50 +869,56 @@ int _skipString(String s, int start) {
 
 int _findMatchingBrace(String s, int openIdx, String openCh, String closeCh) {
   if (openIdx < 0 || openIdx >= s.length || s[openIdx] != openCh) {
-    throw FormatException('Expected "$openCh" in Mini Program source');
+    throw FormatException('Expected "$openCh" in Vibe-Snippet source');
   }
+  final openCu = openCh.codeUnitAt(0);
+  final closeCu = closeCh.codeUnitAt(0);
   var depth = 0;
   var i = openIdx;
   while (i < s.length) {
-    final ch = s[i];
-    if (ch == "'" || ch == '"' || ch == '`') {
+    final cu = s.codeUnitAt(i);
+    if (cu == 39 || cu == 34 || cu == 96) {
       i = _skipString(s, i);
       continue;
     }
-    if (ch == '/' && i + 1 < s.length && (s[i + 1] == '/' || s[i + 1] == '*')) {
+    if (cu == 47 &&
+        i + 1 < s.length &&
+        (s.codeUnitAt(i + 1) == 47 || s.codeUnitAt(i + 1) == 42)) {
       i = _skipWsAndComments(s, i);
       continue;
     }
-    if (ch == openCh) {
+    if (cu == openCu) {
       depth++;
-    } else if (ch == closeCh) {
+    } else if (cu == closeCu) {
       if (--depth == 0) return i;
     }
     i++;
   }
-  throw FormatException('Unmatched "$openCh" in Mini Program source');
+  throw FormatException('Unmatched "$openCh" in Vibe-Snippet source');
 }
 
 int _findTopLevelCommaOrEnd(String s, int start) {
   var depthCurly = 0, depthBrack = 0, depthParen = 0;
   var i = start;
   while (i < s.length) {
-    final ch = s[i];
-    if (ch == "'" || ch == '"' || ch == '`') {
+    final cu = s.codeUnitAt(i);
+    if (cu == 39 || cu == 34 || cu == 96) {
       i = _skipString(s, i);
       continue;
     }
-    if (ch == '/' && i + 1 < s.length && (s[i + 1] == '/' || s[i + 1] == '*')) {
+    if (cu == 47 &&
+        i + 1 < s.length &&
+        (s.codeUnitAt(i + 1) == 47 || s.codeUnitAt(i + 1) == 42)) {
       i = _skipWsAndComments(s, i);
       continue;
     }
-    if (ch == '{') depthCurly++;
-    if (ch == '}') depthCurly--;
-    if (ch == '[') depthBrack++;
-    if (ch == ']') depthBrack--;
-    if (ch == '(') depthParen++;
-    if (ch == ')') depthParen--;
-    if (ch == ',' && depthCurly == 0 && depthBrack == 0 && depthParen == 0) {
+    if (cu == 123) depthCurly++;
+    if (cu == 125) depthCurly--;
+    if (cu == 91) depthBrack++;
+    if (cu == 93) depthBrack--;
+    if (cu == 40) depthParen++;
+    if (cu == 41) depthParen--;
+    if (cu == 44 && depthCurly == 0 && depthBrack == 0 && depthParen == 0) {
       return i;
     }
     i++;
@@ -646,26 +930,28 @@ int _findStatementEnd(String s, int start) {
   var depthCurly = 0, depthBrack = 0, depthParen = 0;
   var i = start;
   while (i < s.length) {
-    final ch = s[i];
-    if (ch == "'" || ch == '"' || ch == '`') {
+    final cu = s.codeUnitAt(i);
+    if (cu == 39 || cu == 34 || cu == 96) {
       i = _skipString(s, i);
       continue;
     }
-    if (ch == '/' && i + 1 < s.length && (s[i + 1] == '/' || s[i + 1] == '*')) {
+    if (cu == 47 &&
+        i + 1 < s.length &&
+        (s.codeUnitAt(i + 1) == 47 || s.codeUnitAt(i + 1) == 42)) {
       i = _skipWsAndComments(s, i);
       continue;
     }
-    if (ch == '{') depthCurly++;
-    if (ch == '}') depthCurly--;
-    if (ch == '[') depthBrack++;
-    if (ch == ']') depthBrack--;
-    if (ch == '(') depthParen++;
-    if (ch == ')') depthParen--;
-    if ((ch == ';' || ch == '\n') &&
+    if (cu == 123) depthCurly++;
+    if (cu == 125) depthCurly--;
+    if (cu == 91) depthBrack++;
+    if (cu == 93) depthBrack--;
+    if (cu == 40) depthParen++;
+    if (cu == 41) depthParen--;
+    if ((cu == 59 /* ';' */ || cu == 10 /* '\n' */) &&
         depthCurly == 0 &&
         depthBrack == 0 &&
         depthParen == 0) {
-      if (ch == '\n') {
+      if (cu == 10) {
         final nextIdx = _skipWsAndComments(s, i + 1);
         if (nextIdx < s.length && '.?:+-*/&|='.contains(s[nextIdx])) {
           i++;

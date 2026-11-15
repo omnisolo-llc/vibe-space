@@ -1,5 +1,20 @@
 'use strict';
 const MAX_MESSAGE = 1048576, MAX_MEMORY = 33554432;
+const _SECTION_CAPS = {1:10000,3:10000,6:1000,9:1000,11:1000};
+const _VAL_TYPES = new Set([0x7f,0x7e,0x7d,0x7c,0x70,0x6f]);
+const _PREFIX_RE = /^[a-zA-Z_][a-zA-Z0-9_]{0,31}$/;
+const _utf8Decoder = new TextDecoder('utf-8', {fatal:true});
+const _post = self.postMessage.bind(self);
+const _BLOCKED_GLOBALS = ['fetch','XMLHttpRequest','WebSocket','EventSource','WebTransport','RTCPeerConnection','webkitRTCPeerConnection','RTCDataChannel','BroadcastChannel','Worker','SharedWorker','ServiceWorkerContainer','caches','indexedDB','localStorage','sessionStorage','cookieStore','importScripts','navigator','location','postMessage'];
+{
+  let _target = self;
+  while (_target && _target !== Object.prototype) {
+    for (const k of _BLOCKED_GLOBALS) {
+      try { Object.defineProperty(_target, k, {value: undefined, writable: false, configurable: false}); } catch (_) {}
+    }
+    _target = Object.getPrototypeOf(_target);
+  }
+}
 function decode(value) { return Uint8Array.from(atob(value), c => c.charCodeAt(0)); }
 // Bound declarations in the already signature-verified module before
 // instantiation. Native Wasmi applies the same caps through its store limiter;
@@ -35,17 +50,16 @@ function resources(bytes) {
     if (end > bytes.length) throw Error('section');
     if (id === 2 && uint() !== 0) throw Error('imports denied');
     // Refuse compiler amplification before WebAssembly.compile allocates IR.
-    const sectionCaps = {1:10000,3:10000,6:1000,9:1000,11:1000};
-    if (sectionCaps[id]) {
+    if (_SECTION_CAPS[id]) {
       const count = uint();
-      if (count > sectionCaps[id]) throw Error('compiler resource limit');
+      if (count > _SECTION_CAPS[id]) throw Error('compiler resource limit');
       if (id === 1) {
         for (let i=0;i<count;i++) {
           if (bytes[p++] !== 0x60) throw Error('unsupported type');
           for (let kind=0;kind<2;kind++) {
             const arity = uint(); if (arity > 32) throw Error('compiler arity limit');
             for (let j=0;j<arity;j++) {
-              if (![0x7f,0x7e,0x7d,0x7c,0x70,0x6f].includes(bytes[p++])) throw Error('unsupported value type');
+              if (!_VAL_TYPES.has(bytes[p++])) throw Error('unsupported value type');
             }
           }
         }
@@ -86,7 +100,7 @@ self.onmessage = async event => {
     const {exports:e} = await WebAssembly.instantiate(module, {});
     phase = 'abi';
     const prefixes = Array.isArray(payload.entrypointPrefixes) && payload.entrypointPrefixes.length
-      ? payload.entrypointPrefixes.filter(p => typeof p === 'string' && /^[a-zA-Z_][a-zA-Z0-9_]{0,31}$/.test(p))
+      ? payload.entrypointPrefixes.filter(p => typeof p === 'string' && _PREFIX_RE.test(p))
       : ['vibe_'];
     const resolveExport = suffix => {
       for (const prefix of prefixes) {
@@ -108,8 +122,8 @@ self.onmessage = async event => {
     const unsigned = BigInt.asUintN(64, packed);
     const offset = Number(unsigned & 0xffffffffn), length = Number(unsigned >> 32n);
     if (length > MAX_MESSAGE || e.memory.buffer.byteLength > MAX_MEMORY || offset + length > e.memory.buffer.byteLength) throw Error('output bounds');
-    const result = JSON.parse(new TextDecoder('utf-8', {fatal:true}).decode(new Uint8Array(e.memory.buffer, offset, length)));
+    const result = JSON.parse(_utf8Decoder.decode(new Uint8Array(e.memory.buffer, offset, length)));
     if (!result || Array.isArray(result) || typeof result !== 'object') throw Error('output object');
-    self.postMessage(JSON.stringify({result}));
-  } catch (_) { self.postMessage(JSON.stringify({error:true,phase})); }
+    _post(JSON.stringify({result}));
+  } catch (_) { _post(JSON.stringify({error:true,phase})); }
 };

@@ -5,6 +5,9 @@ import 'host.dart';
 import 'mcp_tool_catalog.dart';
 import 'vibe_trigger_condition.dart';
 
+final RegExp _kWhitespaceSplitRe = RegExp(r'\s+');
+final RegExp _kKubectlResourceSplitRe = RegExp(r'[,/]');
+
 /// Rendering tier supported by Vibe Canvas (`vibe.canvas` / `client.canvas.render`).
 enum VibeCanvasFormat {
   /// Rich Markdown document (with optional Mermaid diagrams and syntax highlighting).
@@ -334,7 +337,7 @@ bool isReadOnlyCanvasShellCommand(String command) {
     final segTrimmed = segments[segIndex].trim();
     if (segTrimmed.isEmpty) return false;
 
-    final tokens = segTrimmed.split(RegExp(r'\s+'));
+    final tokens = segTrimmed.split(_kWhitespaceSplitRe);
     var tokenOffset = 0;
     if (tokens[0] == 'LC_ALL=C' || tokens[0] == 'LANG=C') {
       tokenOffset = 1;
@@ -472,7 +475,7 @@ bool _isAllowedReadOnlySegment(String binary, List<String> args) {
       }
       if (subcommand == 'get' || subcommand == 'describe') {
         for (final arg in args.skip(1)) {
-          final parts = arg.toLowerCase().split(RegExp(r'[,/]'));
+          final parts = arg.toLowerCase().split(_kKubectlResourceSplitRe);
           if (parts.contains('secret') || parts.contains('secrets')) {
             return false;
           }

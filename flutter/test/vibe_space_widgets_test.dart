@@ -269,14 +269,15 @@ void main() {
           customRunner: (vibe, input) {
             final data = input['data'] as Map<String, Object?>? ??
                 const <String, Object?>{};
-            final rows = data['telemetry.disk'] as List<Object?>? ??
-                const <Object?>[];
+            final rows =
+                data['telemetry.disk'] as List<Object?>? ?? const <Object?>[];
             final first = rows.isNotEmpty
                 ? rows.first as Map<String, Object?>
                 : const <String, Object?>{};
             final hostVal = first['server'];
             final mount = first['mount']?.toString() ?? '/';
-            final pct = ((first['usedFraction'] as num?)?.toDouble() ?? 0) * 100;
+            final pct =
+                ((first['usedFraction'] as num?)?.toDouble() ?? 0) * 100;
 
             return <String, Object?>{
               'state': input['state'],
@@ -375,7 +376,8 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('Pause'));
         await tester.pumpAndSettle();
-        expect(find.text('Paused \u2014 live updates stopped.'), findsOneWidget);
+        expect(
+            find.text('Paused \u2014 live updates stopped.'), findsOneWidget);
 
         await tester.tap(find.widgetWithText(FilledButton, 'Resume'));
         await tester.pumpAndSettle();
@@ -386,7 +388,8 @@ void main() {
         await tester.pumpAndSettle();
         await tester.tap(find.text('Rename'));
         await tester.pumpAndSettle();
-        final renameInput = find.byKey(Key('vs-rename-input-${rec.instanceId}'));
+        final renameInput =
+            find.byKey(Key('vs-rename-input-${rec.instanceId}'));
         expect(renameInput, findsOneWidget);
         await tester.enterText(renameInput, 'Renamed Disks');
         await tester.testTextInput.receiveAction(TextInputAction.done);

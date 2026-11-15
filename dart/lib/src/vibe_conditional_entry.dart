@@ -1,25 +1,29 @@
 import 'dart:convert';
 
 import 'canvas.dart';
-import 'vibe_mini_program.dart';
 import 'vibe_protocol.dart';
 import 'vibe_runtime_config.dart';
+import 'vibe_mini_program.dart';
 import 'vibe_trigger_condition.dart';
 import 'vibe_vxml_template.dart';
+
+final RegExp _kNonSlugCharRe = RegExp(r'[^a-z0-9-]+');
+final RegExp _kMultiDashRe = RegExp(r'-{2,}');
+final RegExp _kEdgeDashRe = RegExp(r'^-+|-+$');
 
 String _sanitizeVibeSpecId(String raw) {
   final cleaned = raw
       .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9-]+'), '-')
-      .replaceAll(RegExp(r'-{2,}'), '-')
-      .replaceAll(RegExp(r'^-+|-+$'), '');
+      .replaceAll(_kNonSlugCharRe, '-')
+      .replaceAll(_kMultiDashRe, '-')
+      .replaceAll(_kEdgeDashRe, '');
   if (cleaned.isEmpty) return 'custom-vibe';
   return cleaned.length <= 40 ? cleaned : cleaned.substring(0, 40);
 }
 
 /// Standardized Vibe-Space conditional config envelope (`id`, `name`/`title`,
 /// `enabled`, `isPreset`, `needs`, `when`) decoupled from its inner runtime
-/// (`miniprogram`, `vxml`, `wasm`, `js`, `a2ui`, `vibe_ui`, `markdown`, `dom`).
+/// (`vibe-snippet`, `vxml`, `wasm`, `js`, `a2ui`, `vibe_ui`, `markdown`, `dom`).
 class VibeConditionalEntry {
   const VibeConditionalEntry({
     required this.id,
@@ -165,6 +169,13 @@ class VibeConditionalEntry {
   final Map<String, Object?>? template;
   final Map<String, Object?>? initialData;
   final VibeMiniProgramDefinition? miniProgram;
+
+  /// Compatibility alias for [miniProgram].
+  VibeMiniProgramDefinition? get vibeSnippet => miniProgram;
+
+  /// Compatibility alias for [effectiveMiniProgram].
+  VibeMiniProgramDefinition? get effectiveVibeSnippet => effectiveMiniProgram;
+
   final Map<String, Object?>? style;
   final String? source;
   final String? wasmBase64;
@@ -217,7 +228,9 @@ class VibeConditionalEntry {
     if (runtime != null) return runtime!;
     if (miniProgram != null) return VibeRuntimeKind.miniProgram;
     final src = source?.trimLeft() ?? '';
-    if (src.contains('defineMiniProgram') || src.contains('VibeMiniApp')) {
+    if (src.contains('defineVibeSnippet') ||
+        src.contains('defineMiniProgram') ||
+        src.contains('VibeMiniApp')) {
       return VibeRuntimeKind.miniProgram;
     }
     if (template != null) {
@@ -252,7 +265,7 @@ class VibeConditionalEntry {
     return VibeRuntimeKind.vibeUi;
   }
 
-  /// Effective WeChat Mini Program definition when [effectiveRuntime] is
+  /// Effective `VibeSnippet` definition when [effectiveRuntime] is
   /// [VibeRuntimeKind.miniProgram] or [VibeRuntimeKind.vxml].
   VibeMiniProgramDefinition? get effectiveMiniProgram {
     if (miniProgram != null) {
@@ -403,6 +416,7 @@ class VibeConditionalEntry {
     Map<String, Object?>? template,
     Map<String, Object?>? initialData,
     VibeMiniProgramDefinition? miniProgram,
+    VibeMiniProgramDefinition? vibeSnippet,
     Map<String, Object?>? style,
     String? source,
     String? wasmBase64,
@@ -430,7 +444,7 @@ class VibeConditionalEntry {
       runtime: runtime ?? this.runtime,
       template: template ?? this.template,
       initialData: initialData ?? this.initialData,
-      miniProgram: miniProgram ?? this.miniProgram,
+      miniProgram: miniProgram ?? vibeSnippet ?? this.miniProgram,
       style: style ?? this.style,
       source: source ?? this.source,
       wasmBase64: wasmBase64 ?? this.wasmBase64,

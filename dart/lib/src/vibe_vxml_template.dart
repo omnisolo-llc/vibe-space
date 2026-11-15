@@ -1,11 +1,39 @@
 import 'compatibility_adapter.dart';
 import 'vibe_protocol.dart';
+import 'vibe_mini_program.dart'
+    show isValidMiniProgramHandlerName, kForbiddenVibeMethodNames;
 
 const int _kMaxForLoopItems = 200;
+const int _kMaxBindingExprLength = 2048;
+const int _kMaxBindingExprDepth = 16;
+
+const Set<String> _kBlockedScopeSegments = <String>{
+  '__proto__',
+  'constructor',
+  'prototype',
+};
 
 final RegExp _kSafeColorHexRe = RegExp(
   r'^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$',
 );
+final RegExp _kHyphenLetterRe = RegExp(r'-([a-zA-Z])');
+final RegExp _kVueForLoopRe = RegExp(
+  r'^\(?\s*([a-zA-Z_$][a-zA-Z0-9_$]*)(?:\s*,\s*([a-zA-Z_$][a-zA-Z0-9_$]*))?\s*\)?\s+in\s+(.+)$',
+);
+final RegExp _kTemplateMustacheRe = RegExp(r'\{\{([^}]+)\}\}');
+
+String _stripPxSuffix(String raw) =>
+    raw.endsWith('px') ? raw.substring(0, raw.length - 2) : raw;
+
+bool _isNumOrDotCodeUnit(int u) => (u >= 48 && u <= 57) || u == 46;
+
+bool _isIdentOrPathCodeUnit(int u) =>
+    (u >= 97 && u <= 122) ||
+    (u >= 65 && u <= 90) ||
+    (u >= 48 && u <= 57) ||
+    u == 95 ||
+    u == 36 ||
+    u == 46;
 const Set<String> _kSemanticStyleColors = <String>{
   'accent',
   'ok',
@@ -51,10 +79,10 @@ Map<String, Object?>? normalizeVibeStyleTokens(Object? rawStyle) {
       final rawVal = part.substring(idx + 1).trim();
       if (rawKey.isEmpty || rawVal.isEmpty) continue;
       final camel = rawKey.replaceAllMapped(
-        RegExp(r'-([a-zA-Z])'),
+        _kHyphenLetterRe,
         (m) => m.group(1)!.toUpperCase(),
       );
-      final asNum = double.tryParse(rawVal.replaceAll(RegExp(r'px$'), ''));
+      final asNum = double.tryParse(_stripPxSuffix(rawVal));
       map[camel] = asNum ?? rawVal;
     }
   } else if (rawStyle is Map) {
@@ -70,7 +98,7 @@ Map<String, Object?>? normalizeVibeStyleTokens(Object? rawStyle) {
     final v = map[key];
     if (v is num && v.isFinite) return v.toDouble().clamp(minV, maxV);
     if (v is String) {
-      final p = double.tryParse(v.trim().replaceAll(RegExp(r'px$'), ''));
+      final p = double.tryParse(_stripPxSuffix(v.trim()));
       if (p != null && p.isFinite) return p.clamp(minV, maxV);
     }
     return null;
@@ -121,14 +149,17 @@ Map<String, Object?>? normalizeVibeStyleTokens(Object? rawStyle) {
   return out.isEmpty ? null : out;
 }
 
-/// Resolves a dotted/bracket path (e.g. `bars[0].value`, `terminal.agy.tps`)
+/// Resolves a dotted/bracket path (e.g. `bars[0].value`, `metrics.cluster.rps`)
 /// against [scope] without executing code or unsealing `{ 'sealed': 'h_...' }`.
 (bool, Object?) lookupVibeScopePath(
   Map<String, Object?> scope,
-  String rawPath,
-) {
+  String rawPath, [
+  int lookupDepth = 0,
+]) {
+  if (lookupDepth > 8) return (false, null);
   final trimmed = rawPath.trim();
-  if (trimmed.isEmpty) return (false, null);
+  if (trimmed.isEmpty || trimmed.length > 512) return (false, null);
+  if (_kBlockedScopeSegments.contains(trimmed)) return (false, null);
   if (scope.containsKey(trimmed)) return (true, scope[trimmed]);
 
   final segments = <String>[];
@@ -152,7 +183,8 @@ Map<String, Object?>? normalizeVibeStyleTokens(Object? rawStyle) {
           (idxExpr.startsWith('"') && idxExpr.endsWith('"'))) {
         idxExpr = idxExpr.substring(1, idxExpr.length - 1);
       } else if (int.tryParse(idxExpr) == null) {
-        final (foundIdx, dynIdx) = lookupVibeScopePath(scope, idxExpr);
+        final (foundIdx, dynIdx) =
+            lookupVibeScopePath(scope, idxExpr, lookupDepth + 1);
         if (foundIdx && dynIdx != null) idxExpr = dynIdx.toString();
       }
       segments.add(idxExpr);
@@ -162,11 +194,12 @@ Map<String, Object?>? normalizeVibeStyleTokens(Object? rawStyle) {
     }
   }
   if (buf.isNotEmpty) segments.add(buf.toString());
-  if (segments.isEmpty) return (false, null);
+  if (segments.isEmpty || segments.length > 32) return (false, null);
 
   Object? cursor = scope;
   for (var i = 0; i < segments.length; i++) {
     final seg = segments[i];
+    if (_kBlockedScopeSegments.contains(seg)) return (false, null);
     if (cursor == null) return (false, null);
     if (VibeSealedHandle.tryParse(cursor) != null) return (false, null);
     if (seg == 'length') {
@@ -208,9 +241,13 @@ Object? evaluateVibeBindingExpression(
   String expr,
   Map<String, Object?> scope,
 ) {
-  final parser = _BindingExprParser(expr.trim(), scope);
-  if (parser.source.isEmpty) return null;
-  return parser.parseExpression();
+  final trimmed = expr.trim();
+  if (trimmed.isEmpty) return null;
+  if (trimmed.length > _kMaxBindingExprLength) {
+    throw const FormatException('Binding expression exceeds length limit');
+  }
+  final parser = _BindingExprParser(trimmed, scope);
+  return parser.parseExpression(0);
 }
 
 /// Truthiness semantics for `if` / `v-if` / `wx:if` directives.
@@ -273,12 +310,10 @@ List<Map<String, Object?>> _expandTemplateNode(
       scope: scope,
     );
     final results = <Map<String, Object?>>[];
+    final childScope = <String, Object?>{...scope};
     for (var i = 0; i < spec.items.length && i < _kMaxForLoopItems; i++) {
-      final childScope = <String, Object?>{
-        ...scope,
-        spec.itemVar: spec.items[i],
-        spec.indexVar: i,
-      };
+      childScope[spec.itemVar] = spec.items[i];
+      childScope[spec.indexVar] = i;
       results.addAll(_expandTemplateNode(withoutFor, childScope, depth));
     }
     return results;
@@ -308,7 +343,7 @@ List<Map<String, Object?>> _expandTemplateNode(
   for (final e in node.entries) {
     if (e.key.startsWith('data-') && e.key.length > 5) {
       final camel = e.key.substring(5).replaceAllMapped(
-            RegExp(r'-([a-zA-Z])'),
+            _kHyphenLetterRe,
             (m) => m.group(1)!.toUpperCase(),
           );
       dataset[camel] = _interpolateValue(e.value, scope);
@@ -377,13 +412,13 @@ List<Map<String, Object?>> _expandTemplateNode(
 
   if (bindTap != null &&
       (type == 'button' || type == 'action' || type == 'canvas')) {
-    out['command'] ??= 'mp:tap:$bindTap';
+    out['command'] ??= 'vibe:tap:$bindTap';
     final existingArgs = out['args'] is Map
         ? Map<String, Object?>.from(
             (out['args'] as Map).map((k, v) => MapEntry(k.toString(), v)),
           )
         : <String, Object?>{};
-    existingArgs['__mpEvent'] = true;
+    existingArgs['__vibeEvent'] = true;
     existingArgs['type'] = 'tap';
     existingArgs['handler'] = bindTap;
     if (nodeId != null) existingArgs['id'] = nodeId;
@@ -397,7 +432,7 @@ List<Map<String, Object?>> _expandTemplateNode(
   if (bindChange != null &&
       (type == 'checkbox' || type == 'option_group') &&
       out['command'] == null) {
-    out['command'] = 'mp:change:$bindChange';
+    out['command'] = 'vibe:change:$bindChange';
   }
 
   return <Map<String, Object?>>[out];
@@ -406,10 +441,7 @@ List<Map<String, Object?>> _expandTemplateNode(
 String? _cleanHandlerName(Object? raw, Map<String, Object?> scope) {
   if (raw == null) return null;
   final resolved = _interpolateValue(raw, scope)?.toString().trim() ?? '';
-  if (resolved.isEmpty) return null;
-  return RegExp(r'^[a-zA-Z_$][a-zA-Z0-9_$]{0,63}$').hasMatch(resolved)
-      ? resolved
-      : null;
+  return isValidMiniProgramHandlerName(resolved) ? resolved : null;
 }
 
 Object? _evalDirectiveValue(Object? raw, Map<String, Object?> scope) {
@@ -444,17 +476,30 @@ Object? _evalDirectiveValue(Object? raw, Map<String, Object?> scope) {
       ? indexAlias.trim()
       : 'index';
 
+  if (_kBlockedScopeSegments.contains(itemVar) ||
+      kForbiddenVibeMethodNames.contains(itemVar)) {
+    throw FormatException('Forbidden VXML loop variable "$itemVar"');
+  }
+  if (_kBlockedScopeSegments.contains(indexVar) ||
+      kForbiddenVibeMethodNames.contains(indexVar)) {
+    throw FormatException('Forbidden VXML loop variable "$indexVar"');
+  }
+
   if (raw is List) {
     return (items: raw, itemVar: itemVar, indexVar: indexVar);
   }
   final str = raw?.toString().trim() ?? '';
-  final vueMatch = RegExp(
-    r'^\(?\s*([a-zA-Z_$][a-zA-Z0-9_$]*)(?:\s*,\s*([a-zA-Z_$][a-zA-Z0-9_$]*))?\s*\)?\s+in\s+(.+)$',
-  ).firstMatch(str);
+  final vueMatch = _kVueForLoopRe.firstMatch(str);
   Object? resolvedList;
   if (vueMatch != null) {
     itemVar = vueMatch.group(1)!;
     if (vueMatch.group(2) != null) indexVar = vueMatch.group(2)!;
+    if (_kBlockedScopeSegments.contains(itemVar) ||
+        kForbiddenVibeMethodNames.contains(itemVar) ||
+        _kBlockedScopeSegments.contains(indexVar) ||
+        kForbiddenVibeMethodNames.contains(indexVar)) {
+      throw const FormatException('Forbidden VXML loop variable');
+    }
     resolvedList = _evalDirectiveValue(vueMatch.group(3)!, scope);
   } else {
     resolvedList = _evalDirectiveValue(str, scope);
@@ -488,7 +533,7 @@ Object? _interpolateString(String raw, Map<String, Object?> scope) {
       return evaluateVibeBindingExpression(inner, scope);
     }
   }
-  return raw.replaceAllMapped(RegExp(r'\{\{([^}]+)\}\}'), (match) {
+  return raw.replaceAllMapped(_kTemplateMustacheRe, (match) {
     final val = evaluateVibeBindingExpression(match.group(1)!, scope);
     if (val == null) return '';
     if (VibeSealedHandle.tryParse(val) != null) return '';
@@ -533,26 +578,29 @@ class _BindingExprParser {
     return false;
   }
 
-  Object? parseExpression() {
-    final cond = _parseNullishOrLogicalOr();
+  Object? parseExpression([int depth = 0]) {
+    if (depth > _kMaxBindingExprDepth) {
+      throw const FormatException('Binding expression exceeds nesting limit');
+    }
+    final cond = _parseNullishOrLogicalOr(depth);
     _skipWs();
     if (_match('?')) {
-      final whenTrue = parseExpression();
+      final whenTrue = parseExpression(depth + 1);
       _match(':');
-      final whenFalse = parseExpression();
+      final whenFalse = parseExpression(depth + 1);
       return isVibeBindingTruthy(cond) ? whenTrue : whenFalse;
     }
     return cond;
   }
 
-  Object? _parseNullishOrLogicalOr() {
-    var left = _parseLogicalAnd();
+  Object? _parseNullishOrLogicalOr(int depth) {
+    var left = _parseLogicalAnd(depth);
     while (true) {
       if (_match('||')) {
-        final right = _parseLogicalAnd();
+        final right = _parseLogicalAnd(depth);
         left = isVibeBindingTruthy(left) ? left : right;
       } else if (_match('??')) {
-        final right = _parseLogicalAnd();
+        final right = _parseLogicalAnd(depth);
         left = left ?? right;
       } else {
         break;
@@ -561,22 +609,22 @@ class _BindingExprParser {
     return left;
   }
 
-  Object? _parseLogicalAnd() {
-    var left = _parseEquality();
+  Object? _parseLogicalAnd(int depth) {
+    var left = _parseEquality(depth);
     while (_match('&&')) {
-      final right = _parseEquality();
+      final right = _parseEquality(depth);
       left = isVibeBindingTruthy(left) ? right : left;
     }
     return left;
   }
 
-  Object? _parseEquality() {
-    var left = _parseRelational();
+  Object? _parseEquality(int depth) {
+    var left = _parseRelational(depth);
     while (true) {
       if (_match('===') || _match('==')) {
-        left = _equals(left, _parseRelational());
+        left = _equals(left, _parseRelational(depth));
       } else if (_match('!==') || _match('!=')) {
-        left = !_equals(left, _parseRelational());
+        left = !_equals(left, _parseRelational(depth));
       } else {
         break;
       }
@@ -584,17 +632,17 @@ class _BindingExprParser {
     return left;
   }
 
-  Object? _parseRelational() {
-    var left = _parseAdditive();
+  Object? _parseRelational(int depth) {
+    var left = _parseAdditive(depth);
     while (true) {
       if (_match('>=')) {
-        left = _toNum(left) >= _toNum(_parseAdditive());
+        left = _toNum(left) >= _toNum(_parseAdditive(depth));
       } else if (_match('<=')) {
-        left = _toNum(left) <= _toNum(_parseAdditive());
+        left = _toNum(left) <= _toNum(_parseAdditive(depth));
       } else if (_match('>')) {
-        left = _toNum(left) > _toNum(_parseAdditive());
+        left = _toNum(left) > _toNum(_parseAdditive(depth));
       } else if (_match('<')) {
-        left = _toNum(left) < _toNum(_parseAdditive());
+        left = _toNum(left) < _toNum(_parseAdditive(depth));
       } else {
         break;
       }
@@ -602,18 +650,25 @@ class _BindingExprParser {
     return left;
   }
 
-  Object? _parseAdditive() {
-    var left = _parseMultiplicative();
+  Object? _parseAdditive(int depth) {
+    var left = _parseMultiplicative(depth);
     while (true) {
       if (_match('+')) {
-        final right = _parseMultiplicative();
+        final right = _parseMultiplicative(depth);
         if (left is String || right is String) {
           left = '${left ?? ''}${right ?? ''}';
+        } else if (left is int && right is int) {
+          left = left + right;
         } else {
           left = _toNum(left) + _toNum(right);
         }
       } else if (_match('-')) {
-        left = _toNum(left) - _toNum(_parseMultiplicative());
+        final right = _parseMultiplicative(depth);
+        if (left is int && right is int) {
+          left = left - right;
+        } else {
+          left = _toNum(left) - _toNum(right);
+        }
       } else {
         break;
       }
@@ -621,16 +676,21 @@ class _BindingExprParser {
     return left;
   }
 
-  Object? _parseMultiplicative() {
-    var left = _parseUnary();
+  Object? _parseMultiplicative(int depth) {
+    var left = _parseUnary(depth);
     while (true) {
       if (_match('*')) {
-        left = _toNum(left) * _toNum(_parseUnary());
+        final right = _parseUnary(depth);
+        if (left is int && right is int) {
+          left = left * right;
+        } else {
+          left = _toNum(left) * _toNum(right);
+        }
       } else if (_match('/')) {
-        final denom = _toNum(_parseUnary());
+        final denom = _toNum(_parseUnary(depth));
         left = denom == 0 ? 0.0 : _toNum(left) / denom;
       } else if (_match('%')) {
-        final denom = _toNum(_parseUnary());
+        final denom = _toNum(_parseUnary(depth));
         left = denom == 0 ? 0.0 : _toNum(left) % denom;
       } else {
         break;
@@ -639,20 +699,23 @@ class _BindingExprParser {
     return left;
   }
 
-  Object? _parseUnary() {
-    if (_match('!')) return !isVibeBindingTruthy(_parseUnary());
-    if (_match('-')) return -_toNum(_parseUnary());
-    if (_match('+')) return _toNum(_parseUnary());
-    return _parsePrimary();
+  Object? _parseUnary(int depth) {
+    if (depth > _kMaxBindingExprDepth) {
+      throw const FormatException('Binding expression exceeds nesting limit');
+    }
+    if (_match('!')) return !isVibeBindingTruthy(_parseUnary(depth + 1));
+    if (_match('-')) return -_toNum(_parseUnary(depth + 1));
+    if (_match('+')) return _toNum(_parseUnary(depth + 1));
+    return _parsePrimary(depth);
   }
 
-  Object? _parsePrimary() {
+  Object? _parsePrimary(int depth) {
     _skipWs();
     if (_pos >= source.length) return null;
     final ch = source[_pos];
     if (ch == '(') {
       _pos++;
-      final inner = parseExpression();
+      final inner = parseExpression(depth + 1);
       _match(')');
       return inner;
     }
@@ -671,7 +734,8 @@ class _BindingExprParser {
     }
     if ((ch.codeUnitAt(0) >= 48 && ch.codeUnitAt(0) <= 57) || ch == '.') {
       final start = _pos;
-      while (_pos < source.length && RegExp(r'[0-9.]').hasMatch(source[_pos])) {
+      while (_pos < source.length &&
+          _isNumOrDotCodeUnit(source.codeUnitAt(_pos))) {
         _pos++;
       }
       final rawNum = source.substring(start, _pos);
@@ -680,16 +744,16 @@ class _BindingExprParser {
     final start = _pos;
     var bracketDepth = 0;
     while (_pos < source.length) {
-      final c = source[_pos];
-      if (c == '[') {
+      final cu = source.codeUnitAt(_pos);
+      if (cu == 91) {
         bracketDepth++;
         _pos++;
-      } else if (c == ']' && bracketDepth > 0) {
+      } else if (cu == 93 && bracketDepth > 0) {
         bracketDepth--;
         _pos++;
       } else if (bracketDepth > 0) {
         _pos++;
-      } else if (RegExp(r'[a-zA-Z0-9_$.]').hasMatch(c)) {
+      } else if (_isIdentOrPathCodeUnit(cu)) {
         _pos++;
       } else {
         break;

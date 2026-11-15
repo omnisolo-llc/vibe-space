@@ -3,6 +3,7 @@ import 'dart:math';
 
 import 'vibe_protocol.dart';
 import 'vibe_runtime_config.dart' show kMaxVibeCanvasCommands;
+import 'vibe_mini_program.dart' show isValidMiniProgramHandlerName;
 import 'vibe_vxml_template.dart' show normalizeVibeStyleTokens;
 
 /// Depth and node limits matching `validateVibeView` in `vibe_space_flutter`.
@@ -38,11 +39,52 @@ const Set<String> _kCanonicalTones = <String>{
 };
 
 final RegExp _kHexSwatchRegex = RegExp(r'^#[0-9a-fA-F]{6}$');
+final RegExp _kCanvasHexRegex = RegExp(
+  r'^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$',
+);
+
+/// Validates an SVG path string (`d`) allowed inside declarative `canvas` nodes.
+final RegExp kSafeVibeSvgPathRe = RegExp(
+  r'^[MmLlHhVvCcSsQqTtAaZz0-9.,eE+\-\s]{1,4096}$',
+);
+const Set<String> _kSafeCanvasColorKeywords = <String>{
+  'default',
+  'accent',
+  'ok',
+  'warn',
+  'danger',
+  'surface',
+  'card',
+  'border',
+  'text',
+  'muted',
+  'transparent',
+  'none',
+  'currentcolor',
+};
+
+/// Returns `true` when [raw] is a safe hex color or semantic/SVG keyword
+/// (rejecting `url(...)`, CSS functions, and external schemes).
+bool isValidVibeCanvasColor(String raw) {
+  final s = raw.trim();
+  if (s.isEmpty) return false;
+  return _kCanvasHexRegex.hasMatch(s) ||
+      _kSafeCanvasColorKeywords.contains(s.toLowerCase());
+}
+
 final RegExp _kSafeIdRegex = RegExp(r'^[a-zA-Z0-9_.-]{1,64}$');
 final RegExp _kUnsafeSchemeRegex = RegExp(
   r'^\s*(?:javascript|vbscript|data)\s*:',
   caseSensitive: false,
 );
+final RegExp _kMarkdownScriptTagRe = RegExp(
+  r'<script\b[^>]*>[\s\S]*?</script>',
+  caseSensitive: false,
+);
+final RegExp _kMarkdownHrRe = RegExp(r'^(-{3,}|\*{3,}|_{3,})$');
+final RegExp _kMarkdownHeadingRe = RegExp(r'^#{1,6}\s+(.+)$');
+final RegExp _kMarkdownTableSepRe = RegExp(r'^\s*\|?[\s:-]+\|[\s|:-]*$');
+final RegExp _kLocaleSepRe = RegExp(r'[-_]');
 
 /// Bidirectional compatibility adapter converting **A2UI**, **Adaptive Cards**,
 /// **Markdown**, and canonical `VibeView` trees into validated canonical
@@ -80,7 +122,7 @@ class VibeUiCompatibilityAdapter {
           'Unsupported view payload type: ${raw.runtimeType}');
     }
 
-    final map = _stringifyMap(raw);
+    final map = _asStringMap(raw);
 
     // Markdown wrapper object
     if (map['format'] == 'markdown' ||
@@ -183,7 +225,7 @@ class VibeUiCompatibilityAdapter {
             if (child is Map) {
               children.add(
                 _normalizeCanonicalNode(
-                  _stringifyMap(child),
+                  _asStringMap(child),
                   depth + 1,
                   budget,
                   seenInputIds,
@@ -423,11 +465,26 @@ class VibeUiCompatibilityAdapter {
         final v = entry.value;
         if (k == 'op' || k == 'type' || v == null) continue;
         if (v is num) {
-          if (v.isFinite) normalizedCmd[k] = v.toDouble();
+          if (!v.isFinite) {
+            throw FormatException('Non-finite canvas coordinate "$k"');
+          }
+          normalizedCmd[k] = v.toDouble();
         } else if (v is bool) {
           normalizedCmd[k] = v;
         } else if (k == 'text') {
           normalizedCmd['text'] = _normalizeTextOrSealed(v);
+        } else if (k == 'fill' || k == 'stroke' || k == 'color') {
+          final colorStr = v.toString().trim();
+          if (!isValidVibeCanvasColor(colorStr)) {
+            throw FormatException('Unsafe canvas $k color: "$colorStr"');
+          }
+          normalizedCmd[k] = colorStr;
+        } else if (k == 'd') {
+          final pathStr = v.toString().trim();
+          if (!kSafeVibeSvgPathRe.hasMatch(pathStr)) {
+            throw const FormatException('Unsafe canvas SVG path data');
+          }
+          normalizedCmd['d'] = pathStr;
         } else if (v is String) {
           normalizedCmd[k] = _normalizePlainString(v, 256);
         } else if (k == 'values' && v is List) {
@@ -453,10 +510,16 @@ class VibeUiCompatibilityAdapter {
           final gm = _stringifyMap(v);
           final rawColors = gm['colors'];
           if (rawColors is List) {
-            final colors = <String>[
-              for (final c in rawColors.take(8))
-                if (c != null) _normalizePlainString(c, 32),
-            ];
+            final colors = <String>[];
+            for (final c in rawColors.take(8)) {
+              if (c == null) continue;
+              final cs = c.toString().trim();
+              if (!isValidVibeCanvasColor(cs)) {
+                throw FormatException(
+                    'Unsafe canvas linearGradient color: "$cs"');
+              }
+              colors.add(cs);
+            }
             if (colors.length >= 2) {
               normalizedCmd['linearGradient'] = <String, Object?>{
                 'colors': colors,
@@ -517,12 +580,12 @@ class VibeUiCompatibilityAdapter {
       'bindchange': bindChange,
     }.entries) {
       final s = entry.value?.toString().trim();
-      if (s != null && RegExp(r'^[a-zA-Z_$][a-zA-Z0-9_$]{0,63}$').hasMatch(s)) {
+      if (s != null && isValidMiniProgramHandlerName(s)) {
         out[entry.key] = s;
       }
     }
     if (dataset is Map && dataset.isNotEmpty) {
-      out['dataset'] = _stringifyMap(dataset);
+      out['dataset'] = _asStringMap(dataset);
     }
     return out;
   }
@@ -657,7 +720,7 @@ class VibeUiCompatibilityAdapter {
           cursor = cursor[seg];
           continue;
         }
-        // Support dotted capability keys like `terminal.agy` in dot-notation paths
+        // Support dotted capability keys like `metrics.cluster` in dot-notation paths
         if (!trimmed.startsWith('/') && i + 1 < segments.length) {
           final joined = '$seg.${segments[i + 1]}';
           if (cursor.containsKey(joined)) {
@@ -1506,11 +1569,7 @@ class VibeUiCompatibilityAdapter {
   static Map<String, Object?> _adaptMarkdown(String markdown) {
     final budget = _NodeBudget();
     budget.consume();
-    final cleaned = markdown
-        .replaceAll(
-            RegExp(r'<script\b[^>]*>[\s\S]*?</script>', caseSensitive: false),
-            '')
-        .trim();
+    final cleaned = markdown.replaceAll(_kMarkdownScriptTagRe, '').trim();
     if (cleaned.isEmpty) {
       return const <String, Object?>{
         'type': 'column',
@@ -1548,13 +1607,13 @@ class VibeUiCompatibilityAdapter {
       }
       if (trimmed.isEmpty) continue;
 
-      if (RegExp(r'^(-{3,}|\*{3,}|_{3,})$').hasMatch(trimmed)) {
+      if (_kMarkdownHrRe.hasMatch(trimmed)) {
         budget.consume();
         children.add(const <String, Object?>{'type': 'divider'});
         continue;
       }
 
-      final headingMatch = RegExp(r'^#{1,6}\s+(.+)$').firstMatch(trimmed);
+      final headingMatch = _kMarkdownHeadingRe.firstMatch(trimmed);
       if (headingMatch != null) {
         budget.consume();
         children.add(<String, Object?>{
@@ -1566,7 +1625,7 @@ class VibeUiCompatibilityAdapter {
 
       if (trimmed.contains('|') &&
           i + 1 < lines.length &&
-          RegExp(r'^\s*\|?[\s:-]+\|[\s|:-]*$').hasMatch(lines[i + 1])) {
+          _kMarkdownTableSepRe.hasMatch(lines[i + 1])) {
         final headers = _splitMarkdownRow(trimmed);
         final rows = <List<String>>[];
         var j = i + 2;
@@ -1613,6 +1672,10 @@ class VibeUiCompatibilityAdapter {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  static Map<String, Object?> _asStringMap(Map<dynamic, dynamic> raw) {
+    return raw is Map<String, Object?> ? raw : _stringifyMap(raw);
+  }
 
   static Map<String, Object?> _stringifyMap(Map<dynamic, dynamic> raw) {
     return <String, Object?>{
@@ -2046,9 +2109,32 @@ class VibeTerminalRenderer {
     return lines.join('\n');
   }
 
+  static final RegExp _kTerminalOscRe = RegExp(
+    r'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)',
+  );
+  static final RegExp _kTerminalCsiRe = RegExp(
+    r'(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]',
+  );
+  static final RegExp _kTerminalEscRe = RegExp(
+    r'\x1b[@-Z\\-_]|\x1b[^\r\n]',
+  );
+  static final RegExp _kTerminalCtrlRe = RegExp(
+    r'[\x00-\x08\x0b-\x1f\x7f-\x9f]',
+  );
+
+  static String _stripTerminalControls(String raw) {
+    if (raw.isEmpty) return raw;
+    return raw
+        .replaceAll(_kTerminalOscRe, '')
+        .replaceAll(_kTerminalCsiRe, '')
+        .replaceAll(_kTerminalEscRe, '')
+        .replaceAll(_kTerminalCtrlRe, '');
+  }
+
   static String _withLock(String text, bool sealedResolved) {
-    if (!sealedResolved || text.isEmpty) return text;
-    return '🔒 $text';
+    final safe = _stripTerminalControls(text);
+    if (!sealedResolved || safe.isEmpty) return safe;
+    return '🔒 $safe';
   }
 
   static String _colorize(String text, String tone, bool ansi) {
@@ -2152,7 +2238,7 @@ class VibeTerminalRenderer {
               if (v is num && v.isFinite) barVals.add(v.toDouble());
             }
           } else if (cmd['op'] == 'text' && cmd['text'] is String) {
-            final t = (cmd['text'] as String).trim();
+            final t = _stripTerminalControls((cmd['text'] as String).trim());
             if (t.isNotEmpty) textItems.add(t);
           }
         }
@@ -2218,19 +2304,23 @@ class VibeTerminalRenderer {
         lines.add('─' * min(40, width));
       case 'button':
       case 'action':
-        lines.add(_colorize('[${node.text ?? 'Action'}]', node.tone, ansi));
+        final btnLabel = _stripTerminalControls(node.text ?? 'Action');
+        lines.add(_colorize('[$btnLabel]', node.tone, ansi));
       case 'input':
-        lines.add('${node.label ?? 'Input'}: [________]');
+        final inputLabel = _stripTerminalControls(node.label ?? 'Input');
+        lines.add('$inputLabel: [________]');
       case 'checkbox':
-        lines
-            .add('${node.checked == true ? '[x]' : '[ ]'} ${node.label ?? ''}');
+        final chkLabel = _stripTerminalControls(node.label ?? '');
+        lines.add('${node.checked == true ? '[x]' : '[ ]'} $chkLabel');
       case 'option_group':
         if (node.label != null && node.label!.isNotEmpty) {
-          lines.add('${node.label}:');
+          lines.add('${_stripTerminalControls(node.label!)}:');
         }
         for (final opt in node.options) {
           final sel = opt['selected'] == true || opt['checked'] == true;
-          lines.add('  ${sel ? '(*)' : '( )'} ${opt['label'] ?? opt['id']}');
+          final optLabel =
+              _stripTerminalControls('${opt['label'] ?? opt['id']}');
+          lines.add('  ${sel ? '(*)' : '( )'} $optLabel');
         }
     }
   }
@@ -2454,7 +2544,7 @@ class VibeStrings {
     String locale, {
     Map<String, String>? overrides,
   }) {
-    final normalized = locale.trim().toLowerCase().split(RegExp(r'[-_]')).first;
+    final normalized = locale.trim().toLowerCase().split(_kLocaleSepRe).first;
     final base = switch (normalized) {
       'zh' => const VibeStrings(
           locale: 'zh',

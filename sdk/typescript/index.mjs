@@ -1,7 +1,12 @@
 import {validateTriggerCondition} from './triggers.mjs';
 
+const TEXT_ENCODER = new TextEncoder();
+const API_NAME_RE = /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/;
+const MANIFEST_ID_RE = /^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,127}$/;
+const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
 export const slots = Object.freeze(['app_page','sidebar_inspector','mobile_bottom_sheet','quick_command','status_bar_item','terminal_action']);
-export const validApiName = value => typeof value === 'string' && value.length <= 128 && /^[a-zA-Z0-9_-]+(?:\.[a-zA-Z0-9_-]+)*$/.test(value);
+export const validApiName = value => typeof value === 'string' && value.length <= 128 && API_NAME_RE.test(value);
 export const validCapability = (value, policy = {}) => {
   const extra = Array.isArray(policy.capabilities) ? policy.capabilities : [];
   return value === 'network' || extra.includes(value) || (typeof value === 'string' && value.startsWith('api:') && validApiName(value.slice(4)));
@@ -24,7 +29,7 @@ export function effectCapability(effect, policy = {}) {
   return required;
 }
 export function effectBatch(effects, policy = {}) {
-  if (!Array.isArray(effects) || effects.length > 32 || new TextEncoder().encode(JSON.stringify(effects)).length > 1048576) throw Error('Effect limit exceeded');
+  if (!Array.isArray(effects) || effects.length > 32 || TEXT_ENCODER.encode(JSON.stringify(effects)).length > 1048576) throw Error('Effect limit exceeded');
   const snapshot = freezeJson(effects), ids = new Set();
   for (const effect of snapshot) {
     effectCapability(effect, policy);
@@ -34,7 +39,7 @@ export function effectBatch(effects, policy = {}) {
   return snapshot;
 }
 export function validateManifest(manifest, policy = {}) {
-  if (!manifest || typeof manifest.id !== 'string' || !/^[a-zA-Z0-9_-][a-zA-Z0-9_.-]{0,127}$/.test(manifest.id) ||
+  if (!manifest || typeof manifest.id !== 'string' || !MANIFEST_ID_RE.test(manifest.id) ||
       !Number.isSafeInteger(manifest.version) || manifest.version < 1 || manifest.api_version !== 1 ||
       typeof manifest.name !== 'string' || !manifest.name.length || manifest.name.length > 256 ||
       !['MIT','Apache-2.0','BSD-3-Clause','MIT OR Apache-2.0'].includes(manifest.license) ||
@@ -55,18 +60,24 @@ export function validateManifest(manifest, policy = {}) {
   return freezeJson({...manifest, network_origins:manifest.network_origins ?? [], contributions:manifest.contributions ?? []});
 }
 const unbase64 = value => {
-  if (typeof value !== 'string' || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)) throw Error('Invalid base64');
+  if (typeof value !== 'string' || !BASE64_RE.test(value)) throw Error('Invalid base64');
   return Uint8Array.from(atob(value), c => c.charCodeAt(0));
 };
-const base64 = bytes => btoa(Array.from(bytes, b => String.fromCharCode(b)).join(''));
+const base64 = bytes => {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
+  return btoa(bin);
+};
 /** Publisher must come from a trusted, separate channel, never from the package. */
 export async function verifyPackage(pkg, publisher, policy = {}) {
-  if (typeof pkg.manifest !== 'string' || new TextEncoder().encode(pkg.manifest).length > 65536 ||
+  if (typeof pkg.manifest !== 'string' || TEXT_ENCODER.encode(pkg.manifest).length > 65536 ||
       typeof pkg.module !== 'string' || pkg.module.length > 22369624 || typeof pkg.signature !== 'string' || pkg.signature.length !== 88 || typeof publisher !== 'string' || publisher.length !== 44) throw Error('Package exceeds limits');
   const keyBytes = unbase64(publisher), signature = unbase64(pkg.signature);
   if (keyBytes.length !== 32 || signature.length !== 64) throw Error('Invalid signing key');
   const key = await crypto.subtle.importKey('raw', keyBytes, 'Ed25519', false, ['verify']);
-  if (!await crypto.subtle.verify('Ed25519', key, signature, new TextEncoder().encode(pkg.manifest))) throw Error('Invalid package signature');
+  if (!await crypto.subtle.verify('Ed25519', key, signature, TEXT_ENCODER.encode(pkg.manifest))) throw Error('Invalid package signature');
   const manifest = validateManifest(JSON.parse(pkg.manifest), policy), module = unbase64(pkg.module);
   if (module.length > 16777216 || module.length < 8 || ![0,97,115,109,1,0,0,0].every((v,i) => module[i] === v) ||
       base64(new Uint8Array(await crypto.subtle.digest('SHA-256', module))) !== manifest.module_sha256) throw Error('Invalid module digest');
@@ -75,6 +86,7 @@ export async function verifyPackage(pkg, publisher, policy = {}) {
 
 export {
   isSealedHandle,
+  normalizeStyleTokens,
   adaptExternalUi,
   resolveViewTree,
   renderWithH,
@@ -98,9 +110,17 @@ export {
   MAX_SET_DATA_RATE_PER_SEC,
   MAX_CANVAS_COMMANDS,
   validateMiniProgramSource,
+  validateVibeSnippetSource,
   applySetData,
   lookupScopePath,
   compileTemplate,
   defineMiniProgram,
-  createMiniProgramSession
+  defineVibeSnippet,
+  createMiniProgramSession,
+  createVibeSnippetSession
 } from './miniprogram.mjs';
+
+export {
+  sanitizeManifestForPrompt,
+  buildVibeGenerationSystemPrompt
+} from './prompt.mjs';

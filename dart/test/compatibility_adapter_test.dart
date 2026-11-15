@@ -24,7 +24,10 @@ void main() {
             'type': 'button',
             'text': 'Inspect',
             'command': 'inspect',
-            'args': <String, Object?>{'url': 'javascript:alert(1)', 'target': 1},
+            'args': <String, Object?>{
+              'url': 'javascript:alert(1)',
+              'target': 1
+            },
           },
         ],
       };
@@ -33,15 +36,19 @@ void main() {
       expect(adapted['type'], 'column');
       final children = adapted['children'] as List;
       expect(children, hasLength(3));
-      expect((children[0] as Map)['text'], <String, Object?>{'sealed': 'h_server_1'});
-      expect((children[1] as Map)['label'], <String, Object?>{'sealed': 'h_mount_1'});
+      expect((children[0] as Map)['text'],
+          <String, Object?>{'sealed': 'h_server_1'});
+      expect((children[1] as Map)['label'],
+          <String, Object?>{'sealed': 'h_mount_1'});
       expect((children[1] as Map)['max'], 1);
       final buttonArgs = (children[2] as Map)['args'] as Map;
       expect(buttonArgs.containsKey('url'), isFalse);
       expect(buttonArgs['target'], 1);
     });
 
-    test('adapts A2UI surfaceUpdate adjacency list while preserving sealed handles', () {
+    test(
+        'adapts A2UI surfaceUpdate adjacency list while preserving sealed handles',
+        () {
       final a2ui = <String, Object?>{
         'beginRendering': <String, Object?>{'root': 'root_col'},
         'surfaceUpdate': <String, Object?>{
@@ -106,7 +113,9 @@ void main() {
       expect(children[2]['command'], 'refresh');
     });
 
-    test('adapts AdaptiveCard with Container, FactSet, Input, and Actions safely', () {
+    test(
+        'adapts AdaptiveCard with Container, FactSet, Input, and Actions safely',
+        () {
       final card = <String, Object?>{
         'type': 'AdaptiveCard',
         'version': '1.5',
@@ -155,7 +164,8 @@ void main() {
       final factTable = children[1];
       expect(factTable['type'], 'table');
       final rows = factTable['rows'] as List;
-      expect((rows[0] as List)[1], <String, Object?>{'sealed': 'h_secret_host'});
+      expect(
+          (rows[0] as List)[1], <String, Object?>{'sealed': 'h_secret_host'});
       expect(children[2]['type'], 'input');
       final actionRow = children.last;
       expect(actionRow['type'], 'row');
@@ -182,7 +192,10 @@ All checks done.
       expect(encoded.contains('<script>'), isFalse);
       expect(encoded.contains('alert("xss")'), isFalse);
       final children = adapted['children'] as List<Map<String, Object?>>;
-      expect(children.any((n) => n['type'] == 'heading' && n['text'] == 'Disk Health'), isTrue);
+      expect(
+          children
+              .any((n) => n['type'] == 'heading' && n['text'] == 'Disk Health'),
+          isTrue);
       expect(children.any((n) => n['type'] == 'table'), isTrue);
       expect(children.any((n) => n['type'] == 'divider'), isTrue);
     });
@@ -195,7 +208,8 @@ All checks done.
           'children': <Map<String, Object?>>[deep],
         };
       }
-      expect(() => VibeUiCompatibilityAdapter.adapt(deep), throwsFormatException);
+      expect(
+          () => VibeUiCompatibilityAdapter.adapt(deep), throwsFormatException);
       expect(VibeUiCompatibilityAdapter.tryAdapt(deep), isNull);
 
       final huge = <String, Object?>{
@@ -211,12 +225,15 @@ All checks done.
             },
         ],
       };
-      expect(() => VibeUiCompatibilityAdapter.adapt(huge), throwsFormatException);
+      expect(
+          () => VibeUiCompatibilityAdapter.adapt(huge), throwsFormatException);
     });
   });
 
   group('VibeSandboxEvaluator automatic compatibility normalization', () {
-    test('normalizes external A2UI / AdaptiveCard views inside VibeProtocolHost', () async {
+    test(
+        'normalizes external A2UI / AdaptiveCard views inside VibeProtocolHost',
+        () async {
       final host = VibeProtocolHost(
         id: 'compat-host',
         name: 'Compat Host',
@@ -255,7 +272,8 @@ All checks done.
         name: 'Adaptive Host',
         version: 1,
         needs: const <String>['ops.hosts'],
-        source: '{"kind":"static_view","view":{"type":"text","text":"fallback"}}',
+        source:
+            '{"kind":"static_view","view":{"type":"text","text":"fallback"}}',
       );
       final run = host.mount(vibe);
       await Future<void>.delayed(const Duration(milliseconds: 20));
@@ -273,7 +291,9 @@ All checks done.
   });
 
   group('resolveVibeViewTree & Renderers', () {
-    test('resolves sealed handles, blanks forged handles, renders Terminal + Markdown', () {
+    test(
+        'resolves sealed handles, blanks forged handles, renders Terminal + Markdown',
+        () {
       final view = <String, Object?>{
         'type': 'column',
         'children': <Map<String, Object?>>[
@@ -320,14 +340,16 @@ All checks done.
       expect(ir.children[2].text, '');
       expect(ir.children[2].sealedResolved, isFalse);
 
-      final term = VibeTerminalRenderer.render(view, resolveSealed: resolve, ansi: false);
+      final term = VibeTerminalRenderer.render(view,
+          resolveSealed: resolve, ansi: false);
       expect(term, contains('Telemetry'));
       expect(term, contains('🔒 db-east-1'));
       expect(term, contains('█'));
       expect(term, contains('░'));
       expect(term, contains('▁'));
 
-      final termAnsi = VibeTerminalRenderer.render(view, resolveSealed: resolve, ansi: true);
+      final termAnsi =
+          VibeTerminalRenderer.render(view, resolveSealed: resolve, ansi: true);
       expect(termAnsi, contains('\x1b['));
 
       final md = VibeMarkdownRenderer.render(view, resolveSealed: resolve);
@@ -373,7 +395,12 @@ All checks done.
               'sizeGb': 'public',
             },
             read: () => const <Map<String, Object?>>[
-              <String, Object?>{'server': 's1', 'mount': '/', 'usedFraction': 0.91, 'sizeGb': 100},
+              <String, Object?>{
+                'server': 's1',
+                'mount': '/',
+                'usedFraction': 0.91,
+                'sizeGb': 100
+              },
             ],
           ),
         ],
@@ -402,7 +429,8 @@ All checks done.
       host.dispose();
     });
 
-    test('round-trips CJK and emoji through VibeShareCodec and host records', () {
+    test('round-trips CJK and emoji through VibeShareCodec and host records',
+        () {
       final vibe = VibeSpec(
         id: 'cjk-emoji',
         name: '磁盘监控 🚀',

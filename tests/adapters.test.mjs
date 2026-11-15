@@ -147,7 +147,7 @@ test('renderToTerminal, renderToMarkdown, and XSS-escaped renderToHtmlString', (
 
 test('defineVibeWebComponents registers <vibe-view>, <vibe-embed>, and <vibe-space>', () => {
   const defined = new Map();
-  class MockHTMLElement {
+  class MinimalHTMLElement {
     constructor() {
       this.attributes = {};
       this.children = [];
@@ -161,8 +161,8 @@ test('defineVibeWebComponents registers <vibe-view>, <vibe-embed>, and <vibe-spa
     appendChild(c) { this.children.push(c); }
   }
   const env = {
-    HTMLElement: MockHTMLElement,
-    document: new MockHTMLElement().ownerDocument,
+    HTMLElement: MinimalHTMLElement,
+    document: new MinimalHTMLElement().ownerDocument,
     customElements: {
       get: name => defined.get(name),
       define: (name, cls) => defined.set(name, cls)

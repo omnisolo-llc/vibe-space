@@ -3,7 +3,9 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:vibe_space_flutter/vibe_space_flutter.dart';
 
 void main() {
-  test('untrusted views cannot inject widgets, HTML, duplicate input IDs or deep trees', () {
+  test(
+      'untrusted views cannot inject widgets, HTML, duplicate input IDs or deep trees',
+      () {
     for (final view in [
       {'type': 'html', 'html': '<script>alert(1)</script>'},
       {'type': 'progress', 'value': double.nan},
@@ -94,8 +96,18 @@ void main() {
             'multiSelect': true,
             'command': 'submit_checks',
             'options': [
-              {'id': 'lint', 'label': 'Run Linter', 'value': 'cargo clippy', 'checked': true},
-              {'id': 'test', 'label': 'Run Unit Tests', 'value': 'cargo test', 'checked': false},
+              {
+                'id': 'lint',
+                'label': 'Run Linter',
+                'value': 'cargo clippy',
+                'checked': true
+              },
+              {
+                'id': 'test',
+                'label': 'Run Unit Tests',
+                'value': 'cargo test',
+                'checked': false
+              },
             ],
           },
         ],
@@ -134,7 +146,8 @@ void main() {
       await tester.tap(find.text('Submit Selected (2)'));
       await tester.pump();
       expect(lastCommand, 'submit_checks');
-      expect(lastCommandArgs?['values'], <String>['cargo clippy', 'cargo test']);
+      expect(
+          lastCommandArgs?['values'], <String>['cargo clippy', 'cargo test']);
     },
   );
 

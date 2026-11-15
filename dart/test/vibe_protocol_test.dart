@@ -5,7 +5,9 @@ import 'package:vibe_space/vibe_space.dart';
 
 void main() {
   group('VibeSealedHandle & seal table', () {
-    test('seals deterministically per host, persists, and rejects forged handles', () {
+    test(
+        'seals deterministically per host, persists, and rejects forged handles',
+        () {
       final storage = InMemoryVibeStorage();
       final hostA1 = VibeProtocolHost(
         id: 'example-host',
@@ -40,9 +42,11 @@ void main() {
       expect(hostA1.resolveSealed(const VibeSealedHandle('h_fake')), isNull);
       expect(hostA1.resolveSealed({'sealed': 'h_fake'}), isNull);
       expect(hostA1.resolveSealed(hb), isNull);
-      expect(VibeSealedHandle.tryParse({'sealed': 'h_abc', 'extra': 1}), isNull);
+      expect(
+          VibeSealedHandle.tryParse({'sealed': 'h_abc', 'extra': 1}), isNull);
       expect(VibeSealedHandle.tryParse({'sealed': ''}), isNull);
-      expect(VibeSealedHandle.tryParse(const {'sealed': 'h_abc'}), equals(const VibeSealedHandle('h_abc')));
+      expect(VibeSealedHandle.tryParse(const {'sealed': 'h_abc'}),
+          equals(const VibeSealedHandle('h_abc')));
     });
   });
 
@@ -102,7 +106,8 @@ void main() {
       ]);
     });
 
-    test('VibeShareCodec strips title/note/args and decodes raw token or URL', () {
+    test('VibeShareCodec strips title/note/args and decodes raw token or URL',
+        () {
       final spec = VibeSpec(
         id: 'disk-watch',
         name: 'Disk Watch',
@@ -110,7 +115,8 @@ void main() {
         version: 2,
         needs: const ['telemetry.disk'],
         refreshMs: 2000,
-        source: 'function invoke(input) { return { state: null, view: { type: "text", text: "ok" } }; }',
+        source:
+            'function invoke(input) { return { state: null, view: { type: "text", text: "ok" } }; }',
       );
 
       final token = VibeShareCodec.encode(spec);
@@ -118,7 +124,8 @@ void main() {
       expect(VibeShareCodec.decode(token), equals(spec));
       expect(VibeShareCodec.decode('#vibe=$token'), equals(spec));
       expect(
-        VibeShareCodec.decode('https://example.com/demo/index.html#vibe=$token&extra=1'),
+        VibeShareCodec.decode(
+            'https://example.com/demo/index.html#vibe=$token&extra=1'),
         equals(spec),
       );
 
@@ -130,7 +137,8 @@ void main() {
         'args': {'server': 'db-1'},
       });
       expect(parsedFromDirty, equals(spec));
-      expect(VibeShareCodec.decode(token).toJson().containsKey('title'), isFalse);
+      expect(
+          VibeShareCodec.decode(token).toJson().containsKey('title'), isFalse);
 
       expect(() => VibeShareCodec.decode('not valid!'), throwsFormatException);
       expect(
@@ -147,7 +155,8 @@ void main() {
   });
 
   group('VibeProtocolHost lifecycle store', () {
-    VibeProtocolHost makeHost(VibeStorageAdapter storage, {bool includeDisk = true}) {
+    VibeProtocolHost makeHost(VibeStorageAdapter storage,
+        {bool includeDisk = true}) {
       return VibeProtocolHost(
         id: 'example-host',
         name: 'Example Host',
@@ -170,7 +179,9 @@ void main() {
       );
     }
 
-    test('supports multi-instance args, custom title/note, history/revert, reorder, and uninstall/restore', () {
+    test(
+        'supports multi-instance args, custom title/note, history/revert, reorder, and uninstall/restore',
+        () {
       final storage = InMemoryVibeStorage();
       final host = makeHost(storage);
       var changes = 0;
@@ -253,7 +264,8 @@ void main() {
 
       // Pin to top stays ahead of unpinned across reorder
       host.updateRecord(rWeb1.instanceId, pinned: true);
-      var ordered = host.reorder([rDisk.instanceId, rDb1.instanceId, rWeb1.instanceId]);
+      var ordered =
+          host.reorder([rDisk.instanceId, rDb1.instanceId, rWeb1.instanceId]);
       expect(ordered[0].instanceId, rWeb1.instanceId);
       expect(ordered[1].instanceId, rDisk.instanceId);
       expect(ordered[2].instanceId, rDb1.instanceId);
@@ -261,7 +273,8 @@ void main() {
       // Uninstall returns snapshot; restoreRecord brings it back intact
       final removed = host.uninstall(rDisk.instanceId);
       expect(removed, isNotNull);
-      expect(host.installed().any((r) => r.instanceId == rDisk.instanceId), isFalse);
+      expect(host.installed().any((r) => r.instanceId == rDisk.instanceId),
+          isFalse);
       host.restoreRecord(removed!, 1);
       final restoredList = host.installed();
       expect(restoredList[1].instanceId, rDisk.instanceId);
@@ -282,12 +295,24 @@ void main() {
   });
 
   group('VibeRunController, sealed isolation & graceful source health', () {
-    test('seals data, omits host title/note, enforces 64 kB & errors, and recovers from offline/revoked', () async {
+    test(
+        'seals data, omits host title/note, enforces 64 kB & errors, and recovers from offline/revoked',
+        () async {
       var diskStatus = const VibeSourceStatus.live();
       var throwOnRead = false;
       var diskRows = <Map<String, Object?>>[
-        {'server': 'db-1.prod.internal', 'mount': '/', 'usedFraction': 0.85, 'sizeGb': 200},
-        {'server': 'web-1.prod.internal', 'mount': '/', 'usedFraction': 0.92, 'sizeGb': 100},
+        {
+          'server': 'db-1.prod.internal',
+          'mount': '/',
+          'usedFraction': 0.85,
+          'sizeGb': 200
+        },
+        {
+          'server': 'web-1.prod.internal',
+          'mount': '/',
+          'usedFraction': 0.92,
+          'sizeGb': 100
+        },
       ];
 
       final host = VibeProtocolHost(
@@ -309,7 +334,12 @@ void main() {
               return diskRows;
             },
             sample: const <Map<String, Object?>>[
-              {'server': 'sample-a', 'mount': '/', 'usedFraction': 0.5, 'sizeGb': 100},
+              {
+                'server': 'sample-a',
+                'mount': '/',
+                'usedFraction': 0.5,
+                'sizeGb': 100
+              },
             ],
           ),
         ],
@@ -339,7 +369,8 @@ void main() {
       expect(insp.ledger.reads['telemetry.disk'], 1);
 
       // Go offline -> stale view preserved, lastError stays null
-      diskStatus = const VibeSourceStatus.offline('Host telemetry feed disconnected');
+      diskStatus =
+          const VibeSourceStatus.offline('Host telemetry feed disconnected');
       host.notifySourceChange();
       expect(run.health().state, VibeSourceMode.offline);
       expect(run.health().isStale, isTrue);
@@ -357,7 +388,8 @@ void main() {
       await run.setDataMode('live');
       expect(run.health().state, VibeSourceMode.offline);
       expect(run.view, isNull);
-      expect(run.unavailableReason, contains('Host telemetry feed disconnected'));
+      expect(
+          run.unavailableReason, contains('Host telemetry feed disconnected'));
       expect(run.lastError, isNull);
 
       // Source returns -> auto-recovers via notifySourceChange
@@ -423,7 +455,9 @@ void main() {
       hugeRun.stop();
     });
 
-    test('built-in focus timer, server-load offline target, and wish remix/compiler work', () async {
+    test(
+        'built-in focus timer, server-load offline target, and wish remix/compiler work',
+        () async {
       var serversOnline = true;
       final host = VibeProtocolHost(
         id: 'ops2',
@@ -432,25 +466,64 @@ void main() {
           VibeCapability(
             name: 'telemetry.disk',
             title: 'Disk usage',
-            fields: const {'server': 'sealed', 'mount': 'public', 'usedFraction': 'public', 'sizeGb': 'public'},
+            fields: const {
+              'server': 'sealed',
+              'mount': 'public',
+              'usedFraction': 'public',
+              'sizeGb': 'public'
+            },
             read: () => const <Map<String, Object?>>[
-              {'server': 'db-1', 'mount': '/', 'usedFraction': 0.83, 'sizeGb': 200},
-              {'server': 'web-1', 'mount': '/', 'usedFraction': 0.91, 'sizeGb': 100},
+              {
+                'server': 'db-1',
+                'mount': '/',
+                'usedFraction': 0.83,
+                'sizeGb': 200
+              },
+              {
+                'server': 'web-1',
+                'mount': '/',
+                'usedFraction': 0.91,
+                'sizeGb': 100
+              },
             ],
           ),
           VibeCapability(
             name: 'telemetry.load',
             title: 'CPU and memory',
-            fields: const {'server': 'sealed', 'cpu': 'public', 'mem': 'public', 'cpuHistory': 'public', 'memHistory': 'public'},
+            fields: const {
+              'server': 'sealed',
+              'cpu': 'public',
+              'mem': 'public',
+              'cpuHistory': 'public',
+              'memHistory': 'public'
+            },
             read: () {
               if (!serversOnline) {
                 return const <Map<String, Object?>>[
-                  {'server': 'web-1', 'cpu': 0.32, 'mem': 0.41, 'cpuHistory': [0.3, 0.32], 'memHistory': [0.4, 0.41]},
+                  {
+                    'server': 'web-1',
+                    'cpu': 0.32,
+                    'mem': 0.41,
+                    'cpuHistory': [0.3, 0.32],
+                    'memHistory': [0.4, 0.41]
+                  },
                 ];
               }
               return const <Map<String, Object?>>[
-                {'server': 'db-1', 'cpu': 0.91, 'mem': 0.62, 'cpuHistory': [0.88, 0.91], 'memHistory': [0.61, 0.62]},
-                {'server': 'web-1', 'cpu': 0.32, 'mem': 0.41, 'cpuHistory': [0.3, 0.32], 'memHistory': [0.4, 0.41]},
+                {
+                  'server': 'db-1',
+                  'cpu': 0.91,
+                  'mem': 0.62,
+                  'cpuHistory': [0.88, 0.91],
+                  'memHistory': [0.61, 0.62]
+                },
+                {
+                  'server': 'web-1',
+                  'cpu': 0.32,
+                  'mem': 0.41,
+                  'cpuHistory': [0.3, 0.32],
+                  'memHistory': [0.4, 0.41]
+                },
               ];
             },
           ),
@@ -497,14 +570,16 @@ void main() {
         needs: ['telemetry.disk'],
         source: jsDisk,
       );
-      final remixed = VibeWishRemixer.apply(diskBase, 'Make it red above 75% and show worst 2');
+      final remixed = VibeWishRemixer.apply(
+          diskBase, 'Make it red above 75% and show worst 2');
       expect(remixed.ok, isTrue);
       expect(remixed.vibe!.version, 2);
       expect(remixed.vibe!.source, contains('THRESHOLD = 0.75'));
       expect(remixed.vibe!.source, contains('WARN_LEVEL = 0.6'));
       expect(remixed.vibe!.source, contains('TOP_LIMIT = 2'));
 
-      final compiledDisk = VibeWishCompiler.compile('Show disk usage above 85% worst 1', host);
+      final compiledDisk =
+          VibeWishCompiler.compile('Show disk usage above 85% worst 1', host);
       expect(compiledDisk, isNotNull);
       final diskRun = host.mount(compiledDisk!);
       expect(jsonEncode(diskRun.view), contains('above 85%'));

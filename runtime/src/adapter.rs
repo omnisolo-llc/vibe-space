@@ -1,7 +1,10 @@
 //! Bidirectional UI compatibility adapters, handle-resolved native IR,
 //! terminal/Markdown renderers, and multi-language locale strings.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashSet};
+use std::fmt::Write as _;
+use std::io;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -12,6 +15,41 @@ const MAX_DEPTH: usize = 16;
 const MAX_NODES: usize = 1024;
 const MAX_CANVAS_COMMANDS: usize = 2000;
 const SPARK_BLOCKS: &[char] = &['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+const FORBIDDEN_PROTO_KEYS: &[&str] = &["__proto__", "constructor", "prototype"];
+const FORBIDDEN_HANDLER_NAMES: &[&str] = &[
+    "__proto__",
+    "constructor",
+    "prototype",
+    "toString",
+    "toLocaleString",
+    "valueOf",
+    "hasOwnProperty",
+    "isPrototypeOf",
+    "propertyIsEnumerable",
+    "__defineGetter__",
+    "__defineSetter__",
+    "__lookupGetter__",
+    "__lookupSetter__",
+];
+
+struct CountingWriter(usize);
+
+impl io::Write for CountingWriter {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0 = self.0.saturating_add(buf.len());
+        if self.0 > MAX_MESSAGE_BYTES {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "message exceeds limit",
+            ));
+        }
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
 
 /// Localized UI copy for Vibe Space shells across human languages and scripts.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -54,16 +92,10 @@ pub struct LocaleStrings {
 
 /// Returns localized strings for `locale` (`en`, `zh`, `ja`, `ko`, `es`, `fr`, `de`, `ar`).
 pub fn locale_strings(locale: &str) -> LocaleStrings {
-    let base = locale
-        .trim()
-        .to_ascii_lowercase()
-        .split(['-', '_'])
-        .next()
-        .unwrap_or("en")
-        .to_owned();
+    let base = locale.trim().split(['-', '_']).next().unwrap_or("en");
 
-    match base.as_str() {
-        "zh" => LocaleStrings {
+    if base.eq_ignore_ascii_case("zh") {
+        LocaleStrings {
             locale: "zh".into(),
             is_rtl: false,
             vibe_space: "Vibe 空间".into(),
@@ -98,8 +130,9 @@ pub fn locale_strings(locale: &str) -> LocaleStrings {
             preview_sample: "预览示例数据".into(),
             return_to_live: "返回实时数据".into(),
             sealed_legend: "带锁的值为密封值，由宿主绘制，Vibe 无法看见。".into(),
-        },
-        "ja" => LocaleStrings {
+        }
+    } else if base.eq_ignore_ascii_case("ja") {
+        LocaleStrings {
             locale: "ja".into(),
             is_rtl: false,
             vibe_space: "Vibe スペース".into(),
@@ -133,9 +166,11 @@ pub fn locale_strings(locale: &str) -> LocaleStrings {
             retry: "再試行".into(),
             preview_sample: "サンプルを表示".into(),
             return_to_live: "ライブに戻る".into(),
-            sealed_legend: "鍵付きの値はシール済みで、ホストが描画し Vibe からは見えません。".into(),
-        },
-        "ko" => LocaleStrings {
+            sealed_legend: "鍵付きの値はシール済みで、ホストが描画し Vibe からは見えません。"
+                .into(),
+        }
+    } else if base.eq_ignore_ascii_case("ko") {
+        LocaleStrings {
             locale: "ko".into(),
             is_rtl: false,
             vibe_space: "Vibe 스페이스".into(),
@@ -169,9 +204,11 @@ pub fn locale_strings(locale: &str) -> LocaleStrings {
             retry: "다시 시도".into(),
             preview_sample: "샘플 미리보기".into(),
             return_to_live: "실시간으로 돌아가기".into(),
-            sealed_legend: "자물쇠가 있는 값은 봉인되어 호스트가 그리며 Vibe는 볼 수 없습니다.".into(),
-        },
-        "es" => LocaleStrings {
+            sealed_legend: "자물쇠가 있는 값은 봉인되어 호스트가 그리며 Vibe는 볼 수 없습니다."
+                .into(),
+        }
+    } else if base.eq_ignore_ascii_case("es") {
+        LocaleStrings {
             locale: "es".into(),
             is_rtl: false,
             vibe_space: "Vibe Space".into(),
@@ -205,9 +242,12 @@ pub fn locale_strings(locale: &str) -> LocaleStrings {
             retry: "Reintentar".into(),
             preview_sample: "Ver muestra".into(),
             return_to_live: "Volver a en vivo".into(),
-            sealed_legend: "Los valores con candado están sellados. El anfitrión los dibuja; el vibe nunca los ve.".into(),
-        },
-        "fr" => LocaleStrings {
+            sealed_legend:
+                "Los valores con candado están sellados. El anfitrión los dibuja; el vibe nunca los ve."
+                    .into(),
+        }
+    } else if base.eq_ignore_ascii_case("fr") {
+        LocaleStrings {
             locale: "fr".into(),
             is_rtl: false,
             vibe_space: "Vibe Space".into(),
@@ -241,9 +281,12 @@ pub fn locale_strings(locale: &str) -> LocaleStrings {
             retry: "Réessayer".into(),
             preview_sample: "Aperçu d’exemple".into(),
             return_to_live: "Revenir au direct".into(),
-            sealed_legend: "Les valeurs avec cadenas sont scellées. L’hôte les affiche ; le vibe ne les voit jamais.".into(),
-        },
-        "de" => LocaleStrings {
+            sealed_legend:
+                "Les valeurs avec cadenas sont scellées. L’hôte les affiche ; le vibe ne les voit jamais."
+                    .into(),
+        }
+    } else if base.eq_ignore_ascii_case("de") {
+        LocaleStrings {
             locale: "de".into(),
             is_rtl: false,
             vibe_space: "Vibe Space".into(),
@@ -277,9 +320,12 @@ pub fn locale_strings(locale: &str) -> LocaleStrings {
             retry: "Erneut versuchen".into(),
             preview_sample: "Beispieldaten".into(),
             return_to_live: "Zurück zu Live".into(),
-            sealed_legend: "Werte mit Schloss sind versiegelt. Der Host zeichnet sie; das Vibe sieht sie nie.".into(),
-        },
-        "ar" => LocaleStrings {
+            sealed_legend:
+                "Werte mit Schloss sind versiegelt. Der Host zeichnet sie; das Vibe sieht sie nie."
+                    .into(),
+        }
+    } else if base.eq_ignore_ascii_case("ar") {
+        LocaleStrings {
             locale: "ar".into(),
             is_rtl: true,
             vibe_space: "مساحة Vibe".into(),
@@ -314,8 +360,9 @@ pub fn locale_strings(locale: &str) -> LocaleStrings {
             preview_sample: "معاينة بيانات تجريبية".into(),
             return_to_live: "العودة للبث المباشر".into(),
             sealed_legend: "القيم ذات القفل مختومة؛ يعرضها المضيف ولا يراها البرنامج أبداً.".into(),
-        },
-        _ => LocaleStrings {
+        }
+    } else {
+        LocaleStrings {
             locale: "en".into(),
             is_rtl: false,
             vibe_space: "Vibe Space".into(),
@@ -349,18 +396,42 @@ pub fn locale_strings(locale: &str) -> LocaleStrings {
             retry: "Retry".into(),
             preview_sample: "Preview sample".into(),
             return_to_live: "Return to live".into(),
-            sealed_legend: "Values with a lock are sealed. The host draws them. The vibe never sees them.".into(),
-        },
+            sealed_legend:
+                "Values with a lock are sealed. The host draws them. The vibe never sees them."
+                    .into(),
+        }
     }
+}
+
+fn reject_prototype_keys(val: &Value, depth: usize) -> Result<(), Error> {
+    if depth > 32 {
+        return Err(Error::Package);
+    }
+    match val {
+        Value::Object(map) => {
+            for (k, v) in map {
+                if FORBIDDEN_PROTO_KEYS.contains(&k.as_str()) {
+                    return Err(Error::Package);
+                }
+                reject_prototype_keys(v, depth + 1)?;
+            }
+        }
+        Value::Array(arr) => {
+            for item in arr {
+                reject_prototype_keys(item, depth + 1)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Converts canonical VibeView, A2UI (`surfaceUpdate`/`components`), Adaptive Cards,
 /// or Markdown into a validated canonical `VibeView` JSON object.
 pub fn adapt_external_ui(raw: &Value) -> Result<Value, Error> {
-    let encoded_len = serde_json::to_vec(raw)?.len();
-    if encoded_len > MAX_MESSAGE_BYTES {
-        return Err(Error::Package);
-    }
+    let mut counter = CountingWriter(0);
+    serde_json::to_writer(&mut counter, raw).map_err(|_| Error::Package)?;
+    reject_prototype_keys(raw, 0)?;
 
     let adapted = match raw {
         Value::String(md) => adapt_markdown(md),
@@ -410,7 +481,7 @@ pub fn render_terminal(
 ) -> Result<String, Error> {
     let normalized = adapt_external_ui(view)?;
     let clamped_width = width.clamp(24, 160);
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(16);
     render_terminal_node(
         &normalized,
         &resolve_sealed,
@@ -427,28 +498,64 @@ pub fn render_markdown(
     resolve_sealed: impl Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
     let normalized = adapt_external_ui(view)?;
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(16);
     render_markdown_node(&normalized, &resolve_sealed, &mut lines);
     Ok(lines.join("\n"))
 }
 
-fn sanitize_plain_text(s: &str) -> String {
-    let mut out = s.replace('\0', "");
-    // Strip inline <script>...</script> blocks if present in external dialects.
-    while let Some(start) = out.to_ascii_lowercase().find("<script") {
-        let lower = out.to_ascii_lowercase();
-        if let Some(rel_end) = lower[start..].find("</script>") {
-            let end = start + rel_end + "</script>".len();
-            out.replace_range(start..end, "");
+fn find_ascii_icase(haystack: &[u8], needle_lower: &[u8], from: usize) -> Option<usize> {
+    if needle_lower.is_empty() || haystack.len() < from + needle_lower.len() {
+        return None;
+    }
+    let first = needle_lower[0];
+    let end = haystack.len() - needle_lower.len();
+    let mut i = from;
+    while i <= end {
+        if haystack[i].to_ascii_lowercase() == first
+            && haystack[i..i + needle_lower.len()].eq_ignore_ascii_case(needle_lower)
+        {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+fn sanitize_plain_text(s: &str) -> Cow<'_, str> {
+    let bytes = s.as_bytes();
+    let has_nul = bytes.contains(&0);
+    let has_script = find_ascii_icase(bytes, b"<script", 0).is_some();
+    let has_js = find_ascii_icase(bytes, b"javascript:", 0).is_some();
+    if !has_nul && !has_script && !has_js {
+        return Cow::Borrowed(s);
+    }
+
+    let mut out = String::with_capacity(s.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == 0 {
+            i += 1;
+            continue;
+        }
+        if bytes.len() - i >= 7 && bytes[i..i + 7].eq_ignore_ascii_case(b"<script") {
+            if let Some(end_tag) = find_ascii_icase(bytes, b"</script>", i + 7) {
+                i = end_tag + 9;
+                continue;
+            }
+            break;
+        }
+        if bytes.len() - i >= 11 && bytes[i..i + 11].eq_ignore_ascii_case(b"javascript:") {
+            i += 11;
+            continue;
+        }
+        if let Some(ch) = s[i..].chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
         } else {
-            out.truncate(start);
             break;
         }
     }
-    if out.to_ascii_lowercase().contains("javascript:") {
-        out = out.replace("javascript:", "").replace("JAVASCRIPT:", "");
-    }
-    out
+    Cow::Owned(out)
 }
 
 fn try_sealed_handle(val: &Value) -> Option<&str> {
@@ -466,12 +573,12 @@ fn normalize_text_value(val: Option<&Value>) -> Value {
     match val {
         None | Some(Value::Null) => Value::String(String::new()),
         Some(v) if try_sealed_handle(v).is_some() => v.clone(),
-        Some(Value::String(s)) => Value::String(sanitize_plain_text(s)),
+        Some(Value::String(s)) => Value::String(sanitize_plain_text(s).into_owned()),
         Some(Value::Number(n)) => Value::String(n.to_string()),
         Some(Value::Bool(b)) => Value::String(b.to_string()),
         Some(Value::Object(obj)) => {
-            if let Some(lit) = obj.get("literalString").and_then(Value::as_str) {
-                Value::String(sanitize_plain_text(lit))
+            if let Some(lit) = obj.get("literalString") {
+                normalize_text_value(Some(lit))
             } else if let Some(lit) = obj.get("literal") {
                 normalize_text_value(Some(lit))
             } else if let Some(inner) = obj.get("text") {
@@ -485,19 +592,59 @@ fn normalize_text_value(val: Option<&Value>) -> Value {
 }
 
 fn normalize_tone(val: Option<&str>) -> &'static str {
-    match val.map(|s| s.to_ascii_lowercase()).as_deref() {
-        Some("ok" | "good" | "success" | "positive") => "ok",
-        Some("warn" | "warning" | "caution") => "warn",
-        Some("danger" | "error" | "attention" | "critical") => "danger",
-        _ => "default",
+    let Some(s) = val else {
+        return "default";
+    };
+    if s.eq_ignore_ascii_case("ok")
+        || s.eq_ignore_ascii_case("good")
+        || s.eq_ignore_ascii_case("success")
+        || s.eq_ignore_ascii_case("positive")
+    {
+        "ok"
+    } else if s.eq_ignore_ascii_case("warn")
+        || s.eq_ignore_ascii_case("warning")
+        || s.eq_ignore_ascii_case("caution")
+    {
+        "warn"
+    } else if s.eq_ignore_ascii_case("danger")
+        || s.eq_ignore_ascii_case("error")
+        || s.eq_ignore_ascii_case("attention")
+        || s.eq_ignore_ascii_case("critical")
+    {
+        "danger"
+    } else {
+        "default"
     }
 }
 
+fn starts_with_ignore_ascii_case(s: &str, prefix: &str) -> bool {
+    s.get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
 fn is_safe_action_url(url: &str) -> bool {
-    let trimmed = url.trim().to_ascii_lowercase();
-    !trimmed.starts_with("javascript:")
-        && !trimmed.starts_with("vbscript:")
-        && !trimmed.starts_with("data:")
+    let trimmed = url.trim();
+    !starts_with_ignore_ascii_case(trimmed, "javascript:")
+        && !starts_with_ignore_ascii_case(trimmed, "vbscript:")
+        && !starts_with_ignore_ascii_case(trimmed, "data:")
+}
+
+fn is_valid_handler_name(raw: &str) -> bool {
+    let bytes = raw.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return false;
+    }
+    let first = bytes[0];
+    if !(first.is_ascii_alphabetic() || first == b'_' || first == b'$') {
+        return false;
+    }
+    if !bytes[1..]
+        .iter()
+        .all(|&b| b.is_ascii_alphanumeric() || b == b'_' || b == b'$')
+    {
+        return false;
+    }
+    !FORBIDDEN_HANDLER_NAMES.contains(&raw)
 }
 
 fn is_a2ui_component_wrapper(map: &Map<String, Value>) -> bool {
@@ -541,49 +688,50 @@ fn adapt_a2ui_surface(map: &Map<String, Value>) -> Result<Value, Error> {
         .and_then(Value::as_array)
         .ok_or(Error::Package)?;
 
-    let mut by_id: BTreeMap<String, Value> = BTreeMap::new();
-    let mut first_id: Option<String> = None;
+    let mut by_id: BTreeMap<&str, &Value> = BTreeMap::new();
+    let mut first_id: Option<&str> = None;
     for entry in comps {
-        if let Some(obj) = entry.as_object() {
-            if let Some(id) = obj.get("id").and_then(Value::as_str) {
-                if first_id.is_none() {
-                    first_id = Some(id.to_owned());
-                }
-                by_id.insert(id.to_owned(), entry.clone());
+        if let Some(obj) = entry.as_object()
+            && let Some(id) = obj.get("id").and_then(Value::as_str)
+        {
+            if first_id.is_none() {
+                first_id = Some(id);
             }
+            by_id.insert(id, entry);
         }
     }
 
     if let Some(root_id) = surface
         .get("root")
         .and_then(Value::as_str)
-        .map(str::to_owned)
-        .or_else(|| by_id.contains_key("root").then(|| "root".to_owned()))
+        .or_else(|| by_id.contains_key("root").then_some("root"))
         .or(first_id)
+        && let Some(root_val) = by_id.get(root_id)
     {
-        if let Some(root_val) = by_id.get(&root_id) {
-            return adapt_a2ui_node(root_val, &by_id, &mut HashSet::new(), 0);
-        }
+        let mut visiting = HashSet::with_capacity(8);
+        return adapt_a2ui_node(root_val, &by_id, &mut visiting, 0);
     }
 
-    let mut children = Vec::new();
+    let mut children = Vec::with_capacity(comps.len());
+    let mut visiting = HashSet::with_capacity(8);
     for entry in comps {
-        children.push(adapt_a2ui_node(entry, &by_id, &mut HashSet::new(), 1)?);
+        visiting.clear();
+        children.push(adapt_a2ui_node(entry, &by_id, &mut visiting, 1)?);
     }
     Ok(json!({ "type": "column", "children": children }))
 }
 
-fn adapt_a2ui_node(
-    raw: &Value,
-    by_id: &BTreeMap<String, Value>,
-    visiting: &mut HashSet<String>,
+fn adapt_a2ui_node<'a>(
+    raw: &'a Value,
+    by_id: &BTreeMap<&'a str, &'a Value>,
+    visiting: &mut HashSet<&'a str>,
     depth: usize,
 ) -> Result<Value, Error> {
     if depth > MAX_DEPTH {
         return Err(Error::Package);
     }
     if let Some(ref_id) = raw.as_str() {
-        if !visiting.insert(ref_id.to_owned()) {
+        if !visiting.insert(ref_id) {
             return Err(Error::Package);
         }
         let target = by_id.get(ref_id).ok_or(Error::Package)?;
@@ -613,23 +761,27 @@ fn adapt_a2ui_node(
 
     match kind {
         "Column" | "Row" | "Card" => {
-            let out_type = kind.to_ascii_lowercase();
+            let out_type = match kind {
+                "Column" => "column",
+                "Row" => "row",
+                _ => "card",
+            };
             let raw_children = props
                 .get("children")
                 .and_then(|c| {
                     c.as_array()
                         .or_else(|| c.get("explicitList").and_then(Value::as_array))
                 })
-                .cloned()
-                .unwrap_or_default();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             let mut out_children = Vec::with_capacity(raw_children.len());
             for child in raw_children {
-                out_children.push(adapt_a2ui_node(&child, by_id, visiting, depth + 1)?);
+                out_children.push(adapt_a2ui_node(child, by_id, visiting, depth + 1)?);
             }
-            if out_children.is_empty() {
-                if let Some(child_ref) = props.get("child") {
-                    out_children.push(adapt_a2ui_node(child_ref, by_id, visiting, depth + 1)?);
-                }
+            if out_children.is_empty()
+                && let Some(child_ref) = props.get("child")
+            {
+                out_children.push(adapt_a2ui_node(child_ref, by_id, visiting, depth + 1)?);
             }
             Ok(json!({ "type": out_type, "children": out_children }))
         }
@@ -709,11 +861,13 @@ fn adapt_a2ui_node(
             "value": props.get("value").and_then(Value::as_bool).unwrap_or(false)
         })),
         "MultipleChoice" => {
-            let opts = props
+            let raw_opts = props
                 .get("options")
                 .or_else(|| props.get("selections"))
-                .cloned()
-                .unwrap_or_else(|| json!([]));
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let opts = sanitize_option_items(raw_opts);
             Ok(json!({
                 "type": "option_group",
                 "id": sanitize_plain_text(props.get("id").and_then(Value::as_str).unwrap_or("choice")),
@@ -721,34 +875,52 @@ fn adapt_a2ui_node(
                 "options": opts
             }))
         }
-        "Table" => Ok(json!({
-            "type": "table",
-            "headers": props.get("headers").cloned().unwrap_or_else(|| json!([])),
-            "rows": props.get("rows").cloned().unwrap_or_else(|| json!([]))
-        })),
+        "Table" => {
+            let headers = props
+                .get("headers")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let rows = props
+                .get("rows")
+                .and_then(Value::as_array)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            Ok(json!({
+                "type": "table",
+                "headers": sanitize_table_headers(headers),
+                "rows": sanitize_table_rows(rows)
+            }))
+        }
         "Divider" => Ok(json!({ "type": "divider" })),
         _ => Err(Error::Package),
     }
 }
 
 fn adapt_adaptive_card(card: &Map<String, Value>) -> Result<Value, Error> {
-    let mut children = Vec::new();
-    if let Some(body) = card.get("body").and_then(Value::as_array) {
-        for item in body {
-            children.push(adapt_adaptive_element(item, 1)?);
-        }
+    let body = card
+        .get("body")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let actions = card
+        .get("actions")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or(&[]);
+    let mut children = Vec::with_capacity(body.len() + usize::from(!actions.is_empty()));
+    for item in body {
+        children.push(adapt_adaptive_element(item, 1)?);
     }
-    if let Some(actions) = card.get("actions").and_then(Value::as_array) {
-        if !actions.is_empty() {
-            let mut action_row = Vec::new();
-            for act in actions {
-                if let Some(btn) = adapt_adaptive_action(act) {
-                    action_row.push(btn);
-                }
+    if !actions.is_empty() {
+        let mut action_row = Vec::with_capacity(actions.len());
+        for act in actions {
+            if let Some(btn) = adapt_adaptive_action(act) {
+                action_row.push(btn);
             }
-            if !action_row.is_empty() {
-                children.push(json!({ "type": "row", "children": action_row }));
-            }
+        }
+        if !action_row.is_empty() {
+            children.push(json!({ "type": "row", "children": action_row }));
         }
     }
     Ok(json!({ "type": "column", "children": children }))
@@ -779,12 +951,12 @@ fn adapt_adaptive_action(act: &Value) -> Option<Value> {
         "command": sanitize_plain_text(cmd),
         "tone": normalize_tone(obj.get("style").and_then(Value::as_str))
     });
-    if let Some(data) = obj.get("data") {
-        if data.is_object() {
-            node.as_object_mut()
-                .expect("object")
-                .insert("args".into(), data.clone());
-        }
+    if let Some(data) = obj.get("data")
+        && data.is_object()
+    {
+        node.as_object_mut()
+            .expect("object")
+            .insert("args".into(), data.clone());
     }
     Some(node)
 }
@@ -822,11 +994,11 @@ fn adapt_adaptive_element(elem: &Value, depth: usize) -> Result<Value, Error> {
             let items = obj
                 .get("items")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             let mut children = Vec::with_capacity(items.len());
             for item in items {
-                children.push(adapt_adaptive_element(&item, depth + 1)?);
+                children.push(adapt_adaptive_element(item, depth + 1)?);
             }
             Ok(json!({ "type": "card", "children": children }))
         }
@@ -834,11 +1006,11 @@ fn adapt_adaptive_element(elem: &Value, depth: usize) -> Result<Value, Error> {
             let cols = obj
                 .get("columns")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             let mut children = Vec::with_capacity(cols.len());
             for col in cols {
-                children.push(adapt_adaptive_element(&col, depth + 1)?);
+                children.push(adapt_adaptive_element(col, depth + 1)?);
             }
             Ok(json!({ "type": "row", "children": children }))
         }
@@ -846,11 +1018,11 @@ fn adapt_adaptive_element(elem: &Value, depth: usize) -> Result<Value, Error> {
             let items = obj
                 .get("items")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             let mut children = Vec::with_capacity(items.len());
             for item in items {
-                children.push(adapt_adaptive_element(&item, depth + 1)?);
+                children.push(adapt_adaptive_element(item, depth + 1)?);
             }
             Ok(json!({ "type": "column", "children": children }))
         }
@@ -858,8 +1030,8 @@ fn adapt_adaptive_element(elem: &Value, depth: usize) -> Result<Value, Error> {
             let facts = obj
                 .get("facts")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
             let mut rows = Vec::with_capacity(facts.len());
             for f in facts {
                 if let Some(fo) = f.as_object() {
@@ -891,18 +1063,17 @@ fn adapt_adaptive_element(elem: &Value, depth: usize) -> Result<Value, Error> {
             let choices = obj
                 .get("choices")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let opts: Vec<Value> = choices
-                .into_iter()
-                .filter_map(|c| {
-                    let co = c.as_object()?;
-                    Some(json!({
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let mut opts = Vec::with_capacity(choices.len());
+            for c in choices {
+                if let Some(co) = c.as_object() {
+                    opts.push(json!({
                         "label": normalize_text_value(co.get("title")),
                         "value": normalize_text_value(co.get("value"))
-                    }))
-                })
-                .collect();
+                    }));
+                }
+            }
             Ok(json!({
                 "type": "option_group",
                 "id": sanitize_plain_text(obj.get("id").and_then(Value::as_str).unwrap_or("choice")),
@@ -917,9 +1088,14 @@ fn adapt_adaptive_element(elem: &Value, depth: usize) -> Result<Value, Error> {
             let actions = obj
                 .get("actions")
                 .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            let btns: Vec<Value> = actions.iter().filter_map(adapt_adaptive_action).collect();
+                .map(Vec::as_slice)
+                .unwrap_or(&[]);
+            let mut btns = Vec::with_capacity(actions.len());
+            for act in actions {
+                if let Some(btn) = adapt_adaptive_action(act) {
+                    btns.push(btn);
+                }
+            }
             Ok(json!({ "type": "row", "children": btns }))
         }
         _ => Err(Error::Package),
@@ -928,8 +1104,8 @@ fn adapt_adaptive_element(elem: &Value, depth: usize) -> Result<Value, Error> {
 
 fn adapt_markdown(markdown: &str) -> Value {
     let cleaned = sanitize_plain_text(markdown);
-    let mut children = Vec::new();
     let lines: Vec<&str> = cleaned.lines().collect();
+    let mut children = Vec::with_capacity(lines.len().min(MAX_NODES));
     let mut i = 0;
     while i < lines.len() {
         let line = lines[i].trim();
@@ -960,12 +1136,10 @@ fn adapt_markdown(markdown: &str) -> Value {
             i += 2; // skip header + separator line
             let mut rows = Vec::new();
             while i < lines.len() && lines[i].trim().starts_with('|') {
-                let row: Vec<Value> = lines[i]
-                    .trim()
-                    .trim_matches('|')
-                    .split('|')
-                    .map(|c| json!(c.trim()))
-                    .collect();
+                let mut row = Vec::with_capacity(headers.len());
+                for c in lines[i].trim().trim_matches('|').split('|') {
+                    row.push(json!(c.trim()));
+                }
                 rows.push(Value::Array(row));
                 i += 1;
             }
@@ -982,6 +1156,177 @@ fn adapt_markdown(markdown: &str) -> Value {
     json!({ "type": "column", "children": children })
 }
 
+fn sanitize_table_headers(headers: &[Value]) -> Vec<Value> {
+    let mut out = Vec::with_capacity(headers.len().min(32));
+    for h in headers.iter().take(32) {
+        out.push(normalize_text_value(Some(h)));
+    }
+    out
+}
+
+fn sanitize_table_rows(rows: &[Value]) -> Vec<Value> {
+    let mut out = Vec::with_capacity(rows.len().min(200));
+    for row in rows.iter().take(200) {
+        if let Some(cells) = row.as_array() {
+            let mut clean_row = Vec::with_capacity(cells.len().min(32));
+            for c in cells.iter().take(32) {
+                clean_row.push(normalize_text_value(Some(c)));
+            }
+            out.push(Value::Array(clean_row));
+        }
+    }
+    out
+}
+
+fn sanitize_option_items(options: &[Value]) -> Vec<Value> {
+    let mut out = Vec::with_capacity(options.len().min(50));
+    for (idx, opt) in options.iter().take(50).enumerate() {
+        let Some(obj) = opt.as_object() else {
+            continue;
+        };
+        let mut clean = obj.clone();
+        if let Some(lbl) = obj.get("label") {
+            clean.insert("label".into(), normalize_text_value(Some(lbl)));
+        } else {
+            clean.insert("label".into(), Value::String(format!("Option {}", idx + 1)));
+        }
+        if let Some(id_val) = obj.get("id").and_then(Value::as_str) {
+            clean.insert(
+                "id".into(),
+                Value::String(sanitize_plain_text(id_val).into_owned()),
+            );
+        }
+        out.push(Value::Object(clean));
+    }
+    out
+}
+
+fn clamp_canvas_dim(val: Option<&Value>, default_val: u64) -> Value {
+    match val {
+        Some(v) if v.is_u64() => {
+            let u = v.as_u64().expect("checked u64");
+            json!(u.clamp(16, 2048))
+        }
+        Some(v) if v.as_f64().is_some_and(f64::is_finite) => {
+            let f = v.as_f64().expect("checked f64");
+            json!(f.clamp(16.0, 2048.0))
+        }
+        _ => json!(default_val),
+    }
+}
+
+fn sanitize_canvas_commands(cmds: &[Value]) -> Result<Vec<Value>, Error> {
+    let mut out = Vec::with_capacity(cmds.len());
+    for cmd in cmds {
+        let cmd_obj = cmd.as_object().ok_or(Error::Package)?;
+        let mut clean = Map::new();
+        for (k, v) in cmd_obj {
+            if k == "text" {
+                clean.insert("text".into(), normalize_text_value(Some(v)));
+            } else {
+                clean.insert(k.clone(), v.clone());
+            }
+        }
+        out.push(Value::Object(clean));
+    }
+    Ok(out)
+}
+
+fn normalize_style_tokens(raw_style: &Value) -> Option<Value> {
+    const ALLOWED_FONT_WEIGHTS: &[&str] = &[
+        "normal", "medium", "semibold", "bold", "100", "200", "300", "400", "500", "600", "700",
+        "800", "900",
+    ];
+    const ALLOWED_ALIGNS: &[&str] = &[
+        "start",
+        "center",
+        "end",
+        "stretch",
+        "left",
+        "right",
+        "baseline",
+        "space-between",
+        "spaceBetween",
+        "space_between",
+        "space-around",
+        "spaceAround",
+        "space-evenly",
+        "spaceEvenly",
+    ];
+    let obj = raw_style.as_object()?;
+    let mut out = Map::new();
+    for k in [
+        "padding",
+        "paddingHorizontal",
+        "paddingVertical",
+        "margin",
+        "gap",
+        "radius",
+        "borderRadius",
+        "borderWidth",
+        "fontSize",
+        "width",
+        "height",
+        "minWidth",
+        "maxWidth",
+        "minHeight",
+        "maxHeight",
+        "elevation",
+    ] {
+        if let Some(v) = obj.get(k) {
+            if let Some(u) = v.as_u64() {
+                out.insert(k.to_owned(), json!(u.min(2048)));
+            } else if let Some(n) = v.as_f64()
+                && n.is_finite()
+            {
+                out.insert(k.to_owned(), json!(n.clamp(0.0, 2048.0)));
+            }
+        }
+    }
+    if let Some(flex) = obj.get("flex").and_then(Value::as_f64)
+        && flex.is_finite()
+        && flex > 0.0
+    {
+        out.insert("flex".into(), json!(flex.clamp(0.0, 24.0).round()));
+    }
+    if let Some(opacity) = obj.get("opacity").and_then(Value::as_f64)
+        && opacity.is_finite()
+    {
+        out.insert("opacity".into(), json!(opacity.clamp(0.0, 1.0)));
+    }
+    for ck in ["bg", "fg", "backgroundColor", "borderColor", "color"] {
+        if let Some(cs) = obj.get(ck).and_then(Value::as_str)
+            && is_safe_canvas_color(cs)
+        {
+            out.insert(ck.to_owned(), Value::String(cs.trim().to_owned()));
+        }
+    }
+    if let Some(fw_val) = obj.get("fontWeight") {
+        if let Some(fw_num) = fw_val.as_u64() {
+            if (100..=900).contains(&fw_num) && fw_num.is_multiple_of(100) {
+                out.insert("fontWeight".into(), Value::String(fw_num.to_string()));
+            }
+        } else if let Some(s) = fw_val.as_str() {
+            let trimmed = s.trim();
+            if let Some(matched) = ALLOWED_FONT_WEIGHTS
+                .iter()
+                .find(|allowed| trimmed.eq_ignore_ascii_case(allowed))
+            {
+                out.insert("fontWeight".into(), Value::String((*matched).to_owned()));
+            }
+        }
+    }
+    for ak in ["align", "justify", "crossAlign"] {
+        if let Some(s) = obj.get(ak).and_then(Value::as_str) {
+            let trimmed = s.trim();
+            if ALLOWED_ALIGNS.contains(&trimmed) {
+                out.insert(ak.to_owned(), Value::String(trimmed.to_owned()));
+            }
+        }
+    }
+    (!out.is_empty()).then_some(Value::Object(out))
+}
+
 fn normalize_canonical_node(raw: &Value, depth: usize) -> Result<Value, Error> {
     if depth > MAX_DEPTH {
         return Err(Error::Package);
@@ -991,29 +1336,138 @@ fn normalize_canonical_node(raw: &Value, depth: usize) -> Result<Value, Error> {
         .get("type")
         .and_then(Value::as_str)
         .ok_or(Error::Package)?;
-    let mut out = obj.clone();
-    if kind == "action" {
-        out.insert("type".into(), Value::String("button".into()));
-    }
-    for key in ["text", "label", "caption", "value", "title"] {
-        if let Some(v) = out.get(key).cloned() {
-            if key == "value" && v.is_number() && (kind == "bar" || kind == "progress") {
-                continue;
+    let mut out = Map::new();
+
+    for (k, v) in obj {
+        match k.as_str() {
+            "type" => {
+                let mapped = if kind == "action" { "button" } else { kind };
+                out.insert("type".into(), Value::String(mapped.to_owned()));
             }
-            if key == "value" && v.is_boolean() && kind == "checkbox" {
-                continue;
+            "tone" => {
+                out.insert(
+                    "tone".into(),
+                    Value::String(normalize_tone(v.as_str()).to_owned()),
+                );
             }
-            out.insert(key.into(), normalize_text_value(Some(&v)));
+            "text" | "label" | "caption" | "title" => {
+                out.insert(k.clone(), normalize_text_value(Some(v)));
+            }
+            "value" => {
+                if (v.is_number() && (kind == "bar" || kind == "progress"))
+                    || (v.is_boolean() && kind == "checkbox")
+                {
+                    out.insert(k.clone(), v.clone());
+                } else {
+                    out.insert(k.clone(), normalize_text_value(Some(v)));
+                }
+            }
+            "headers" if kind == "table" => {
+                let headers = v.as_array().ok_or(Error::Package)?;
+                out.insert(
+                    "headers".into(),
+                    Value::Array(sanitize_table_headers(headers)),
+                );
+            }
+            "rows" if kind == "table" => {
+                let rows = v.as_array().ok_or(Error::Package)?;
+                out.insert("rows".into(), Value::Array(sanitize_table_rows(rows)));
+            }
+            "commands" if kind == "canvas" => {
+                let cmds = v.as_array().ok_or(Error::Package)?;
+                out.insert(
+                    "commands".into(),
+                    Value::Array(sanitize_canvas_commands(cmds)?),
+                );
+            }
+            "width" if kind == "canvas" => {
+                out.insert("width".into(), clamp_canvas_dim(Some(v), 260));
+            }
+            "height" if kind == "canvas" => {
+                out.insert("height".into(), clamp_canvas_dim(Some(v), 56));
+            }
+            "options" if kind == "option_group" => {
+                let opts = v.as_array().ok_or(Error::Package)?;
+                out.insert("options".into(), Value::Array(sanitize_option_items(opts)));
+            }
+            "bindtap" | "bindinput" | "bindchange" => {
+                if !v.is_null() {
+                    let s = v.as_str().ok_or(Error::Package)?.trim();
+                    if !is_valid_handler_name(s) {
+                        return Err(Error::Package);
+                    }
+                    out.insert(k.clone(), Value::String(s.to_owned()));
+                }
+            }
+            "command" => {
+                if !v.is_null() {
+                    let s = v.as_str().ok_or(Error::Package)?.trim();
+                    if FORBIDDEN_HANDLER_NAMES.contains(&s) {
+                        return Err(Error::Package);
+                    }
+                    out.insert(
+                        k.clone(),
+                        Value::String(sanitize_plain_text(s).into_owned()),
+                    );
+                }
+            }
+            "id" => {
+                if !v.is_null() {
+                    let s = v.as_str().ok_or(Error::Package)?.trim();
+                    if FORBIDDEN_PROTO_KEYS.contains(&s) {
+                        return Err(Error::Package);
+                    }
+                    out.insert(
+                        k.clone(),
+                        Value::String(sanitize_plain_text(s).into_owned()),
+                    );
+                }
+            }
+            "style" => {
+                if !v.is_null()
+                    && let Some(clean_style) = normalize_style_tokens(v)
+                {
+                    out.insert(k.clone(), clean_style);
+                }
+            }
+            "children" => {
+                let children = v.as_array().ok_or(Error::Package)?;
+                let mut next = Vec::with_capacity(children.len());
+                for c in children {
+                    next.push(normalize_canonical_node(c, depth + 1)?);
+                }
+                out.insert("children".into(), Value::Array(next));
+            }
+            _ => {
+                out.insert(k.clone(), v.clone());
+            }
         }
     }
-    if let Some(Value::Array(children)) = out.get("children").cloned() {
-        let mut next = Vec::with_capacity(children.len());
-        for c in children {
-            next.push(normalize_canonical_node(&c, depth + 1)?);
-        }
-        out.insert("children".into(), Value::Array(next));
+
+    if kind == "canvas" {
+        out.entry("width").or_insert_with(|| json!(260));
+        out.entry("height").or_insert_with(|| json!(56));
     }
+
     Ok(Value::Object(out))
+}
+
+fn validate_gradient_colors(grad: &Value) -> Result<(), Error> {
+    if grad.is_null() {
+        return Ok(());
+    }
+    let gobj = grad.as_object().ok_or(Error::Package)?;
+    let colors = gobj
+        .get("colors")
+        .and_then(Value::as_array)
+        .ok_or(Error::Package)?;
+    for c in colors {
+        let cs = c.as_str().ok_or(Error::Package)?;
+        if !is_safe_canvas_color(cs) {
+            return Err(Error::Package);
+        }
+    }
+    Ok(())
 }
 
 fn validate_canonical_node(
@@ -1053,6 +1507,35 @@ fn validate_canonical_node(
     if !KNOWN.contains(&kind) {
         return Err(Error::Package);
     }
+
+    for key in ["bindtap", "bindinput", "bindchange"] {
+        if let Some(hv) = obj.get(key)
+            && !hv.is_null()
+        {
+            let hs = hv.as_str().ok_or(Error::Package)?;
+            if !is_valid_handler_name(hs) {
+                return Err(Error::Package);
+            }
+        }
+    }
+    if let Some(cmd) = obj.get("command")
+        && !cmd.is_null()
+    {
+        let cs = cmd.as_str().ok_or(Error::Package)?;
+        if FORBIDDEN_HANDLER_NAMES.contains(&cs) {
+            return Err(Error::Package);
+        }
+    }
+    if kind == "bar"
+        && let Some(swatch) = obj.get("swatch")
+        && !swatch.is_null()
+    {
+        let ss = swatch.as_str().ok_or(Error::Package)?;
+        if !is_safe_canvas_color(ss) {
+            return Err(Error::Package);
+        }
+    }
+
     if kind == "canvas" {
         const VALID_OPS: &[&str] = &[
             "clear", "rect", "rrect", "circle", "arc", "line", "path", "polygon", "bars", "text",
@@ -1074,6 +1557,39 @@ fn validate_canonical_node(
                 .ok_or(Error::Package)?;
             if !VALID_OPS.contains(&op) {
                 return Err(Error::Package);
+            }
+            for color_key in ["fill", "stroke", "color", "swatch"] {
+                if let Some(cv) = cmd_obj.get(color_key)
+                    && !cv.is_null()
+                {
+                    let cs = cv.as_str().ok_or(Error::Package)?;
+                    if !is_safe_canvas_color(cs) {
+                        return Err(Error::Package);
+                    }
+                }
+            }
+            if let Some(grad) = cmd_obj.get("linearGradient") {
+                validate_gradient_colors(grad)?;
+            }
+            if let Some(grad) = cmd_obj.get("radialGradient") {
+                validate_gradient_colors(grad)?;
+            }
+            if let Some(d_val) = cmd_obj.get("d")
+                && !d_val.is_null()
+            {
+                let d_str = d_val.as_str().ok_or(Error::Package)?;
+                if !is_safe_svg_path(d_str) {
+                    return Err(Error::Package);
+                }
+            }
+            if op == "polygon"
+                && let Some(pts_val) = cmd_obj.get("points")
+                && !pts_val.is_null()
+            {
+                let pts = pts_val.as_array().ok_or(Error::Package)?;
+                if pts.len() > 512 {
+                    return Err(Error::Package);
+                }
             }
         }
     }
@@ -1112,67 +1628,75 @@ fn resolve_node_recursive(
     resolve_sealed: &impl Fn(&str) -> Option<String>,
 ) -> Result<Value, Error> {
     let obj = node.as_object().ok_or(Error::Package)?;
-    let mut out = obj.clone();
     let kind = obj.get("type").and_then(Value::as_str).unwrap_or("");
+    let mut out = Map::new();
     let mut had_sealed = false;
     let mut all_resolved = true;
 
-    for key in ["text", "label", "caption", "value", "title"] {
-        if let Some(v) = obj.get(key) {
-            if key == "value"
-                && ((kind == "bar" || kind == "progress") && v.is_number()
-                    || kind == "checkbox" && v.is_boolean())
-            {
-                continue;
+    for (k, v) in obj {
+        match k.as_str() {
+            "text" | "label" | "caption" | "title" => {
+                let (resolved, is_sealed, ok) = resolve_text_value(Some(v), resolve_sealed);
+                if is_sealed {
+                    had_sealed = true;
+                    all_resolved &= ok;
+                }
+                out.insert(k.clone(), Value::String(resolved));
             }
-            let (resolved, is_sealed, ok) = resolve_text_value(Some(v), resolve_sealed);
-            if is_sealed {
-                had_sealed = true;
-                all_resolved &= ok;
-            }
-            out.insert(key.into(), Value::String(resolved));
-        }
-    }
-
-    if let Some(Value::Array(headers)) = obj.get("headers") {
-        let mut resolved_headers = Vec::with_capacity(headers.len());
-        for h in headers {
-            let (txt, is_sealed, ok) = resolve_text_value(Some(h), resolve_sealed);
-            if is_sealed {
-                had_sealed = true;
-                all_resolved &= ok;
-            }
-            resolved_headers.push(Value::String(txt));
-        }
-        out.insert("headers".into(), Value::Array(resolved_headers));
-    }
-
-    if let Some(Value::Array(rows)) = obj.get("rows") {
-        let mut resolved_rows = Vec::with_capacity(rows.len());
-        for r in rows {
-            if let Some(cells) = r.as_array() {
-                let mut resolved_cells = Vec::with_capacity(cells.len());
-                for c in cells {
-                    let (txt, is_sealed, ok) = resolve_text_value(Some(c), resolve_sealed);
+            "value" => {
+                if (kind == "bar" || kind == "progress") && v.is_number()
+                    || kind == "checkbox" && v.is_boolean()
+                {
+                    out.insert(k.clone(), v.clone());
+                } else {
+                    let (resolved, is_sealed, ok) = resolve_text_value(Some(v), resolve_sealed);
                     if is_sealed {
                         had_sealed = true;
                         all_resolved &= ok;
                     }
-                    resolved_cells.push(Value::String(txt));
+                    out.insert(k.clone(), Value::String(resolved));
                 }
-                resolved_rows.push(Value::Array(resolved_cells));
             }
-        }
-        out.insert("rows".into(), Value::Array(resolved_rows));
-    }
-
-    if kind == "canvas" {
-        if let Some(Value::Array(cmds)) = obj.get("commands") {
-            let mut resolved_cmds = Vec::with_capacity(cmds.len());
-            for cmd in cmds {
-                let mut cmd_out = cmd.clone();
-                if let Some(cmd_obj) = cmd_out.as_object_mut() {
-                    if let Some(txt_val) = cmd_obj.get("text").cloned() {
+            "headers" if v.is_array() => {
+                let headers = v.as_array().expect("checked array");
+                let mut resolved_headers = Vec::with_capacity(headers.len());
+                for h in headers {
+                    let (txt, is_sealed, ok) = resolve_text_value(Some(h), resolve_sealed);
+                    if is_sealed {
+                        had_sealed = true;
+                        all_resolved &= ok;
+                    }
+                    resolved_headers.push(Value::String(txt));
+                }
+                out.insert("headers".into(), Value::Array(resolved_headers));
+            }
+            "rows" if v.is_array() => {
+                let rows = v.as_array().expect("checked array");
+                let mut resolved_rows = Vec::with_capacity(rows.len());
+                for r in rows {
+                    if let Some(cells) = r.as_array() {
+                        let mut resolved_cells = Vec::with_capacity(cells.len());
+                        for c in cells {
+                            let (txt, is_sealed, ok) = resolve_text_value(Some(c), resolve_sealed);
+                            if is_sealed {
+                                had_sealed = true;
+                                all_resolved &= ok;
+                            }
+                            resolved_cells.push(Value::String(txt));
+                        }
+                        resolved_rows.push(Value::Array(resolved_cells));
+                    }
+                }
+                out.insert("rows".into(), Value::Array(resolved_rows));
+            }
+            "commands" if kind == "canvas" && v.is_array() => {
+                let cmds = v.as_array().expect("checked array");
+                let mut resolved_cmds = Vec::with_capacity(cmds.len());
+                for cmd in cmds {
+                    let mut cmd_out = cmd.clone();
+                    if let Some(cmd_obj) = cmd_out.as_object_mut()
+                        && let Some(txt_val) = cmd_obj.get("text").cloned()
+                    {
                         let (txt, is_sealed, ok) =
                             resolve_text_value(Some(&txt_val), resolve_sealed);
                         if is_sealed {
@@ -1181,10 +1705,41 @@ fn resolve_node_recursive(
                         }
                         cmd_obj.insert("text".into(), Value::String(txt));
                     }
+                    resolved_cmds.push(cmd_out);
                 }
-                resolved_cmds.push(cmd_out);
+                out.insert("commands".into(), Value::Array(resolved_cmds));
             }
-            out.insert("commands".into(), Value::Array(resolved_cmds));
+            "options" if kind == "option_group" && v.is_array() => {
+                let opts = v.as_array().expect("checked array");
+                let mut resolved_opts = Vec::with_capacity(opts.len());
+                for opt in opts {
+                    let mut opt_out = opt.clone();
+                    if let Some(opt_obj) = opt_out.as_object_mut()
+                        && let Some(lbl_val) = opt_obj.get("label").cloned()
+                    {
+                        let (txt, is_sealed, ok) =
+                            resolve_text_value(Some(&lbl_val), resolve_sealed);
+                        if is_sealed {
+                            had_sealed = true;
+                            all_resolved &= ok;
+                        }
+                        opt_obj.insert("label".into(), Value::String(txt));
+                    }
+                    resolved_opts.push(opt_out);
+                }
+                out.insert("options".into(), Value::Array(resolved_opts));
+            }
+            "children" if v.is_array() => {
+                let children = v.as_array().expect("checked array");
+                let mut next = Vec::with_capacity(children.len());
+                for c in children {
+                    next.push(resolve_node_recursive(c, resolve_sealed)?);
+                }
+                out.insert("children".into(), Value::Array(next));
+            }
+            _ => {
+                out.insert(k.clone(), v.clone());
+            }
         }
     }
 
@@ -1193,15 +1748,168 @@ fn resolve_node_recursive(
         out.insert("sealed_resolved".into(), Value::Bool(all_resolved));
     }
 
-    if let Some(Value::Array(children)) = obj.get("children") {
-        let mut next = Vec::with_capacity(children.len());
-        for c in children {
-            next.push(resolve_node_recursive(c, resolve_sealed)?);
+    Ok(Value::Object(out))
+}
+
+fn is_safe_canvas_color(raw: &str) -> bool {
+    let s = raw.trim();
+    if s.is_empty() {
+        return false;
+    }
+    if let Some(hex) = s.strip_prefix('#') {
+        return matches!(hex.len(), 3 | 6 | 8) && hex.bytes().all(|b| b.is_ascii_hexdigit());
+    }
+    const PALETTE: &[&str] = &[
+        "default",
+        "accent",
+        "ok",
+        "warn",
+        "danger",
+        "surface",
+        "card",
+        "border",
+        "text",
+        "muted",
+        "transparent",
+        "none",
+        "currentcolor",
+    ];
+    PALETTE.iter().any(|tok| s.eq_ignore_ascii_case(tok))
+}
+
+fn is_safe_svg_path(raw: &str) -> bool {
+    let s = raw.trim();
+    !s.is_empty()
+        && s.len() <= 4096
+        && s.bytes().all(|b| {
+            b.is_ascii_digit()
+                || b.is_ascii_whitespace()
+                || matches!(
+                    b,
+                    b'M' | b'm'
+                        | b'L'
+                        | b'l'
+                        | b'H'
+                        | b'h'
+                        | b'V'
+                        | b'v'
+                        | b'C'
+                        | b'c'
+                        | b'S'
+                        | b's'
+                        | b'Q'
+                        | b'q'
+                        | b'T'
+                        | b't'
+                        | b'A'
+                        | b'a'
+                        | b'Z'
+                        | b'z'
+                        | b'.'
+                        | b','
+                        | b'e'
+                        | b'E'
+                        | b'+'
+                        | b'-'
+                )
+        })
+}
+
+fn skip_csi_sequence(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() && (0x30..=0x3F).contains(&bytes[i]) {
+        i += 1;
+    }
+    while i < bytes.len() && (0x20..=0x2F).contains(&bytes[i]) {
+        i += 1;
+    }
+    if i < bytes.len() && (0x40..=0x7E).contains(&bytes[i]) {
+        i += 1;
+    }
+    i
+}
+
+fn skip_st_terminated_sequence(bytes: &[u8], mut i: usize) -> usize {
+    while i < bytes.len() {
+        if bytes[i] == 0x07 {
+            return i + 1;
         }
-        out.insert("children".into(), Value::Array(next));
+        if bytes[i] == 0x1B && bytes.get(i + 1) == Some(&b'\\') {
+            return i + 2;
+        }
+        if bytes[i] == 0xC2 && bytes.get(i + 1) == Some(&0x9C) {
+            return i + 2;
+        }
+        i += 1;
+    }
+    bytes.len()
+}
+
+fn strip_terminal_controls(raw: &str) -> Cow<'_, str> {
+    if raw
+        .bytes()
+        .all(|b| (0x20..=0x7E).contains(&b) || b == b'\t' || b == b'\n')
+    {
+        return Cow::Borrowed(raw);
     }
 
-    Ok(Value::Object(out))
+    let bytes = raw.as_bytes();
+    let mut out = String::with_capacity(raw.len());
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b == 0x1B {
+            match bytes.get(i + 1).copied() {
+                Some(b'[') => {
+                    i = skip_csi_sequence(bytes, i + 2);
+                    continue;
+                }
+                Some(b']' | b'P' | b'X' | b'^' | b'_') => {
+                    i = skip_st_terminated_sequence(bytes, i + 2);
+                    continue;
+                }
+                Some(next) if (0x20..=0x7E).contains(&next) => {
+                    i += 2;
+                    continue;
+                }
+                _ => {
+                    i += 1;
+                    continue;
+                }
+            }
+        }
+        // UTF-8 C1 control block U+0080..=U+009F is encoded as [0xC2, 0x80..=0x9F].
+        if b == 0xC2
+            && let Some(&c1) = bytes.get(i + 1)
+            && (0x80..=0x9F).contains(&c1)
+        {
+            match c1 {
+                0x9B => {
+                    i = skip_csi_sequence(bytes, i + 2);
+                }
+                0x9D | 0x90 | 0x98 | 0x9E | 0x9F => {
+                    i = skip_st_terminated_sequence(bytes, i + 2);
+                }
+                _ => {
+                    i += 2;
+                }
+            }
+            continue;
+        }
+        if b <= 0x08 || (0x0B..=0x1F).contains(&b) || b == 0x7F {
+            i += 1;
+            continue;
+        }
+        if b < 0x80 {
+            out.push(b as char);
+            i += 1;
+        } else if let Some(ch) = raw[i..].chars().next() {
+            out.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    Cow::Owned(out)
 }
 
 fn format_terminal_text(
@@ -1209,14 +1917,15 @@ fn format_terminal_text(
     resolve_sealed: &impl Fn(&str) -> Option<String>,
 ) -> String {
     let (txt, is_sealed, ok) = resolve_text_value(val, resolve_sealed);
+    let safe_txt = strip_terminal_controls(&txt);
     if is_sealed {
         if ok {
-            format!("🔒 {txt}")
+            format!("🔒 {safe_txt}")
         } else {
             String::new()
         }
     } else {
-        txt
+        safe_txt.into_owned()
     }
 }
 
@@ -1235,27 +1944,30 @@ fn ansi_wrap(ansi: bool, tone: &str, text: &str) -> String {
 }
 
 fn render_sparkline(values: &[Value]) -> String {
-    let nums: Vec<f64> = values
-        .iter()
-        .filter_map(Value::as_f64)
-        .filter(|v| v.is_finite())
-        .collect();
+    let mut nums = Vec::with_capacity(values.len());
+    for v in values {
+        if let Some(f) = v.as_f64()
+            && f.is_finite()
+        {
+            nums.push(f);
+        }
+    }
     if nums.is_empty() {
         return String::new();
     }
     let min = nums.iter().copied().fold(f64::INFINITY, f64::min);
     let max = nums.iter().copied().fold(f64::NEG_INFINITY, f64::max);
     let span = max - min;
-    nums.iter()
-        .map(|v| {
-            let idx = if span <= f64::EPSILON {
-                3
-            } else {
-                (((v - min) / span) * ((SPARK_BLOCKS.len() - 1) as f64)).round() as usize
-            };
-            SPARK_BLOCKS[idx.min(SPARK_BLOCKS.len() - 1)]
-        })
-        .collect()
+    let mut out = String::with_capacity(nums.len() * 3);
+    for v in nums {
+        let idx = if span <= f64::EPSILON {
+            3
+        } else {
+            (((v - min) / span) * ((SPARK_BLOCKS.len() - 1) as f64)).round() as usize
+        };
+        out.push(SPARK_BLOCKS[idx.min(SPARK_BLOCKS.len() - 1)]);
+    }
+    out
 }
 
 fn render_terminal_node(
@@ -1278,18 +1990,19 @@ fn render_terminal_node(
             }
         }
         "row" => {
-            let mut parts = Vec::new();
             if let Some(children) = obj.get("children").and_then(Value::as_array) {
+                let mut parts = Vec::with_capacity(children.len());
+                let mut sub = Vec::with_capacity(4);
                 for c in children {
-                    let mut sub = Vec::new();
+                    sub.clear();
                     render_terminal_node(c, resolve_sealed, ansi, width, &mut sub);
                     if !sub.is_empty() {
                         parts.push(sub.join(" "));
                     }
                 }
-            }
-            if !parts.is_empty() {
-                out.push(parts.join(" | "));
+                if !parts.is_empty() {
+                    out.push(parts.join(" | "));
+                }
             }
         }
         "heading" => {
@@ -1321,7 +2034,13 @@ fn render_terminal_node(
             let frac = (val / max).clamp(0.0, 1.0);
             let bar_w = (width / 3).clamp(10, 28);
             let filled = (frac * (bar_w as f64)).round() as usize;
-            let bar = format!("{}{}", "█".repeat(filled), "░".repeat(bar_w - filled));
+            let mut bar = String::with_capacity(bar_w * 3);
+            for _ in 0..filled {
+                bar.push('█');
+            }
+            for _ in filled..bar_w {
+                bar.push('░');
+            }
             let colored_bar = ansi_wrap(ansi, tone, &bar);
             if caption.is_empty() {
                 out.push(format!("{label} {colored_bar}"));
@@ -1337,7 +2056,7 @@ fn render_terminal_node(
         }
         "canvas" => {
             if let Some(cmds) = obj.get("commands").and_then(Value::as_array) {
-                let mut chunks = Vec::new();
+                let mut chunks = Vec::with_capacity(cmds.len().min(32));
                 for cmd in cmds {
                     if let Some(co) = cmd.as_object() {
                         let op = co
@@ -1371,20 +2090,20 @@ fn render_terminal_node(
         }
         "table" => {
             if let Some(headers) = obj.get("headers").and_then(Value::as_array) {
-                let hdrs: Vec<String> = headers
-                    .iter()
-                    .map(|h| format_terminal_text(Some(h), resolve_sealed))
-                    .collect();
+                let mut hdrs = Vec::with_capacity(headers.len());
+                for h in headers {
+                    hdrs.push(format_terminal_text(Some(h), resolve_sealed));
+                }
                 out.push(hdrs.join(" | "));
                 out.push("-".repeat(width.min(48)));
             }
             if let Some(rows) = obj.get("rows").and_then(Value::as_array) {
                 for r in rows {
                     if let Some(cells) = r.as_array() {
-                        let line: Vec<String> = cells
-                            .iter()
-                            .map(|c| format_terminal_text(Some(c), resolve_sealed))
-                            .collect();
+                        let mut line = Vec::with_capacity(cells.len());
+                        for c in cells {
+                            line.push(format_terminal_text(Some(c), resolve_sealed));
+                        }
                         out.push(line.join(" | "));
                     }
                 }
@@ -1455,21 +2174,35 @@ fn render_markdown_node(
         }
         "table" => {
             if let Some(headers) = obj.get("headers").and_then(Value::as_array) {
-                let hdrs: Vec<String> = headers
-                    .iter()
-                    .map(|h| format_terminal_text(Some(h), resolve_sealed))
-                    .collect();
+                let mut hdrs = Vec::with_capacity(headers.len());
+                for h in headers {
+                    hdrs.push(format_terminal_text(Some(h), resolve_sealed));
+                }
                 out.push(format!("| {} |", hdrs.join(" | ")));
-                out.push(format!("| {} |", vec!["---"; hdrs.len()].join(" | ")));
+                let mut sep = String::with_capacity(hdrs.len() * 6 + 2);
+                sep.push('|');
+                for _ in 0..hdrs.len() {
+                    sep.push_str(" --- |");
+                }
+                out.push(sep);
             }
             if let Some(rows) = obj.get("rows").and_then(Value::as_array) {
                 for r in rows {
                     if let Some(cells) = r.as_array() {
-                        let line: Vec<String> = cells
-                            .iter()
-                            .map(|c| format_terminal_text(Some(c), resolve_sealed))
-                            .collect();
-                        out.push(format!("| {} |", line.join(" | ")));
+                        let mut line = Vec::with_capacity(cells.len());
+                        for c in cells {
+                            line.push(format_terminal_text(Some(c), resolve_sealed));
+                        }
+                        let mut row_buf = String::with_capacity(line.len() * 8 + 4);
+                        row_buf.push_str("| ");
+                        for (idx, cell) in line.iter().enumerate() {
+                            if idx > 0 {
+                                row_buf.push_str(" | ");
+                            }
+                            let _ = write!(row_buf, "{cell}");
+                        }
+                        row_buf.push_str(" |");
+                        out.push(row_buf);
                     }
                 }
             }
@@ -1624,5 +2357,315 @@ mod tests {
             .collect();
         let bad = json!({ "type": "canvas", "width": 260, "height": 56, "commands": over });
         assert!(adapt_external_ui(&bad).is_err());
+    }
+
+    #[test]
+    fn malicious_canvas_paint_server_and_unsafe_svg_paths_are_rejected() {
+        let evil_fill = json!({
+            "type": "canvas",
+            "width": 200,
+            "height": 60,
+            "commands": [
+                { "op": "rect", "x": 0, "y": 0, "w": 100, "h": 20, "fill": "url(https://evil.com/leak)" }
+            ]
+        });
+        assert!(matches!(adapt_external_ui(&evil_fill), Err(Error::Package)));
+
+        let evil_stroke = json!({
+            "type": "canvas",
+            "width": 200,
+            "height": 60,
+            "commands": [
+                { "op": "line", "x1": 0, "y1": 0, "x2": 10, "y2": 10, "stroke": "url(#exfil)" }
+            ]
+        });
+        assert!(matches!(
+            adapt_external_ui(&evil_stroke),
+            Err(Error::Package)
+        ));
+
+        let evil_gradient = json!({
+            "type": "canvas",
+            "width": 200,
+            "height": 60,
+            "commands": [
+                {
+                    "op": "rect",
+                    "x": 0,
+                    "y": 0,
+                    "w": 10,
+                    "h": 10,
+                    "linearGradient": { "colors": ["#0F172A", "url(https://evil.com/grad)"] }
+                }
+            ]
+        });
+        assert!(matches!(
+            adapt_external_ui(&evil_gradient),
+            Err(Error::Package)
+        ));
+
+        let evil_svg_path = json!({
+            "type": "canvas",
+            "width": 200,
+            "height": 60,
+            "commands": [
+                { "op": "path", "d": "M0 0 L10 10; url(https://evil.com)" }
+            ]
+        });
+        assert!(matches!(
+            adapt_external_ui(&evil_svg_path),
+            Err(Error::Package)
+        ));
+
+        let oversized_svg_path = json!({
+            "type": "canvas",
+            "width": 200,
+            "height": 60,
+            "commands": [
+                { "op": "path", "d": format!("M0 0 {}", "L1 1 ".repeat(1000)) }
+            ]
+        });
+        assert!(matches!(
+            adapt_external_ui(&oversized_svg_path),
+            Err(Error::Package)
+        ));
+
+        let safe_svg = json!({
+            "type": "canvas",
+            "width": 200,
+            "height": 60,
+            "commands": [
+                { "op": "path", "d": "M0 0 L100 20 L100 60 Z", "fill": "#38BDF8" }
+            ]
+        });
+        assert!(adapt_external_ui(&safe_svg).is_ok());
+    }
+
+    #[test]
+    fn malicious_forged_handles_blank_and_terminal_ansi_osc52_are_stripped() {
+        let view = json!({
+            "type": "column",
+            "children": [
+                { "type": "heading", "text": "\x1b]52;c;c2VjcmV0X2NsaXBib2FyZA==\x07Safe Heading" },
+                { "type": "text", "text": "\x1b[31mRed\x1b[0m \x1b]52;c;YWJj\x1b\\Plain\u{009d}52;c;xyz\u{009c}" },
+                { "type": "text", "text": { "sealed": "h_forged" } },
+                { "type": "stat", "label": "Host", "value": { "sealed": "h_forged_stat" } },
+                {
+                    "type": "table",
+                    "headers": ["Col"],
+                    "rows": [[{ "sealed": "h_forged_cell" }], ["\x1b[2JCell"]]
+                },
+                {
+                    "type": "canvas",
+                    "commands": [{ "op": "text", "text": { "sealed": "h_forged_canvas" } }]
+                }
+            ]
+        });
+        let resolver = |id: &str| (id == "h_valid").then(|| "ok".to_owned());
+
+        let resolved = resolve_view_tree(&view, resolver).unwrap();
+        let resolved_str = resolved.to_string();
+        assert!(!resolved_str.contains("h_forged"));
+        assert_eq!(resolved["children"][2]["text"], "");
+        assert_eq!(resolved["children"][2]["sealed_resolved"], false);
+        assert_eq!(resolved["children"][3]["value"], "");
+        assert_eq!(resolved["children"][4]["rows"][0][0], "");
+        assert_eq!(resolved["children"][5]["commands"][0]["text"], "");
+
+        let term = render_terminal(&view, resolver, false, 80).unwrap();
+        assert!(!term.contains('\x1b'));
+        assert!(!term.contains('\x07'));
+        assert!(!term.contains("52;c;"));
+        assert!(!term.contains("c2VjcmV0"));
+        assert!(!term.contains("[31m"));
+        assert!(!term.contains("[2J"));
+        assert!(!term.contains("h_forged"));
+        assert!(term.contains("Safe Heading"));
+        assert!(term.contains("Red Plain"));
+        assert!(term.contains("Cell"));
+
+        // Even when a resolved sealed string contains an OSC 52 escape, render_terminal strips it.
+        let sealed_osc_view = json!({
+            "type": "text",
+            "text": { "sealed": "h_esc" }
+        });
+        let term_sealed = render_terminal(
+            &sealed_osc_view,
+            |_| Some("\x1b]52;c;cGF5bG9hZA==\x07secret-host".to_owned()),
+            false,
+            60,
+        )
+        .unwrap();
+        assert_eq!(term_sealed, "🔒 secret-host");
+        assert!(!term_sealed.contains('\x1b'));
+        assert!(!term_sealed.contains("52;c;"));
+    }
+
+    #[test]
+    fn malicious_depth_nodes_and_canvas_budgets_are_rejected() {
+        // Depth > MAX_DEPTH (16)
+        let mut deep = json!({ "type": "text", "text": "leaf" });
+        for _ in 0..17 {
+            deep = json!({ "type": "column", "children": [deep] });
+        }
+        assert!(matches!(adapt_external_ui(&deep), Err(Error::Package)));
+
+        // Node count > MAX_NODES (1024)
+        let many_children: Vec<Value> = (0..1025)
+            .map(|i| json!({ "type": "text", "text": format!("n{i}") }))
+            .collect();
+        let wide = json!({ "type": "column", "children": many_children });
+        assert!(matches!(adapt_external_ui(&wide), Err(Error::Package)));
+
+        // Canvas command budget > 2000 split across two canvas nodes
+        let half_plus: Vec<Value> = (0..1001)
+            .map(|i| json!({ "op": "rect", "x": i, "y": 0, "w": 1, "h": 1 }))
+            .collect();
+        let split_canvas = json!({
+            "type": "column",
+            "children": [
+                { "type": "canvas", "commands": half_plus.clone() },
+                { "type": "canvas", "commands": half_plus }
+            ]
+        });
+        assert!(matches!(
+            adapt_external_ui(&split_canvas),
+            Err(Error::Package)
+        ));
+    }
+
+    #[test]
+    fn malicious_prototype_key_tricks_are_rejected() {
+        let proto_node_key = json!({
+            "type": "column",
+            "__proto__": { "polluted": true },
+            "children": []
+        });
+        assert!(matches!(
+            adapt_external_ui(&proto_node_key),
+            Err(Error::Package)
+        ));
+
+        let constructor_in_args = json!({
+            "type": "button",
+            "text": "Run",
+            "command": "run",
+            "args": { "constructor": { "prototype": { "pwn": 1 } } }
+        });
+        assert!(matches!(
+            adapt_external_ui(&constructor_in_args),
+            Err(Error::Package)
+        ));
+
+        let prototype_in_style = json!({
+            "type": "text",
+            "text": "hi",
+            "style": { "prototype": "bad" }
+        });
+        assert!(matches!(
+            adapt_external_ui(&prototype_in_style),
+            Err(Error::Package)
+        ));
+
+        for forbidden_handler in [
+            "constructor",
+            "__proto__",
+            "prototype",
+            "toString",
+            "valueOf",
+        ] {
+            let bindtap_attack = json!({
+                "type": "button",
+                "text": "Tap",
+                "command": "tap",
+                "bindtap": forbidden_handler
+            });
+            assert!(
+                matches!(adapt_external_ui(&bindtap_attack), Err(Error::Package)),
+                "bindtap={forbidden_handler} must be rejected"
+            );
+
+            let bindinput_attack = json!({
+                "type": "input",
+                "id": "q",
+                "label": "Search",
+                "bindinput": forbidden_handler
+            });
+            assert!(
+                matches!(adapt_external_ui(&bindinput_attack), Err(Error::Package)),
+                "bindinput={forbidden_handler} must be rejected"
+            );
+        }
+
+        // CSS url(...) / position: fixed and invalid fontWeight/align values inside style are stripped safely.
+        let unsafe_style = json!({
+            "type": "text",
+            "text": "Styled",
+            "tone": "positive",
+            "style": {
+                "padding": 8,
+                "bg": "url(https://evil.com/bg.png)",
+                "position": "fixed",
+                "fontWeight": "url(https://evil.com/fw)",
+                "align": "url(https://evil.com/al)",
+                "justify": "space-between",
+                "crossAlign": "center"
+            }
+        });
+        let adapted = adapt_external_ui(&unsafe_style).unwrap();
+        assert_eq!(adapted["tone"], "ok");
+        assert_eq!(adapted["style"]["padding"], 8);
+        assert_eq!(adapted["style"]["justify"], "space-between");
+        assert_eq!(adapted["style"]["crossAlign"], "center");
+        assert!(adapted["style"].get("bg").is_none());
+        assert!(adapted["style"].get("position").is_none());
+        assert!(adapted["style"].get("fontWeight").is_none());
+        assert!(adapted["style"].get("align").is_none());
+
+        // Canonical table, canvas text/width/polygon, option_group, and A2UI Table slots sanitize <script> and enforce bounds.
+        let sanitized_slots = adapt_external_ui(&json!({
+            "type": "column",
+            "children": [
+                {
+                    "type": "table",
+                    "headers": ["Col<script>alert(1)</script>"],
+                    "rows": [["javascript:evil()"]]
+                },
+                {
+                    "type": "canvas",
+                    "width": 99999,
+                    "height": 4,
+                    "commands": [
+                        { "op": "text", "text": "Hi<ScRiPt>x()</ScRiPt>" }
+                    ]
+                },
+                {
+                    "type": "option_group",
+                    "id": "opt",
+                    "options": [{ "id": "a", "label": "Pick<script>1</script>" }]
+                }
+            ]
+        }))
+        .unwrap();
+        assert_eq!(sanitized_slots["children"][0]["headers"][0], "Col");
+        assert_eq!(sanitized_slots["children"][0]["rows"][0][0], "evil()");
+        assert_eq!(sanitized_slots["children"][1]["width"], 2048);
+        assert_eq!(sanitized_slots["children"][1]["height"], 16);
+        assert_eq!(sanitized_slots["children"][1]["commands"][0]["text"], "Hi");
+        assert_eq!(
+            sanitized_slots["children"][2]["options"][0]["label"],
+            "Pick"
+        );
+
+        let bad_polygon = json!({
+            "type": "canvas",
+            "commands": [
+                { "op": "polygon", "points": vec![json!([0, 0]); 513] }
+            ]
+        });
+        assert!(matches!(
+            adapt_external_ui(&bad_polygon),
+            Err(Error::Package)
+        ));
     }
 }

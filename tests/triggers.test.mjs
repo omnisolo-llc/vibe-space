@@ -7,24 +7,25 @@ import {
   hydrateVibeTemplate,
   createTriggerEvaluator,
   adaptExternalUi,
-  validateMiniProgramSource,
+  validateVibeSnippetSource,
   applySetData,
   compileTemplate,
-  createMiniProgramSession
+  defineVibeSnippet,
+  createVibeSnippetSession
 } from '../sdk/typescript/index.mjs';
 
 test('evaluateTriggerCondition supports combinators, globs, regex, cwd, env, and context', () => {
   const cond = {
     all: [
-      {program: ['agy', 'docker*']},
+      {program: ['kubectl', 'docker*']},
       {cwd: '*/example-project*'},
       {context: {inTmux: true, portOpen: '3000'}},
     ],
     not: {windowTitle: {regex: 'production', caseSensitive: false}},
   };
   assert.equal(evaluateTriggerCondition(cond, {
-    program: '/usr/local/bin/agy',
-    command: 'agy chat',
+    program: '/usr/local/bin/kubectl',
+    command: 'kubectl get pods',
     windowTitle: 'dev-shell',
     cwd: '/workspace/example-project/app',
     context: {inTmux: true, ports: ['3000', '5173']},
@@ -41,23 +42,23 @@ test('evaluateTriggerCondition supports combinators, globs, regex, cwd, env, and
 test('createTriggerEvaluator handles hysteresis holdMs, pinning, and episode dismissal', () => {
   const ev = createTriggerEvaluator();
   const entries = [
-    {id: 'agy-card', title: 'AGY', when: {program: 'agy'}, holdMs: 2000, priority: 10},
+    {id: 'k8s-card', title: 'K8s', when: {program: 'kubectl'}, holdMs: 2000, priority: 10},
     {id: 'git-card', title: 'Git', when: {context: {gitRepo: true}}, priority: 5},
   ];
 
-  let res = ev.evaluate(entries, {program: 'agy', context: {gitRepo: true}}, 1000);
-  assert.deepEqual(res.activeIds, ['agy-card', 'git-card']);
-  assert.deepEqual(res.newlyTriggeredIds, ['agy-card', 'git-card']);
+  let res = ev.evaluate(entries, {program: 'kubectl', context: {gitRepo: true}}, 1000);
+  assert.deepEqual(res.activeIds, ['k8s-card', 'git-card']);
+  assert.deepEqual(res.newlyTriggeredIds, ['k8s-card', 'git-card']);
 
-  // Brief dip in program within 2000ms hold window keeps agy-card held
+  // Brief dip in program within 2000ms hold window keeps k8s-card held
   res = ev.evaluate(entries, {program: 'sh', context: {gitRepo: true}}, 2200);
-  assert.deepEqual(res.activeIds, ['agy-card', 'git-card']);
-  assert.deepEqual(res.heldIds, ['agy-card']);
+  assert.deepEqual(res.activeIds, ['k8s-card', 'git-card']);
+  assert.deepEqual(res.heldIds, ['k8s-card']);
 
-  // After hold expires, agy-card deactivates
+  // After hold expires, k8s-card deactivates
   res = ev.evaluate(entries, {program: 'sh', context: {gitRepo: true}}, 3500);
   assert.deepEqual(res.activeIds, ['git-card']);
-  assert.deepEqual(res.deactivatedIds, ['agy-card']);
+  assert.deepEqual(res.deactivatedIds, ['k8s-card']);
 
   // Dismiss git-card for current episode; resets once condition goes false then true
   ev.dismiss('git-card');
@@ -75,25 +76,25 @@ test('validateManifest validates contribution when triggers and hydrateVibeTempl
     api_version: 1,
     name: 'Conditional Demo',
     license: 'MIT',
-    capabilities: ['terminal_read'],
+    capabilities: ['metrics_read'],
     network_origins: [],
     module_sha256: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
     contributions: [{
-      id: 'agy-chip',
+      id: 'k8s-chip',
       slot: 'terminal_action',
-      title: 'AGY',
+      title: 'K8s',
       command: 'open',
-      when: {program: 'agy', env: {TMUX: {exists: true}}},
+      when: {program: 'kubectl', env: {TMUX: {exists: true}}},
     }],
   };
   assert.throws(() => validateManifest(base));
   assert.equal(
     validateManifest({...base, capabilities: ['api:host.ui']}).contributions[0].when.program,
-    'agy'
+    'kubectl'
   );
   assert.equal(
-    validateManifest(base, {capabilities: ['terminal_read']}).contributions[0].when.program,
-    'agy'
+    validateManifest(base, {capabilities: ['metrics_read']}).contributions[0].when.program,
+    'kubectl'
   );
   assert.throws(() => validateTriggerCondition({program: {regex: '[unclosed'}}));
   assert.equal(
@@ -102,10 +103,11 @@ test('validateManifest validates contribution when triggers and hydrateVibeTempl
   );
 });
 
-test('WeChat Mini Program dual-layer session, setData path patching, VXML template, and canvas limits', () => {
-  assert.throws(() => validateMiniProgramSource('defineMiniProgram({ onLoad() { fetch("https://evil.example"); } })'));
-  assert.throws(() => validateMiniProgramSource('defineMiniProgram({ onLoad() { window.location = "x"; } })'));
-  assert.equal(validateMiniProgramSource('defineMiniProgram({ data: { count: 1 } })'), true);
+test('Vibe Snippet dual-layer session (WeChat Mini Program security standard), setData path patching, VXML template, and canvas limits', () => {
+  assert.throws(() => validateVibeSnippetSource('defineVibeSnippet({ onLoad() { fetch("https://evil.example"); } })'));
+  assert.throws(() => validateVibeSnippetSource('defineVibeSnippet({ onLoad() { window.location = "x"; } })'));
+  assert.equal(validateVibeSnippetSource('defineVibeSnippet({ data: { count: 1 } })'), true);
+  assert.equal(validateVibeSnippetSource('defineMiniProgram({ data: { count: 1 } })'), true);
 
   // Path-based setData + prototype pollution & 64 KiB cap
   const next = applySetData({ meta: { tps: 10 }, bars: [12, 24] }, { 'meta.tps': 94.2, 'bars[1]': 88 });
@@ -114,8 +116,8 @@ test('WeChat Mini Program dual-layer session, setData path patching, VXML templa
   assert.throws(() => applySetData({}, { '__proto__.polluted': true }));
   assert.throws(() => applySetData({}, { huge: 'x'.repeat(70000) }));
 
-  // MiniProgram lifecycle + VXML compilation + canvas + bindtap round-trip
-  const session = createMiniProgramSession({
+  // VibeSnippet lifecycle + VXML compilation + canvas + bindtap round-trip
+  const def = defineVibeSnippet({
     data: { mode: 'live', tps: 42.5, history: [20, 45, 78], showChart: true, hostLabel: { sealed: 'h_host1' } },
     template: {
       type: 'column',
@@ -127,7 +129,7 @@ test('WeChat Mini Program dual-layer session, setData path patching, VXML templa
           width: 240,
           height: 48,
           bindtap: 'onToggleMode',
-          'data-source': 'agy',
+          'data-source': 'cluster',
           commands: [
             { op: 'clear', fill: '#0F172A' },
             { op: 'bars', values: '{{history}}', fill: '#38BDF8' }
@@ -145,8 +147,9 @@ test('WeChat Mini Program dual-layer session, setData path patching, VXML templa
       }
     }
   });
+  const session = createVibeSnippetSession(def);
 
-  session.load({ tps: 64.0 }, { program: 'agy' });
+  session.load({ tps: 64.0 }, { program: 'kubectl' });
   let view = session.buildView();
   assert.equal(view.children[0].label.sealed, 'h_host1');
   assert.equal(view.children[0].value, '64 tok/s');
@@ -164,7 +167,7 @@ test('WeChat Mini Program dual-layer session, setData path patching, VXML templa
   assert.throws(() => adaptExternalUi({ type: 'canvas', width: 240, height: 48, commands: tooMany }));
 
   // > 30/s setData rate limit rejected
-  const fastSession = createMiniProgramSession({ data: { n: 0 }, template: { type: 'text', text: '{{n}}' } });
+  const fastSession = createVibeSnippetSession({ data: { n: 0 }, template: { type: 'text', text: '{{n}}' } });
   for (let i = 0; i < 30; i++) fastSession.setData({ n: i }, 5000);
   assert.throws(() => fastSession.setData({ n: 31 }, 5100));
 });
