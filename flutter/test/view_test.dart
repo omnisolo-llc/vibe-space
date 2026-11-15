@@ -139,6 +139,86 @@ void main() {
   );
 
   testWidgets(
+    'option_group row index stays >= 4.5:1 on the selected row in light and dark themes',
+    (tester) async {
+      double contrast(Color a, Color b) {
+        final la = a.computeLuminance();
+        final lb = b.computeLuminance();
+        final hi = la > lb ? la : lb;
+        final lo = la > lb ? lb : la;
+        return (hi + 0.05) / (lo + 0.05);
+      }
+
+      final view = <String, dynamic>{
+        'type': 'card',
+        'children': [
+          {
+            'type': 'option_group',
+            'id': 'remediation',
+            'label': 'Select actions',
+            'multiSelect': true,
+            'command': 'option.submit',
+            'options': [
+              {
+                'id': 'a',
+                'label': 'Restart nginx',
+                'value': 'a',
+                'checked': true
+              },
+              {
+                'id': 'b',
+                'label': 'Rotate logs',
+                'value': 'b',
+                'checked': false
+              },
+            ],
+          },
+        ],
+      };
+      validateVibeView(view);
+      for (final theme in [
+        ThemeData.dark(useMaterial3: true),
+        ThemeData.light(useMaterial3: true),
+      ]) {
+        await tester.pumpWidget(
+          MaterialApp(
+            theme: theme,
+            home: Scaffold(
+              body: SingleChildScrollView(
+                child: VibeView(value: view, onCommand: (name, args) {}),
+              ),
+            ),
+          ),
+        );
+        // MaterialApp animates theme changes; settle on the new theme.
+        await tester.pumpAndSettle();
+        final index = find.text('1.');
+        expect(index, findsOneWidget);
+        final ink = tester.widget<Text>(index).style!.color!;
+        // Selected row tint over the group surface over the page.
+        final rowMaterial = tester.widget<Material>(
+          find.ancestor(of: index, matching: find.byType(Material)).first,
+        );
+        final groupBox = tester
+            .widgetList<Container>(
+              find.ancestor(of: index, matching: find.byType(Container)),
+            )
+            .map((c) => c.decoration)
+            .whereType<BoxDecoration>()
+            .firstWhere((d) => d.border != null);
+        final page = theme.scaffoldBackgroundColor;
+        final group = Color.alphaBlend(groupBox.color!, page);
+        final row = Color.alphaBlend(rowMaterial.color!, group);
+        expect(
+          contrast(Color.alphaBlend(ink, row), row),
+          greaterThanOrEqualTo(4.5),
+          reason: 'selected-row index contrast (${theme.brightness})',
+        );
+      }
+    },
+  );
+
+  testWidgets(
     'option_group multi-select counts down and auto-submits selected options after configured timeout (5s)',
     (tester) async {
       String? lastCommand;

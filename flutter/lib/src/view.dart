@@ -1738,8 +1738,10 @@ class _VibeOptionGroupFieldState extends State<_VibeOptionGroupField> {
                                   fontFamily: 'monospace',
                                   fontSize: 12,
                                   fontWeight: FontWeight.w600,
+                                  // 0.78 keeps the row index >= 4.5:1 even
+                                  // on the tinted selected-row background.
                                   color: theme.textTheme.bodyMedium?.color
-                                      ?.withValues(alpha: 0.55),
+                                      ?.withValues(alpha: 0.78),
                                 ),
                               ),
                             ),
@@ -1755,7 +1757,7 @@ class _VibeOptionGroupFieldState extends State<_VibeOptionGroupField> {
                               color: selected
                                   ? colorScheme.primary
                                   : theme.textTheme.bodyMedium?.color
-                                      ?.withValues(alpha: 0.55),
+                                      ?.withValues(alpha: 0.78),
                             ),
                             const SizedBox(width: 10),
                             Expanded(
