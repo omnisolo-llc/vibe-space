@@ -182,9 +182,9 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
               key: const ValueKey('vibe-canvas-layout-toggle'),
               tooltip:
                   'Layout: ${payload.layout.label} (switch to ${nextLayout.label})',
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.all(6),
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              visualDensity: VisualDensity.standard,
+              padding: const EdgeInsets.all(8),
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
               icon: Icon(_iconForLayout(payload.layout), size: 18),
               onPressed: widget.onLayoutChanged == null
                   ? null
@@ -193,9 +193,9 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
             IconButton(
               key: const ValueKey('vibe-canvas-copy-button'),
               tooltip: _copied ? 'Copied!' : 'Copy canvas source',
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.all(6),
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              visualDensity: VisualDensity.standard,
+              padding: const EdgeInsets.all(8),
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
               icon: Icon(
                 _copied ? Icons.check : Icons.copy_outlined,
                 size: 18,
@@ -205,9 +205,9 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
             IconButton(
               key: const ValueKey('vibe-canvas-close-button'),
               tooltip: 'Close canvas',
-              visualDensity: VisualDensity.compact,
-              padding: const EdgeInsets.all(6),
-              constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+              visualDensity: VisualDensity.standard,
+              padding: const EdgeInsets.all(8),
+              constraints: const BoxConstraints(minWidth: 44, minHeight: 44),
               icon: const Icon(Icons.close, size: 18),
               onPressed: widget.onClose,
             ),
@@ -360,6 +360,7 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
         final adapted = _cachedAdaptedVibeUi!;
         return SingleChildScrollView(
           key: const ValueKey('vibe-canvas-vibe-ui-body'),
+          primary: false,
           padding: const EdgeInsets.all(16),
           child: VibeView(
             value: adapted,
@@ -389,6 +390,7 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
     final blocks = _parseMarkdownBlocks(payload.content);
     return SingleChildScrollView(
       key: const ValueKey('vibe-canvas-markdown-fallback'),
+      primary: false,
       padding: const EdgeInsets.all(16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -564,6 +566,7 @@ class _VibeCanvasViewState extends State<VibeCanvasView> {
     final isWasm = payload.format == VibeCanvasFormat.wasm;
     return SingleChildScrollView(
       key: const ValueKey('vibe-canvas-web-fallback'),
+      primary: false,
       padding: const EdgeInsets.all(16),
       child: Card(
         margin: EdgeInsets.zero,
