@@ -75,7 +75,7 @@ enum VibeRuntimeKind {
   /// Air-gapped JavaScript `function invoke(input)` worker script.
   js('js'),
 
-  /// Declarative Google A2UI (`surfaceUpdate` + `dataModelUpdate`).
+  /// Declarative A2UI (`surfaceUpdate` + `dataModelUpdate`).
   a2ui('a2ui'),
 
   /// Declarative canonical `VibeView` JSON.
