@@ -79,7 +79,9 @@ class VibeMcpToolCategory {
   int get hashCode => id.hashCode;
 
   @override
-  String toString() => 'VibeMcpToolCategory($id)';
+  String toString() => const bool.fromEnvironment('dart.vm.product')
+      ? 'redacted'
+      : 'VibeMcpToolCategory($id)';
 }
 
 /// Extensible execution location identifier for an MCP tool.
@@ -118,7 +120,9 @@ class VibeMcpExecutionLocation {
   int get hashCode => id.hashCode;
 
   @override
-  String toString() => 'VibeMcpExecutionLocation($id)';
+  String toString() => const bool.fromEnvironment('dart.vm.product')
+      ? 'redacted'
+      : 'VibeMcpExecutionLocation($id)';
 }
 
 /// Extensible surface identifier where an MCP tool may be exposed under policy.
@@ -160,7 +164,9 @@ class VibeMcpExposureSurface {
   int get hashCode => id.hashCode;
 
   @override
-  String toString() => 'VibeMcpExposureSurface($id)';
+  String toString() => const bool.fromEnvironment('dart.vm.product')
+      ? 'redacted'
+      : 'VibeMcpExposureSurface($id)';
 }
 
 /// Extensible semantic tag attached to MCP tools for conditional selection.
@@ -197,7 +203,9 @@ class VibeMcpToolTag {
   int get hashCode => id.hashCode;
 
   @override
-  String toString() => 'VibeMcpToolTag($id)';
+  String toString() => const bool.fromEnvironment('dart.vm.product')
+      ? 'redacted'
+      : 'VibeMcpToolTag($id)';
 }
 
 typedef VibeMcpCategoryClassifier = VibeMcpToolCategory Function(
